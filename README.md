@@ -255,9 +255,9 @@ streamlit run app.py
 4. "对比各区域的表现，找出异常"
 5. "给我生成我的月度使用报告"
 ### 运行效果截图
-<img src="./images/show_image1" width="500">
-<img src="./images/show_image2" width="500">
-<img src="./images/show_image3" width="500">
+<img src="./images/show_image1.png" width="500">
+<img src="./images/show_image2.png" width="500">
+<img src="./images/show_image3.png" width="500">
 ---
 
 ## 配置说明
