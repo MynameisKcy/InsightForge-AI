@@ -1,2 +1,0 @@
-2026-05-27 18:29:30,569 - agent - INFO - middleware.py:42 - [log_before_model] 即将调用模型，带有:1条消息
-2026-05-27 18:29:30,570 - agent - DEBUG - middleware.py:50 - [log_before_model] HumanMessage | 你好，你有什么功能？
