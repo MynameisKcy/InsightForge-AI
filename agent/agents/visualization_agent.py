@@ -1,0 +1,286 @@
+"""
+Visualization Agent: 接收分析结果，自动选择合适的图表类型并生成图表。
+"""
+
+import json
+import os
+import sys
+
+import pandas as pd
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+from agents.base import BaseAgent
+from visualization.charts import ChartGenerator
+from utils.logger_handler import logger
+
+try:
+    from rag.chart_knowledge import chart_knowledge
+except ModuleNotFoundError:
+    from agent.rag.chart_knowledge import chart_knowledge
+
+
+CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分析结果，决定应该生成哪些图表。
+
+## 数据
+{data_json}
+
+## 任务描述
+{task}
+
+## 可用的图表类型
+- line: 折线图（趋势、时间序列）
+- bar: 柱状图（排名、对比）
+- pie: 饼图（占比、分布）
+- scatter: 散点图（相关性）
+- heatmap: 热力图（矩阵、区域分析）
+
+## 要求
+输出 JSON 格式的图表列表：
+[
+  {{"chart_type": "line", "title": "月度销售趋势", "x_col": "Month", "y_col": "total_revenue", "reason": "展示销售趋势"}},
+  ...
+]
+
+最多生成 4 张最重要的图表。每张图表指定 chart_type, title, x_col, y_col（或 names_col/values_col）。
+只输出 JSON 数组，不要有其他文字。
+"""
+
+
+class VisualizationAgent(BaseAgent):
+    """可视化 Agent：根据分析数据自动生成多个图表。"""
+
+    name = "visualization_agent"
+
+    def __init__(self):
+        super().__init__()
+        self.chart_generator = ChartGenerator()
+
+    def run(self, input_data: dict) -> dict:
+        """
+        input_data = {
+            "dataframe_json": str,       # 主数据集
+            "task": str,                 # 原始任务描述
+            "extra_data": dict | None,   # 其他分析数据（如 trend_summary, product_summary）
+            "chart_specs": list | None,  # 可选：手动指定图表规格，跳过 LLM 决策
+        }
+        returns: {"charts": [{"path": str, "title": str, "type": str}], "error": str | None}
+        """
+        df_json = input_data.get("dataframe_json", "[]")
+        task = input_data.get("task", "数据分析")
+        chart_specs = input_data.get("chart_specs", None)
+        extra_data = input_data.get("extra_data", {})
+
+        try:
+            from io import StringIO
+            df = pd.read_json(StringIO(df_json), orient="records")
+        except Exception as e:
+            logger.error(f"Failed to parse DataFrame JSON: {e}")
+            return {"charts": [], "error": f"Failed to parse data: {e}"}
+
+        if df.empty:
+            return {"charts": [], "error": "Empty dataset"}
+
+        # 如果没有预定义图表规格，使用 LLM 决定
+        if chart_specs is None:
+            try:
+                chart_specs = self._decide_charts(df, task, extra_data)
+            except Exception as e:
+                logger.warning(f"LLM chart decision failed, using auto-detection: {e}")
+                chart_specs = self._auto_charts(df, task)
+
+        # 生成图表
+        charts = []
+        for spec in chart_specs:
+            try:
+                chart_path = self._generate_chart(df, spec, extra_data)
+                chart_entry = {
+                    "path": chart_path,
+                    "title": spec.get("title", "Chart"),
+                    "type": spec.get("chart_type", "bar"),
+                }
+                charts.append(chart_entry)
+
+                # 存入图表知识库（RAG 内部资料）
+                try:
+                    chart_knowledge.save_chart({
+                        "chart_type": spec.get("chart_type", "bar"),
+                        "title": spec.get("title", "图表"),
+                        "x_col": spec.get("x_col", ""),
+                        "y_col": spec.get("y_col", ""),
+                        "data_summary": self._summarize_data(df, spec),
+                        "analysis_text": spec.get("reason", ""),
+                        "chart_path": chart_path,
+                        "task_context": task,
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to save chart to knowledge base: {e}")
+
+            except Exception as e:
+                logger.error(f"Chart generation failed for {spec.get('title')}: {e}")
+                charts.append({
+                    "path": f"[Error: {e}]",
+                    "title": spec.get("title", "Chart"),
+                    "type": spec.get("chart_type", "bar"),
+                })
+
+        return {"charts": charts, "error": None}
+
+    @staticmethod
+    def _resolve_column(df: pd.DataFrame, col_name: str, prefer: str = "number") -> str | None:
+        """验证并修正列名：如果 col_name 不存在，在 df 中找最接近的匹配列。
+        prefer: "number" 优先数值列, "object" 优先文本列, "any" 任意列。
+        """
+        if not col_name:
+            return None
+        if col_name in df.columns:
+            return col_name
+        # 模糊匹配：检查实际列名是否包含请求的关键词
+        cols = df.columns.tolist()
+        for c in cols:
+            if col_name.lower() in c.lower() or c.lower() in col_name.lower():
+                return c
+        # 无匹配时按 prefer 返回默认列
+        if prefer == "number":
+            num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+            return num_cols[0] if num_cols else (cols[0] if cols else None)
+        elif prefer == "object":
+            obj_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+            return obj_cols[0] if obj_cols else (cols[0] if cols else None)
+        return cols[0] if cols else None
+
+    def _generate_chart(self, df: pd.DataFrame, spec: dict, extra_data: dict) -> str:
+        """根据规格生成单张图表。"""
+        chart_type = spec.get("chart_type", "bar")
+        title = spec.get("title", "图表")
+
+        # 如果有 extra_data 中的专用数据（如趋势摘要），优先使用
+        if chart_type == "line" and "trend_summary" in extra_data:
+            trend_data = extra_data.get("trend_summary", {})
+            monthly = trend_data.get("monthly_data", [])
+            if monthly:
+                df_chart = pd.DataFrame(monthly)
+                y_col = self._resolve_column(df_chart, spec.get("y_col", ""), prefer="number")
+                x_col = self._resolve_column(df_chart, spec.get("x_col", ""), prefer="object")
+                return ChartGenerator.line_chart(df_chart, x_col=x_col, y_col=y_col, title=title)
+
+        if chart_type == "bar" and "product_summary" in extra_data:
+            top = extra_data.get("product_summary", {}).get("top_products", [])
+            if top:
+                df_chart = pd.DataFrame(top)
+                x_col = self._resolve_column(df_chart, spec.get("x_col", ""), prefer="object")
+                y_col = self._resolve_column(df_chart, spec.get("y_col", ""), prefer="number")
+                return ChartGenerator.bar_chart(df_chart, x_col=x_col, y_col=y_col, title=title)
+
+        if chart_type == "pie" and "product_summary" in extra_data:
+            cat = extra_data.get("product_summary", {}).get("category_summary", [])
+            if cat:
+                df_chart = pd.DataFrame(cat)
+                names_col = self._resolve_column(df_chart, spec.get("names_col", ""), prefer="object")
+                values_col = self._resolve_column(df_chart, spec.get("values_col", ""), prefer="number")
+                return ChartGenerator.pie_chart(
+                    df_chart, names_col=names_col, values_col=values_col, title=title,
+                )
+
+        # 通用情况：清理并验证 spec 中的列名
+        validated = {}
+        for k, v in spec.items():
+            if k in ("chart_type", "title", "reason"):
+                continue
+            if k in ("x_col", "names_col", "labels_col"):
+                validated[k] = self._resolve_column(df, v, prefer="object")
+            elif k in ("y_col", "values_col"):
+                validated[k] = self._resolve_column(df, v, prefer="number")
+            else:
+                validated[k] = v
+        return ChartGenerator.auto_chart(df, chart_type, title=title, **validated)
+
+    def _decide_charts(self, df: pd.DataFrame, task: str, extra_data: dict) -> list[dict]:
+        """使用 LLM 决定生成哪些图表。"""
+        # 取数据摘要而非完整数据
+        summary = {
+            "columns": df.columns.tolist(),
+            "dtypes": {c: str(df[c].dtype) for c in df.columns},
+            "sample": df.head(3).to_dict(orient="records"),
+            "shape": df.shape,
+        }
+        prompt = CHART_DECISION_PROMPT.format(
+            data_json=json.dumps(summary, ensure_ascii=False, indent=2),
+            task=task,
+        )
+        messages = [{"role": "user", "content": prompt}]
+        response = self._call_llm(messages)
+
+        # 解析 JSON 数组
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, list):
+                return parsed
+            return []
+        except json.JSONDecodeError:
+            # 尝试提取
+            result = self._parse_json(response)
+            if isinstance(result, dict) and "raw" not in result:
+                return [result]
+            return []
+
+    def _summarize_data(self, df: pd.DataFrame, spec: dict) -> str:
+        """生成数据摘要文本，用于存入知识库。"""
+        try:
+            x_col = spec.get("x_col", "")
+            y_col = spec.get("y_col", "")
+            parts = [f"行数: {len(df)}, 列: {', '.join(df.columns[:6])}"]
+            if y_col and y_col in df.columns:
+                col_data = df[y_col]
+                if pd.api.types.is_numeric_dtype(col_data):
+                    parts.append(
+                        f"{y_col}: 合计={col_data.sum():,.1f}, "
+                        f"均值={col_data.mean():,.1f}, "
+                        f"最大={col_data.max():,.1f}"
+                    )
+            if x_col and x_col in df.columns:
+                parts.append(f"{x_col}: {df[x_col].nunique()} 个唯一值")
+            return "; ".join(parts)
+        except Exception:
+            return f"数据集: {len(df)} 行, {len(df.columns)} 列"
+
+    def _auto_charts(self, df: pd.DataFrame, task: str) -> list[dict]:
+        """当 LLM 不可用时，自动推断图表。"""
+        charts = []
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+        # 如果有时序列，生成趋势图
+        time_cols = [c for c in df.columns if any(w in c.lower() for w in ["month", "date", "time", "月份", "日期"])]
+        if time_cols and len(numeric_cols) >= 1:
+            charts.append({
+                "chart_type": "line",
+                "title": "月度趋势分析",
+                "x_col": time_cols[0],
+                "y_col": numeric_cols[-1],
+            })
+
+        # 如果有类别列，生成柱状图
+        cat_cols_filtered = [c for c in cat_cols if c not in time_cols]
+        if cat_cols_filtered and len(numeric_cols) >= 1:
+            charts.append({
+                "chart_type": "bar",
+                "title": "类别对比分析",
+                "x_col": cat_cols_filtered[0],
+                "y_col": numeric_cols[0],
+            })
+
+        # 至少生成一张图
+        if not charts and len(numeric_cols) >= 1:
+            charts.append({
+                "chart_type": "bar",
+                "title": "数据分析图表",
+                "x_col": df.columns[0],
+                "y_col": numeric_cols[0],
+            })
+
+        return charts[:4]

@@ -1,0 +1,356 @@
+import csv
+import json
+import os
+import sys
+from datetime import date
+
+from langchain_core.tools import tool
+import random
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
+PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
+for path in (PROJECT_ROOT, PROJECT_PARENT):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+try:
+    from agent.rag.rag_service import RagSummarizerService
+    from agent.utils.config_handler import agent_conf
+    from agent.utils.path_tool import get_abs_path
+except ModuleNotFoundError:
+    from rag.rag_service import RagSummarizerService
+    from utils.config_handler import agent_conf
+    from utils.path_tool import get_abs_path
+
+rag = RagSummarizerService()
+
+user_ids = ["1001","1002","1003","1004","1005","1006","1007","1008","1009","1010"]
+
+
+def _external_data_path() -> str:
+    return get_abs_path(agent_conf["external_data_path"])
+
+
+@tool(description="从向量库中检索参考资料，以纯字符形式返回")
+def rag_sumarize(query:str) -> str:
+    return rag.rag_summarize(query)
+
+@tool(description="获取城市天气")
+def get_weather(city:str) -> str:
+    return f"城市{city}天气为晴天，气温25摄氏度，空气适度50%"
+
+@tool(description="获取用户所在城市，以纯字符形式返回")
+def get_user_location() -> str:
+    return random.choice(["深圳","青岛","北京"])
+
+@tool(description="获取用户ID，，以纯字符形式返回")
+def get_user_id() -> str:
+    return random.choice(user_ids)
+
+@tool(description="获取当前月份，以纯字符形式返回")
+def get_current_month() -> str:
+    return str(date.today().month)
+
+
+@tool(description="从外部系统中获取指定用户指定月份的使用记录，以纯字符串形式返回，如果未检索到则返回未找到提示")
+def get_external_data(user_id: str, month: str) -> str:
+    with open(_external_data_path(), "r", encoding="utf-8", newline="") as records_file:
+        for record in csv.DictReader(records_file):
+            if record["user_id"] == str(user_id) and record["month"] == str(month):
+                return (
+                    f"用户ID:{record['user_id']}，月份:{record['month']}，"
+                    f"使用情况:{record['使用情况']}，效率:{record['效率']}，问题:{record['问题']}"
+                )
+    return f"未找到用户ID:{user_id}在月份:{month}的外部使用记录"
+
+@tool(description="fill context for report，无入参，无返回值，调用后触发中间件自动为报告生成的场景动态注入上下文信息，为后续提示词切换提供上下文信息")
+def fill_report_context_for_report():
+    return "fill context for report has worded"
+
+
+# ── 数据分析桥接工具：使智能客服可以调用多 Agent 分析系统 ──
+
+_analysis_cache = {}  # 缓存分析结果，避免重复计算
+
+
+def _get_or_create_analyst():
+    """延迟初始化 PlannerAgent（单例）。"""
+    try:
+        from agents.planner_agent import PlannerAgent
+    except ModuleNotFoundError:
+        from agent.agents.planner_agent import PlannerAgent
+
+    if "_analyst_instance" not in _analysis_cache:
+        _analysis_cache["_analyst_instance"] = PlannerAgent()
+    return _analysis_cache["_analyst_instance"]
+
+
+@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→产品分析→报告），返回文本格式的分析结论。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'找出利润最高的产品'")
+def run_full_analysis(query: str) -> str:
+    """运行完整的数据分析流程并返回文本结论。"""
+    try:
+        analyst = _get_or_create_analyst()
+        result = analyst.run({"query": query})
+        if not result.get("success", False):
+            errors = result.get("errors", [])
+            return f"分析过程出现错误: {'; '.join(errors)}"
+
+        report = result.get("report", {})
+        markdown = report.get("markdown", "")
+        if markdown:
+            # 截取前 3000 字符避免 token 超限
+            return markdown[:3000] + ("..." if len(markdown) > 3000 else "")
+        return "分析已完成，但未生成报告内容。"
+    except Exception as e:
+        return f"数据分析调用失败: {str(e)}"
+
+
+@tool(description="快速查询数据集概况，返回数据集的表结构、行数、关键统计信息，无需参数")
+def get_data_overview() -> str:
+    """返回数据集的概况信息，自动适配当前数据集的实际列名。"""
+    try:
+        from database.duckdb_manager import init_duckdb
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import init_duckdb
+
+    try:
+        db = init_duckdb()
+        row_count = db.query_df("SELECT COUNT(*) AS cnt FROM transactions").iloc[0, 0]
+
+        # 获取实际列名
+        cols_info = db.execute("DESCRIBE transactions").fetchall()
+        col_names = [c[0].strip().lower().replace('"', '') for c in cols_info]
+        col_types = {c[0].strip().lower().replace('"', ''): c[1] for c in cols_info}
+        # 保留原始带引号的列名用于 SQL
+        orig_cols = [c[0] for c in cols_info]
+
+        parts = [
+            f"数据集概况:",
+            f"- 总记录数: {row_count} 条",
+            f"- 字段数: {len(cols_info)} 个",
+        ]
+
+        # 动态发现各类列名
+        def _find_col(patterns: list[str], prefer_numeric: bool = False) -> str | None:
+            """根据关键词模式查找列名，返回原始列名（可用于 SQL 引用）。"""
+            for pat in patterns:
+                for orig, lower in zip(orig_cols, col_names):
+                    if pat in lower:
+                        return orig
+            # 如果没找到，尝试返回第一个数值/文本列
+            if prefer_numeric:
+                for orig, lower, ctype in zip(orig_cols, col_names, [c[1] for c in cols_info]):
+                    if any(t in str(ctype).lower() for t in ('int', 'float', 'double', 'decimal', 'numeric')):
+                        return orig
+            return None
+
+        def _quote(col: str | None) -> str:
+            if col is None:
+                return None
+            return f'"{col}"' if ' ' in col or '-' in col or col[0].isdigit() else col
+
+        # 查找销售/金额列
+        amount_col = _find_col(['sales', 'revenue', 'amount', 'price', 'profit', 'total', 'spend'], prefer_numeric=True)
+        qty_col = _find_col(['quantity', 'qty', 'count', 'units', 'volume'], prefer_numeric=True)
+        category_col = _find_col(['category', 'sub-category', 'sub_category', 'segment', 'department', 'product name', 'product_name', 'product id', 'product_id'])
+        date_col = _find_col(['date', 'order date', 'order_date', 'month', 'year', 'ship date', 'ship_date'])
+        region_col = _find_col(['region', 'state', 'city', 'country', 'location', 'province'])
+        customer_col = _find_col(['customer', 'customer id', 'customer_id', 'customer name', 'customer_name'])
+
+        # 添加列名说明
+        col_desc_parts = []
+        if amount_col:
+            col_desc_parts.append(f"销售额/金额: {amount_col}")
+        if qty_col:
+            col_desc_parts.append(f"数量: {qty_col}")
+        if category_col:
+            col_desc_parts.append(f"类别/产品: {category_col}")
+        if date_col:
+            col_desc_parts.append(f"日期: {date_col}")
+        if region_col:
+            col_desc_parts.append(f"地区: {region_col}")
+        if customer_col:
+            col_desc_parts.append(f"客户: {customer_col}")
+        if col_desc_parts:
+            parts.append(f"- 关键字段: {'; '.join(col_desc_parts)}")
+
+        # 全部列名列表
+        parts.append(f"- 全部列名: {', '.join(orig_cols)}")
+
+        # 按类别/区域统计（如果有相关列）
+        if category_col and row_count > 0:
+            try:
+                qcat = _quote(category_col)
+                cat_sql = f'SELECT {qcat}, COUNT(*) AS cnt FROM transactions GROUP BY {qcat} ORDER BY cnt DESC LIMIT 5'
+                cat_stats = db.query_df(cat_sql)
+                parts.append(f"\n按 {category_col} 分布 (TOP 5):")
+                for _, row in cat_stats.iterrows():
+                    parts.append(f"  - {row[category_col]}: {row['cnt']} 条")
+            except Exception:
+                pass
+
+        # 如果有区域列
+        if region_col and region_col != category_col and row_count > 0:
+            try:
+                qreg = _quote(region_col)
+                reg_sql = f'SELECT {qreg}, COUNT(*) AS cnt FROM transactions GROUP BY {qreg} ORDER BY cnt DESC LIMIT 5'
+                reg_stats = db.query_df(reg_sql)
+                # 计算唯一值数量
+                unique_regions = db.query_df(f'SELECT COUNT(DISTINCT {qreg}) AS cnt FROM transactions').iloc[0, 0]
+                parts.append(f"\n地区分布 (共 {unique_regions} 个, TOP 5):")
+                for _, row in reg_stats.iterrows():
+                    parts.append(f"  - {row[region_col]}: {row['cnt']} 条")
+            except Exception:
+                pass
+
+        # 如果有金额列，计算总金额
+        if amount_col and row_count > 0:
+            try:
+                qamt = _quote(amount_col)
+                total_amt = db.query_df(f"SELECT ROUND(SUM({qamt}), 2) AS total FROM transactions").iloc[0, 0]
+                parts.insert(2, f"- 总{amount_col}: {total_amt}")
+            except Exception:
+                pass
+
+        # 如果有日期列，计算日期范围
+        if date_col and row_count > 0:
+            try:
+                qdate = _quote(date_col)
+                date_range = db.query_df(f"SELECT MIN({qdate}) AS min_d, MAX({qdate}) AS max_d FROM transactions")
+                min_d = date_range.iloc[0, 0]
+                max_d = date_range.iloc[0, 1]
+                parts.insert(2, f"- 日期范围: {min_d} 至 {max_d}")
+            except Exception:
+                pass
+
+        return "\n".join(parts)
+    except Exception as e:
+        return f"数据查询失败: {str(e)}"
+
+
+@tool(description="针对特定产品类别或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个产品类别利润最高'、'最近几个月销售额是否下降'")
+def quick_data_insight(query: str) -> str:
+    """快速数据分析，返回关键洞察。"""
+    try:
+        from agents.sql_agent import SQLAgent
+        from agents.trend_agent import TrendAgent
+    except ModuleNotFoundError:
+        from agent.agents.sql_agent import SQLAgent
+        from agent.agents.trend_agent import TrendAgent
+
+    try:
+        sql = SQLAgent()
+        sql_result = sql.run({"task": query})
+        if sql_result.get("error"):
+            return f"数据查询失败: {sql_result['error']}"
+
+        df_json = sql_result.get("dataframe_json", "[]")
+        row_count = sql_result.get("row_count", 0)
+
+        if row_count == 0:
+            return "查询未返回任何数据，请确认问题是否合理。"
+
+        if row_count > 1:
+            trend = TrendAgent()
+            trend_result = trend.run({"dataframe_json": df_json})
+            insight = trend_result.get("insight", trend_result.get("trend_summary", ""))
+            if insight:
+                return f"分析结论（共 {row_count} 条数据）:\n{insight}"
+
+        # 如果只有少量行，直接返回数据摘要
+        import pandas as pd
+        from io import StringIO
+        df = pd.read_json(StringIO(df_json), orient="records")
+        return f"查询结果（共 {row_count} 条）:\n{df.head(10).to_string(index=False)}"
+    except Exception as e:
+        return f"快速分析失败: {str(e)}"
+
+
+@tool(description="从图表知识库和外部搜索中获取分析建议。结合历史图表数据和外部信息，为当前分析提供深度洞察。参数 query 为分析问题，如'销售下降原因分析'、'如何优化产品定价'")
+def get_chart_insights(query: str) -> str:
+    """从图表知识库检索历史图表数据，结合外部搜索生成分析建议。"""
+    try:
+        from rag.chart_knowledge import chart_knowledge
+    except ModuleNotFoundError:
+        from agent.rag.chart_knowledge import chart_knowledge
+
+    parts = []
+
+    # 1. 从图表知识库检索相关历史图表
+    try:
+        chart_context = chart_knowledge.get_chart_context_for_rag(query, max_charts=5)
+        if chart_context and "暂无" not in chart_context:
+            parts.append(chart_context)
+    except Exception as e:
+        logger = __import__('logging').getLogger(__name__)
+        logger.warning(f"Chart knowledge retrieval failed: {e}")
+
+    # 2. 尝试外部搜索获取最新信息
+    try:
+        from database.user_db import user_db
+    except ModuleNotFoundError:
+        pass
+    # 外部搜索由 LLM 自主调用，此处仅返回内部知识库的结果
+
+    if parts:
+        return "\n\n".join(parts)
+    return "未找到相关的历史图表分析数据。建议先运行数据分析生成图表，积累知识库后再查询。"
+
+
+@tool(description="查询持久化的客户数据概况。返回按订单数排名的 TOP 客户列表，包含客户ID、名称、所在城市、区域、部门、订单数等信息。参数 top_n 为返回数量，默认 10")
+def get_customer_overview_tool(top_n: int = 10) -> str:
+    """查询已持久化的客户数据，返回 TOP N 客户概况。"""
+    try:
+        from database.duckdb_manager import get_customer_overview
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import get_customer_overview
+
+    customers = get_customer_overview(top_n)
+    if not customers:
+        return "暂无持久化的客户数据。请先加载包含客户信息的数据集（如 train.csv），系统会自动提取并存储客户数据。"
+
+    lines = [f"TOP {len(customers)} 客户（按订单数排名）:"]
+    for i, c in enumerate(customers, 1):
+        parts = [f"{i}. 客户ID: {c['customer_id']}"]
+        if c.get("customer_name"):
+            parts.append(f"名称: {c['customer_name']}")
+        if c.get("segment"):
+            parts.append(f"部门: {c['segment']}")
+        if c.get("city"):
+            parts.append(f"城市: {c['city']}")
+        if c.get("region"):
+            parts.append(f"区域: {c['region']}")
+        parts.append(f"订单数: {c['order_count']}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+@tool(description="获取持久化客户数据的统计信息。返回总客户数、按城市分布、按部门分布等汇总统计，无需参数")
+def get_customer_stats_tool() -> str:
+    """获取客户数据统计汇总。"""
+    try:
+        from database.duckdb_manager import get_customer_count
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import get_customer_count
+
+    stats = get_customer_count()
+    total = stats.get("total_customers", 0)
+    if total == 0:
+        return "暂无持久化的客户数据。请先加载包含客户信息的数据集。"
+
+    lines = [f"客户数据统计: 共 {total} 位客户"]
+
+    by_city = stats.get("by_city", [])
+    if by_city:
+        lines.append("\n按城市分布 (TOP 10):")
+        for c in by_city:
+            lines.append(f"  - {c['city']}: {c['cnt']} 位客户")
+
+    by_segment = stats.get("by_segment", [])
+    if by_segment:
+        lines.append("\n按部门分布:")
+        for s in by_segment:
+            lines.append(f"  - {s['segment']}: {s['cnt']} 位客户")
+
+    return "\n".join(lines)
