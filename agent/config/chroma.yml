@@ -3,8 +3,8 @@ persist_directory: chroma_db
 k: 3
 data_path: data
 md5_hex_store: md5.text
-allowed_knowledge_file_type: ["txt", "pdf"]
+allowed_knowledge_file_type: ["txt", "pdf", "docx", "md"]
 
-chunk_size: 200
-chunk_overlap: 20
+chunk_size: 500
+chunk_overlap: 50
 separators: ["\n\n", "\n", "。", ".", ",", "!", "?", " ", ""]

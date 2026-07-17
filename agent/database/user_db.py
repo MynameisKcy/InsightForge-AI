@@ -4,9 +4,12 @@ User Database: SQLite 用户表，存储 id、账号、密码哈希、历史会�
 
 import hashlib
 import os
+import secrets
 import sqlite3
 import sys
 from datetime import datetime, timedelta
+
+import bcrypt
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -24,8 +27,32 @@ def _ensure_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 
+# 旧版密码哈希（SHA-256 无 salt）用 64 位十六进制，新版 bcrypt 以 $2 开头。
+_LEGACY_HASH_LEN = 64
+
+
+def _is_legacy_hash(pwd_hash: str) -> bool:
+    """判断是否为旧版 SHA-256 哈希（需惰性升级）。"""
+    return bool(pwd_hash) and not pwd_hash.startswith("$2") and len(pwd_hash) == _LEGACY_HASH_LEN
+
+
 def _hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """使用 bcrypt（带随机 salt）哈希密码。"""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, pwd_hash: str) -> bool:
+    """校验密码：兼容新版 bcrypt 与旧版 SHA-256（用于惰性升级）。"""
+    if not pwd_hash:
+        return False
+    if _is_legacy_hash(pwd_hash):
+        # 旧版 SHA-256 比对（用恒定时间比较防侧信道）
+        calc = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        return secrets.compare_digest(calc, pwd_hash)
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), pwd_hash.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 class UserDB:
@@ -78,8 +105,8 @@ class UserDB:
         """注册新用户。返回用户信息或错误。"""
         if not account or not password:
             return {"success": False, "error": "账号和密码不能为空"}
-        if len(password) < 3:
-            return {"success": False, "error": "密码长度至少 3 位"}
+        if len(password) < 8:
+            return {"success": False, "error": "密码长度至少 8 位"}
         if len(account) < 2:
             return {"success": False, "error": "账号长度至少 2 位"}
 
@@ -101,25 +128,39 @@ class UserDB:
             return {"success": False, "error": f"注册失败: {e}"}
 
     def login(self, account: str, password: str) -> dict:
-        """用户登录。返回用户信息和 session token。"""
+        """用户登录。返回用户信息和 session token。
+
+        兼容旧版 SHA-256 哈希：登录成功时惰性升级为 bcrypt。
+        """
         if not account or not password:
             return {"success": False, "error": "账号和密码不能为空"}
 
-        pwd_hash = _hash_password(password)
-
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT id, account FROM users WHERE account = ? AND password_hash = ?",
-                (account, pwd_hash),
+                "SELECT id, account, password_hash FROM users WHERE account = ?",
+                (account,),
             ).fetchone()
 
-            if not row:
+            # 恒定时间校验，避免账号是否存在侧信道（尽量统一耗时）
+            valid = bool(row) and _verify_password(password, row["password_hash"] if row else "")
+            if not row or not valid:
+                # 仍执行一次无意义比较，缩小时序差
+                _verify_password(password, "$2b$12$" + "0" * 53)
                 return {"success": False, "error": "账号或密码错误"}
 
             user_id = row["id"]
+            # 惰性升级：旧版 SHA-256 哈希登录成功后重写为 bcrypt
+            if _is_legacy_hash(row["password_hash"]):
+                new_hash = _hash_password(password)
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?",
+                    (new_hash, user_id),
+                )
+                logger.info(f"User {account} password hash upgraded to bcrypt")
+
             # 创建 session
             import uuid
-            token = uuid.uuid4().hex
+            token = secrets.token_hex(16)
             now = datetime.now()
             expires = now + timedelta(hours=24)  # 24 小时有效
 
@@ -142,19 +183,23 @@ class UserDB:
         }
 
     def validate_token(self, token: str) -> dict | None:
-        """验证 session token，返回用户信息或 None。"""
+        """验证 session token，返回用户信息或 None。使用恒定时间比较防侧信道。"""
         if not token:
             return None
 
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT u.id, u.account, s.expires_at
+                """SELECT u.id, u.account, s.expires_at, s.session_token
                    FROM sessions s JOIN users u ON s.user_id = u.id
                    WHERE s.session_token = ?""",
                 (token,),
             ).fetchone()
 
             if not row:
+                return None
+
+            # 恒定时间比较 token（虽然已用 WHERE 精确匹配，仍加此道防时序侧信道）
+            if not secrets.compare_digest(str(row["session_token"]), token):
                 return None
 
             if row["expires_at"] < datetime.now().isoformat():

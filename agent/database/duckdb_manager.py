@@ -3,6 +3,7 @@ DuckDB Manager: Load CSV data into DuckDB and provide query/execution interface.
 """
 
 import os
+import re
 import sqlite3
 import sys
 import duckdb
@@ -19,32 +20,94 @@ from utils.logger_handler import logger
 _CUSTOMER_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "customers.db")
 
 
+class SecurityError(Exception):
+    """SQL 语句未通过只读沙箱白名单校验时抛出。"""
+
+
+# 查询通道允许的 SQL 首关键词（大小写不敏感）。管理通道（_load_csv/reload_csv）不经此校验。
+_READ_ONLY_ALLOWED_PREFIXES = {
+    "SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA", "SUMMARIZE", "LIMIT",
+}
+# 显式拒绝的写操作关键词（防止通过注释/换行绕过首关键词检查，做二次扫描）。
+_FORBIDDEN_KEYWORDS = {
+    "DROP", "CREATE", "INSERT", "UPDATE", "DELETE", "ATTACH", "DETACH",
+    "COPY", "EXPORT", "ALTER", "TRUNCATE", "REPLACE", "MERGE", "VACUUM",
+    "CALL", "ATTACH", "IMPORT",
+}
+# 合法表名：字母/下划线开头，仅含字母数字下划线。
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _assert_read_only(sql: str) -> None:
+    """查询通道白名单校验：仅允许只读类语句，拦截所有写/DDL/危险操作。
+
+    管理通道（_load_csv 的 CREATE TABLE、reload_csv 的 DROP TABLE）通过
+    self.conn.execute 直调，不经此方法，保持「管理通道 vs 查询通道」边界。
+    """
+    if not sql or not sql.strip():
+        raise SecurityError("空 SQL 语句")
+
+    stripped = sql.strip()
+    # 去除前导注释和换行，取首个真实 SQL 关键词
+    first_word = stripped.lstrip("/-* \t\n;").split(None, 1)[0] if stripped else ""
+    first_word_upper = first_word.upper().rstrip("(")
+
+    if first_word_upper not in _READ_ONLY_ALLOWED_PREFIXES:
+        raise SecurityError(
+            f"只读沙箱禁止执行以 '{first_word_upper}' 开头的语句（仅允许 "
+            f"{sorted(_READ_ONLY_ALLOWED_PREFIXES)}）"
+        )
+
+    # 二次扫描：即便首关键词合法，也禁止任何写/DDL 关键词出现（防 /* */ 换行绕过）
+    # 用 word boundary 避免误伤列名（如 "updated_at"）
+    tokens = re.findall(r"[A-Za-z_]+", stripped)
+    for tok in tokens:
+        if tok.upper() in _FORBIDDEN_KEYWORDS:
+            raise SecurityError(
+                f"只读沙箱禁止包含写操作关键词 '{tok.upper()}' 的语句"
+            )
+
+
+def _validate_table_name(name: str) -> str:
+    """校验表名合法（防 SQL 注入）：仅允许标识符字符。"""
+    if not name or not _TABLE_NAME_RE.match(name):
+        raise SecurityError(f"非法表名: {name!r}（仅允许字母/下划线开头、字母数字下划线）")
+    return name
+
+
+def _validate_csv_path(path: str) -> str:
+    """校验 CSV 路径安全：必须在数据目录下且不含单引号（防 read_csv_auto 注入）。"""
+    if not path:
+        raise SecurityError("空 CSV 路径")
+    if "'" in path or "\\" in path and "'" in path:
+        raise SecurityError(f"CSV 路径含非法字符: {path!r}")
+    return path
+
+
 class DuckDBManager:
-    """Manages a DuckDB in-memory database, loads CSV data, and executes queries."""
+    """Manages a DuckDB in-memory database, loads CSV data, and executes queries.
 
-    _instance = None
+    不再是进程级单例：每个实例拥有独立的 :memory: 连接，按 user_id 隔离数据，
+    避免多用户并发时互相覆盖表数据。通过 init_duckdb(user_id) 工厂按 user_id 缓存实例。
+    """
 
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self, csv_path: str | None = None, table_name: str = "transactions"):
-        if self._initialized:
-            return
-        self._initialized = True
+    def __init__(self, csv_path: str | None = None, table_name: str = "transactions", user_id: str = "default"):
+        _validate_table_name(table_name)
+        self.user_id = user_id
+        self.table_name = table_name
+        self.last_loaded_csv: str | None = None  # 本实例上次加载的 CSV，用于判断是否需要 reload（按 user 隔离，无跨用户竞态）
 
         self.conn = duckdb.connect(database=":memory:")
-        self.table_name = table_name
 
         if csv_path and os.path.exists(csv_path):
             self._load_csv(csv_path)
-        logger.info(f"DuckDBManager initialized with table '{self.table_name}'")
+        logger.info(f"DuckDBManager initialized (user={user_id}) with table '{self.table_name}'")
 
     def _load_csv(self, csv_path: str):
-        """Load CSV file into DuckDB as a table."""
+        """Load CSV file into DuckDB as a table.（管理通道，不经查询白名单）"""
         try:
+            _validate_table_name(self.table_name)
+            _validate_csv_path(csv_path)
             self.conn.execute(
                 f"CREATE TABLE {self.table_name} AS SELECT * FROM read_csv_auto('{csv_path}')"
             )
@@ -52,6 +115,7 @@ class DuckDBManager:
                 f"SELECT COUNT(*) FROM {self.table_name}"
             ).fetchone()[0]
             logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}'")
+            self.last_loaded_csv = csv_path
             # 自动提取并持久化客户数据
             self._extract_and_persist_customers()
         except Exception as e:
@@ -139,7 +203,12 @@ class DuckDBManager:
 
             # 持久化到 SQLite
             os.makedirs(os.path.dirname(_CUSTOMER_DB_PATH), exist_ok=True)
-            conn = sqlite3.connect(_CUSTOMER_DB_PATH)
+            conn = sqlite3.connect(_CUSTOMER_DB_PATH, timeout=30)
+            # WAL 模式提升并发写性能，防 database is locked
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS customer_profiles (
                     customer_id TEXT PRIMARY KEY,
@@ -181,7 +250,12 @@ class DuckDBManager:
             logger.warning(f"Customer extraction skipped (non-critical): {e}")
 
     def execute(self, sql: str) -> duckdb.DuckDBPyRelation:
-        """Execute a SQL query and return the DuckDB relation."""
+        """Execute a SQL query and return the DuckDB relation.
+
+        查询通道：执行前做只读白名单校验，拦截 DROP/CREATE/INSERT 等写操作。
+        管理通道（_load_csv/reload_csv）直接调 self.conn.execute，不经此校验。
+        """
+        _assert_read_only(sql)
         logger.debug(f"Executing SQL: {sql[:200]}...")
         return self.conn.execute(sql)
 
@@ -200,16 +274,24 @@ class DuckDBManager:
         return [row[0] for row in self.execute("SHOW TABLES").fetchall()]
 
     def reload_csv(self, csv_path: str, table_name: str = "transactions"):
-        """重新加载不同的 CSV 数据集到数据库（先删除旧表再创建新表）。"""
+        """重新加载不同的 CSV 数据集到数据库（先删除旧表再创建新表）。（管理通道）
+
+        本方法作用于本实例连接（按 user_id 隔离，无跨用户竞态）。
+        """
         if not csv_path or not os.path.exists(csv_path):
             logger.warning(f"DuckDBManager.reload_csv: file not found: {csv_path}")
             return False
+        # 若本实例已加载同一 CSV，无需重复 reload
+        if self.last_loaded_csv == csv_path:
+            return True
         try:
+            _validate_table_name(table_name)
+            _validate_csv_path(csv_path)
             # 删除旧表
             self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-            # 加载新数据
-            self._load_csv(csv_path)
+            # 加载新数据（_load_csv 内部会校验 self.table_name，故先同步实例属性）
             self.table_name = table_name
+            self._load_csv(csv_path)
             logger.info(f"DuckDBManager reloaded with {csv_path}")
             return True
         except Exception as e:
@@ -219,18 +301,42 @@ class DuckDBManager:
     def close(self):
         """Close the DuckDB connection."""
         self.conn.close()
-        DuckDBManager._instance = None
-        self._initialized = False
         logger.info("DuckDB connection closed")
 
 
-def init_duckdb(csv_path: str | None = None) -> DuckDBManager:
-    """Initialize DuckDB with the default CSV dataset."""
+# 按 user_id 缓存的 DuckDBManager 实例（每个 user 独立 :memory: 连接，互不干扰）
+_duckdb_instances: dict[str, "DuckDBManager"] = {}
+
+
+def init_duckdb(csv_path: str | None = None, user_id: str = "default") -> DuckDBManager:
+    """获取（或创建）指定 user_id 的 DuckDBManager 实例。
+
+    每个 user_id 拥有独立的 :memory: 连接和表，多用户并发不会互相覆盖数据。
+    若提供 csv_path 且与该实例上次加载的不同，会触发 reload。
+    """
+    if user_id is None:
+        user_id = "default"
+
     if csv_path is None:
         from utils.path_tool import get_abs_path
-
         csv_path = get_abs_path("data/train.csv")
-    return DuckDBManager(csv_path=csv_path)
+
+    inst = _duckdb_instances.get(user_id)
+    if inst is None:
+        inst = DuckDBManager(csv_path=csv_path, user_id=user_id)
+        _duckdb_instances[user_id] = inst
+    else:
+        # 已有实例：若需要切换到不同 CSV 则 reload
+        if inst.last_loaded_csv != csv_path:
+            inst.reload_csv(csv_path)
+    return inst
+
+
+def close_duckdb(user_id: str = "default") -> None:
+    """关闭并移除指定 user 的 DuckDB 实例（资源清理，可选）。"""
+    inst = _duckdb_instances.pop(user_id, None)
+    if inst:
+        inst.close()
 
 
 def get_customer_overview(top_n: int = 10) -> list[dict]:

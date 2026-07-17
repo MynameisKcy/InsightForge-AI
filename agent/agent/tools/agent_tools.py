@@ -90,8 +90,13 @@ def _get_or_create_analyst():
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:
+        from utils.request_context import get_user_id, get_session_id
         analyst = _get_or_create_analyst()
-        result = analyst.run({"query": query})
+        result = analyst.run({
+            "query": query,
+            "user_id": get_user_id(),
+            "session_id": get_session_id(),
+        })
         if not result.get("success", False):
             errors = result.get("errors", [])
             return f"分析过程出现错误: {'; '.join(errors)}"
@@ -111,11 +116,13 @@ def get_data_overview() -> str:
     """返回数据集的概况信息，自动适配当前数据集的实际列名。"""
     try:
         from database.duckdb_manager import init_duckdb
+        from utils.request_context import get_user_id
     except ModuleNotFoundError:
         from agent.database.duckdb_manager import init_duckdb
+        from utils.request_context import get_user_id
 
     try:
-        db = init_duckdb()
+        db = init_duckdb(user_id=get_user_id())
         row_count = db.query_df("SELECT COUNT(*) AS cnt FROM transactions").iloc[0, 0]
 
         # 获取实际列名
@@ -240,8 +247,13 @@ def quick_data_insight(query: str) -> str:
         from agent.agents.trend_agent import TrendAgent
 
     try:
+        from utils.request_context import get_user_id
+    except ModuleNotFoundError:
+        from utils.request_context import get_user_id
+
+    try:
         sql = SQLAgent()
-        sql_result = sql.run({"task": query})
+        sql_result = sql.run({"task": query, "user_id": get_user_id()})
         if sql_result.get("error"):
             return f"数据查询失败: {sql_result['error']}"
 

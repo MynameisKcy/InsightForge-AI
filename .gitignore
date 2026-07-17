@@ -1,0 +1,29 @@
+# 环境变量 / 密钥（含 DASHSCOPE_API_KEY）
+agent/.env
+.env
+
+# ChromaDB 向量库持久化目录
+agent/chroma_db/
+
+# 运行时生成的报告与图表
+agent/reports/
+
+# md5 去重存储（运行时生成）
+agent/md5.text
+
+# 日志
+agent/logs/
+
+# SQLite 数据库（用户认证 / 图表知识库 / 对话历史）
+agent/data/*.db
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# IDE
+.idea/
+.vscode/
