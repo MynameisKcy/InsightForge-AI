@@ -122,16 +122,26 @@ Planner Agent (任务规划 — 编排调度)
 | 层级 | 技术 |
 |------|------|
 | **AI 框架** | LangChain, LangGraph |
-| **LLM** | 通义千问 (Qwen3-Max), DashScope Embeddings |
+| **LLM** | 通义千问 (Qwen3-Max), DashScope Embeddings, DashScope Rerank (gte-rerank-v2) |
 | **向量数据库** | ChromaDB |
-| **数据查询** | DuckDB (OLAP 嵌入式数据库) |
+| **中文分词** | jieba（搜索模式，提升图表知识库中文召回） |
+| **数据查询** | DuckDB (OLAP 嵌入式数据库，按用户隔离的 :memory: 实例) |
 | **数据分析** | Pandas, NumPy |
 | **可视化** | Plotly (交互式图表) |
 | **Web 框架** | FastAPI (SSE 流式), Streamlit |
 | **报告导出** | python-docx (Word), ReportLab (PDF), Jinja2 (模板) |
 | **记忆系统** | 短期记忆（会话上下文）+ 长期记忆（SQLite 持久化） |
 | **数据库** | SQLite（用户认证、图表知识库、对话历史） |
+| **安全** | bcrypt 密码哈希、secrets.compare_digest 防时序攻击、SQL 只读白名单沙箱 |
 | **语言** | Python 3.10+ |
+
+### v0.1 关键特性
+
+- **多用户并发隔离**：DuckDB 按 `user_id` 缓存独立内存实例，PlannerAgent 请求级状态下沉，多用户并发分析不串数据
+- **NL→SQL 安全沙箱**：白名单只允许 SELECT/WITH/SHOW/DESCRIBE 等只读语句，禁 DROP/CREATE/INSERT 等写操作；LLM 生成错误时自动回灌错误信息并重试纠错
+- **RAG 检索升级**：chunk 500 + 粗召回 k=15 + DashScope rerank 精排 top_n=3（阈值 0.3）+ jieba 中文分词，检索相关性显著提升
+- **知识库运行时管理**：Web 界面上传 / 列表 / 删除 / 全量重建索引，支持 txt / pdf / docx / md 四种格式，无需手动跑脚本入库
+- **配置统一**：`.env` 作为模型 Key 与名称的单一真相源，YAML 仅作 fallback
 
 ---
 
@@ -174,13 +184,18 @@ agent/
 │   ├── data_resolver.py      # 数据集自动检测
 │   └── user_db.py            # 用户认证数据库
 ├── model/
-│   └── factory.py            # LLM 模型工厂
-├── utils/                    # 工具模块
+│   └── factory.py            # LLM 模型工厂（读 .env）
+├── utils/
+│   ├── request_context.py    # 请求级 contextvars（user_id 透传）
+│   ├── file_handler.py       # 知识库文件加载器（txt/pdf/docx/md）
+│   └── ...                   # 其他工具模块
 ├── config/                   # 配置文件 (YAML)
 ├── prompts/                  # Prompt 模板
 ├── templates/                # Jinja2 报告模板
-├── reports/                  # 生成的报告和图表
-├── data/                     # 数据文件
+├── reports/                  # 生成的报告和图表（运行时，已 gitignore）
+├── data/                     # 数据文件（含知识库源文件）
+├── .env                      # 环境变量（DASHSCOPE_API_KEY、模型名，已 gitignore）
+├── requirements.txt          # 依赖清单
 ├── app.py                    # Streamlit 界面入口
 ├── goal.md                   # 项目目标文档
 └── README.md                 # 本文件
@@ -202,33 +217,49 @@ agent/
 git clone <repository-url>
 cd agent
 
-# 创建虚拟环境
-conda create -n RAG python=3.10
-conda activate RAG
+# 创建 conda 虚拟环境（Python 3.10）
+conda create -n AnalysisAgent python=3.10
+conda activate AnalysisAgent
 
 # 安装依赖
-pip install --break-system-packages \
-  langchain langchain-community langgraph \
-  fastapi uvicorn streamlit \
-  pandas numpy duckdb plotly \
-  chromadb python-docx reportlab jinja2 \
-  dashscope pyyaml sqlalchemy
+pip install -r requirements.txt
 ```
 
 ### 配置
 
-编辑 `config/rag.yml` 设置 LLM 模型：
+**1. 在 `agent/` 目录下创建 `.env`**（模型 Key 与名称的单一真相源，**不会提交到 Git**）：
 
-```yaml
-chat_model_name: qwen3-max           # 通义千问模型名
-embedding_model_name: text-embedding-v4  # Embedding 模型
+```dotenv
+# DashScope API Key（通义千问 + 向量 + rerank 共用）
+DASHSCOPE_API_KEY=sk-your-dashscope-api-key
+
+# 大语言模型名
+CHAT_MODEL_NAME=qwen3-max
+
+# 文本嵌入模型名
+EMBEDDING_MODEL_NAME=text-embedding-v4
 ```
 
-编辑 `config/agent.yml` 设置外部数据路径：
+> `.env` 已在 `.gitignore` 中忽略。`config/rag.yml` 中的模型名为 fallback，实际以 `.env` 为准。
+
+**2. RAG 检索参数**（`config/rag.yml`，已预置推荐值，通常无需改动）：
+
+```yaml
+rerank_model: gte-rerank-v2      # DashScope rerank 模型（gte-rerank 对部分 Key 返回 403，须用 v2）
+retrieve_k: 15                    # 粗召回候选数
+rerank_top_n: 3                  # rerank 后保留的文档数
+rerank_score_threshold: 0.3       # rerank 分数阈值，低于此分丢弃
+```
+
+**3. 向量库参数**（`config/chroma.yml`）：`chunk_size: 500`、`chunk_overlap: 50`、`allowed_knowledge_file_type: ["txt","pdf","docx","md"]`。
+
+**4. 外部数据路径**（`config/agent.yml`）：
 
 ```yaml
 external_data_path: data/external/records.csv
 ```
+
+> ⚠️ 改动 `chunk_size` 后需清库重灌：启动服务后在前端「📚 知识库 → ⟳ 全量重建索引」，或调用 `POST /api/knowledge/reindex`。
 
 ### 启动
 
@@ -264,9 +295,10 @@ streamlit run app.py
 
 | 配置文件 | 说明 |
 |----------|------|
-| `config/rag.yml` | LLM 模型、Embedding 模型配置 |
+| `.env` | **真相源**：DASHSCOPE_API_KEY、CHAT_MODEL_NAME、EMBEDDING_MODEL_NAME（已 gitignore） |
+| `config/rag.yml` | rerank 模型、粗召回/精排参数、阈值（fallback 模型名） |
+| `config/chroma.yml` | ChromaDB 配置（分块大小、检索数量、允许的文件类型） |
 | `config/agent.yml` | 外部数据路径配置 |
-| `config/chroma.yml` | ChromaDB 向量库配置（分块大小、检索数量） |
 | `config/prompts.yml` | Prompt 模板路径配置 |
 
 ---
@@ -277,21 +309,27 @@ streamlit run app.py
 |------|------|------|
 | `/` | GET | 登录页面 |
 | `/app` | GET | 主应用页面 |
-| `/api/register` | POST | 用户注册 |
-| `/api/login` | POST | 用户登录 |
+| `/api/register` | POST | 用户注册（密码 bcrypt 哈希，≥8 位） |
+| `/api/login` | POST | 用户登录（返回 token） |
 | `/api/logout` | POST | 用户登出 |
-| `/api/chat` | POST | 智能客服（SSE 流式响应） |
-| `/api/analysis` | POST | 数据分析（同步 JSON） |
+| `/api/chat` | POST | 智能客服（SSE 流式响应，按 user_id 隔离） |
+| `/api/analysis` | POST | 数据分析（同步 JSON，按 user_id 隔离） |
 | `/api/sessions` | GET | 获取会话列表 |
 | `/api/sessions/{id}` | GET | 获取会话详情 |
+| `/api/knowledge/files` | GET | 列出知识库文件（含大小/md5/是否已入库） |
+| `/api/knowledge/upload` | POST | 上传文件并增量入库（multipart，支持 txt/pdf/docx/md） |
+| `/api/knowledge/files/{filename}` | DELETE | 删除文件及其向量分片 |
+| `/api/knowledge/reindex` | POST | 清库全量重建索引（需 `confirm=true`） |
+| `/api/knowledge/stats` | GET | 知识库统计（分片数/来源数/维度） |
 | `/api/health` | GET | 健康检查 |
 
 ---
 
 ## 界面预览
 
-- **登录页**：用户注册/登录
-- **主界面**：左侧会话列表 + 右侧对话区
+- **登录页**：用户注册/登录（bcrypt 加密、密码强度校验）
+- **主界面**：左侧会话列表 + 知识库管理面板 + 右侧对话区
+- **知识库面板**：上传/删除/全量重建，文件状态徽章（已入库/待入库）
 - **思考状态**：spinner 动画 + 当前执行步骤提示
 - **流式输出**：分析结论逐句呈现
 - **图表嵌入**：Plotly 交互式图表内嵌展示
