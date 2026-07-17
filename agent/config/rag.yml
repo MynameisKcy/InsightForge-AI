@@ -1,2 +1,14 @@
+# 注意：实际使用的模型名称以 .env 中的环境变量为准（CHAT_MODEL_NAME / EMBEDDING_MODEL_NAME）。
+# 下面两行仅作为环境变量缺失时的 fallback，由 model/factory.py 读取。
 chat_model_name: qwen3-max
 embedding_model_name: text-embedding-v4
+
+# DashScope rerank 模型（复用 .env 的 DASHSCOPE_API_KEY）
+# 注意：gte-rerank 对部分 Key 返回 403 AccessDenied，gte-rerank-v2 普遍可用。
+rerank_model: gte-rerank-v2
+# 粗召回数量（向量检索返回的候选数，rerank 前的候选池）
+retrieve_k: 15
+# rerank 后保留的最终文档数
+rerank_top_n: 3
+# rerank 分数阈值，低于此分数的文档丢弃
+rerank_score_threshold: 0.3

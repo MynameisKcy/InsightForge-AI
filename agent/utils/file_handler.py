@@ -44,3 +44,28 @@ def pdf_loader(filepath:str,passwd:str=None) -> list[Document]:
 
 def text_loader(filepath:str,passwd:str=None) -> list[Document]:
     return TextLoader(filepath, encoding=passwd or "utf-8").load()
+
+def docx_loader(filepath:str,passwd:str=None) -> list[Document]:
+    """加载 .docx 文档，按段落抽取文本，保留来源元数据。"""
+    import docx
+    doc = docx.Document(filepath)
+    parts = []
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if text:
+            parts.append(text)
+    # 表格内容也纳入
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [(c.text or "").strip() for c in row.cells]
+            line = " | ".join(cells)
+            if line:
+                parts.append(line)
+    content = "\n".join(parts)
+    if not content.strip():
+        return []
+    return [Document(page_content=content, metadata={"source": filepath})]
+
+def markdown_loader(filepath:str,passwd:str=None) -> list[Document]:
+    """加载 markdown 文件（本质是文本，复用 TextLoader）。"""
+    return TextLoader(filepath, encoding=passwd or "utf-8").load()

@@ -31,6 +31,25 @@ except ModuleNotFoundError:
     from agent.database.data_resolver import DataResolver
 
 
+class RequestContext:
+    """单次分析请求的上下文，按 user_id 隔离数据层，替代旧的实例属性。
+
+    旧设计把 csv_path/dataset_name 存在 PlannerAgent 单例实例属性上，
+    多用户并发会互相覆盖；改为每次请求构造局部 ctx 下传，天然隔离。
+    """
+
+    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc")
+
+    def __init__(self, user_id: str = "default", session_id: str = "",
+                 csv_path: str = "", dataset_name: str = "",
+                 dataset_desc: str = ""):
+        self.user_id = user_id or "default"
+        self.session_id = session_id
+        self.csv_path = csv_path
+        self.dataset_name = dataset_name
+        self.dataset_desc = dataset_desc
+
+
 PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题，制定分析计划。
 
 ## 可用的分析能力
@@ -86,8 +105,8 @@ class PlannerAgent(BaseAgent):
         self.viz_agent = VisualizationAgent()
         self.report_agent = ReportAgent()
         self.export_agent = ExportAgent()
-        self._current_csv_path: str = ""
-        self._current_dataset_name: str = ""
+        # 不再保存请求级状态（_current_csv_path/_current_dataset_name/_last_loaded_csv），
+        # 改为每次请求用 RequestContext 局部变量下传，避免多用户并发竞态。
 
         self._agent_map = {
             "sql_query": self._run_sql,
@@ -99,22 +118,17 @@ class PlannerAgent(BaseAgent):
             "export": self._run_export,
         }
 
-    def run(self, input_data: dict) -> dict:
-        """
-        input_data = {
-            "query": "用户自然语言问题",
-            "history": [{"role": "user"|"assistant", "content": str}] (optional),
-        }
-        returns: 完整分析结果，包含 report 和 export 信息
-        """
-        query = input_data.get("query", "")
-        history = input_data.get("history", [])
-        if not query:
-            return {"error": "No query provided"}
+    def _resolve_context(self, input_data: dict) -> RequestContext:
+        """从 input_data 解析 user_id/session_id，并探测数据集，构造请求上下文。
 
-        # 0. 自动检测数据集
+        DuckDB 实例按 user_id 隔离：init_duckdb(user_id, csv_path) 内部会缓存实例，
+        并在需要切换 CSV 时 reload（每个实例独立 :memory: 连接，无跨用户竞态）。
+        """
+        user_id = input_data.get("user_id") or "default"
+        session_id = input_data.get("session_id", "")
+
         try:
-            resolved = DataResolver.resolve(query)
+            resolved = DataResolver.resolve(input_data.get("query", ""))
             csv_path = resolved.get("csv_path", "")
             dataset_name = resolved.get("name", "Unknown Dataset")
             dataset_desc = resolved.get("description", "")
@@ -124,23 +138,40 @@ class PlannerAgent(BaseAgent):
             dataset_name = "Online Shopping Dataset"
             dataset_desc = ""
 
-        if dataset_name:
-            logger.info(f"Planner using dataset: {dataset_name} ({csv_path})")
+        ctx = RequestContext(user_id=user_id, session_id=session_id,
+                             csv_path=csv_path, dataset_name=dataset_name,
+                             dataset_desc=dataset_desc)
 
-        # 存储当前数据集信息
-        self._current_csv_path = csv_path
-        self._current_dataset_name = dataset_name
-
-        # 如果 DuckDB 需要切换数据集，重新加载
+        # 确保该 user 的 DuckDB 实例加载了本次所需 CSV（实例内部按 last_loaded_csv 判重）
         if csv_path and os.path.exists(csv_path):
             try:
                 from database.duckdb_manager import init_duckdb
             except ModuleNotFoundError:
                 from agent.database.duckdb_manager import init_duckdb
-            db = init_duckdb()
-            if not hasattr(self, '_last_loaded_csv') or self._last_loaded_csv != csv_path:
-                db.reload_csv(csv_path)
-                self._last_loaded_csv = csv_path
+            init_duckdb(csv_path=csv_path, user_id=user_id)
+
+        if dataset_name:
+            logger.info(f"Planner using dataset: {dataset_name} ({csv_path}) for user={user_id}")
+        return ctx
+
+    def run(self, input_data: dict) -> dict:
+        """
+        input_data = {
+            "query": "用户自然语言问题",
+            "history": [{"role": "user"|"assistant", "content": str}] (optional),
+            "user_id": "u_...",      # optional, 决定数据层隔离
+            "session_id": "...",     # optional
+        }
+        returns: 完整分析结果，包含 report 和 export 信息
+        """
+        query = input_data.get("query", "")
+        history = input_data.get("history", [])
+        if not query:
+            return {"error": "No query provided"}
+
+        # 0. 解析请求上下文（按 user_id 隔离数据集，替代旧的实例属性）
+        ctx = self._resolve_context(input_data)
+
         plan_data = self._create_plan(query, history)
         plan = plan_data.get("plan", [])
         title = plan_data.get("title", "数据分析报告")
@@ -179,7 +210,7 @@ class PlannerAgent(BaseAgent):
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
-                    step_result = handler(task, results)
+                    step_result = handler(task, results, ctx)
                     results[step_key] = step_result
                     results[f"{agent_name}_result"] = step_result
                 else:
@@ -202,8 +233,8 @@ class PlannerAgent(BaseAgent):
             "report": results.get("report_result", results.get("report", {})),
             "exports": results.get("export_result", results.get("export", {})),
             "dataset": {
-                "name": self._current_dataset_name,
-                "csv_path": self._current_csv_path,
+                "name": ctx.dataset_name,
+                "csv_path": ctx.csv_path,
             },
             "success": len(errors) == 0,
         }
@@ -238,31 +269,8 @@ class PlannerAgent(BaseAgent):
             yield ("error", "No query provided")
             return
 
-        # 0. 自动检测数据集
-        try:
-            resolved = DataResolver.resolve(query)
-            csv_path = resolved.get("csv_path", "")
-            dataset_name = resolved.get("name", "Unknown Dataset")
-        except Exception as e:
-            logger.warning(f"DataResolver failed: {e}, using default dataset")
-            csv_path = ""
-            dataset_name = "Online Shopping Dataset"
-
-        if dataset_name:
-            logger.info(f"Planner using dataset: {dataset_name} ({csv_path})")
-
-        self._current_csv_path = csv_path
-        self._current_dataset_name = dataset_name
-
-        if csv_path and os.path.exists(csv_path):
-            try:
-                from database.duckdb_manager import init_duckdb
-            except ModuleNotFoundError:
-                from agent.database.duckdb_manager import init_duckdb
-            db = init_duckdb()
-            if not hasattr(self, '_last_loaded_csv') or self._last_loaded_csv != csv_path:
-                db.reload_csv(csv_path)
-                self._last_loaded_csv = csv_path
+        # 0. 解析请求上下文（按 user_id 隔离数据集）
+        ctx = self._resolve_context(input_data)
 
         # 1. 生成计划
         yield ("status", "正在分析您的问题，制定分析计划...")
@@ -306,7 +314,7 @@ class PlannerAgent(BaseAgent):
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
-                    step_result = handler(task, results)
+                    step_result = handler(task, results, ctx)
                     results[step_key] = step_result
                     results[f"{agent_name}_result"] = step_result
                     yield ("step_done", {"step": step_num, "agent": agent_name})
@@ -349,8 +357,8 @@ class PlannerAgent(BaseAgent):
             "report": report,
             "exports": export_result,
             "dataset": {
-                "name": self._current_dataset_name,
-                "csv_path": self._current_csv_path,
+                "name": ctx.dataset_name,
+                "csv_path": ctx.csv_path,
             },
             "success": len(errors) == 0,
         }
@@ -358,11 +366,11 @@ class PlannerAgent(BaseAgent):
 
     # ── Agent 执行方法 ──
 
-    def _run_sql(self, task: str, prev_results: dict) -> dict:
-        """执行 SQL 查询。"""
-        return self.sql_agent.run({"task": task})
+    def _run_sql(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+        """执行 SQL 查询（按 ctx.user_id 隔离数据层）。"""
+        return self.sql_agent.run({"task": task, "user_id": ctx.user_id})
 
-    def _run_trend(self, task: str, prev_results: dict) -> dict:
+    def _run_trend(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """执行趋势分析。"""
         sql_data = prev_results.get("sql_query_result", {})
         df_json = sql_data.get("dataframe_json", "[]")
@@ -373,7 +381,7 @@ class PlannerAgent(BaseAgent):
             "task": task,
         })
 
-    def _run_product(self, task: str, prev_results: dict) -> dict:
+    def _run_product(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """执行产品分析。"""
         sql_data = prev_results.get("sql_query_result", {})
         df_json = sql_data.get("dataframe_json", "[]")
@@ -384,7 +392,7 @@ class PlannerAgent(BaseAgent):
             "task": task,
         })
 
-    def _run_risk(self, task: str, prev_results: dict) -> dict:
+    def _run_risk(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """执行风险分析。"""
         sql_data = prev_results.get("sql_query_result", {})
         df_json = sql_data.get("dataframe_json", "[]")
@@ -395,7 +403,7 @@ class PlannerAgent(BaseAgent):
             "task": task,
         })
 
-    def _run_visualization(self, task: str, prev_results: dict) -> dict:
+    def _run_visualization(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """生成图表。"""
         sql_data = prev_results.get("sql_query_result", {})
         df_json = sql_data.get("dataframe_json", "[]")
@@ -409,7 +417,7 @@ class PlannerAgent(BaseAgent):
             "extra_data": extra,
         })
 
-    def _run_report(self, task: str, prev_results: dict) -> dict:
+    def _run_report(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """生成报告。"""
         charts = prev_results.get("visualization_result", {}).get("charts", [])
         return self.report_agent.run({
@@ -422,7 +430,7 @@ class PlannerAgent(BaseAgent):
             "title": task,
         })
 
-    def _run_export(self, task: str, prev_results: dict) -> dict:
+    def _run_export(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
         """导出报告。"""
         report = prev_results.get("report_result", {})
         markdown = report.get("markdown", "")

@@ -13,6 +13,14 @@ import uuid
 from datetime import datetime
 from typing import AsyncGenerator
 
+# ── 方案C：加载 .env（DASHSCOPE_API_KEY），须早于任何会实例化模型的导入 ──
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    load_dotenv(_env_path, override=False)
+except ImportError:
+    pass
+
 
 def _split_sentences(text: str) -> list[str]:
     """将文本按句子分割，保持分隔符在句尾。支持中英文标点。"""
@@ -25,7 +33,7 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -75,6 +83,22 @@ def _get_planner_agent():
             from agent.agents.planner_agent import PlannerAgent
         _planner_agent = PlannerAgent()
     return _planner_agent
+
+
+# ── 知识库服务（单例） ──
+_vector_store_service = None
+
+
+def _get_vector_store():
+    """延迟初始化向量库服务（方案C：运行时知识库管理）。"""
+    global _vector_store_service
+    if _vector_store_service is None:
+        try:
+            from rag.vector_store import VectorStoreService
+        except ModuleNotFoundError:
+            from agent.rag.vector_store import VectorStoreService
+        _vector_store_service = VectorStoreService()
+    return _vector_store_service
 
 
 # ── 用户认证辅助 ──
@@ -330,6 +354,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .welcome-msg h2 { font-size: 20px; color: #4a5568; margin-bottom: 8px; }
 .welcome-msg p { font-size: 14px; line-height: 1.8; }
 
+/* ── 知识库管理 ── */
+.kb-section { border-top: 1px solid #2d3748; padding: 12px 0 0; }
+.kb-header { padding: 0 16px 8px; display: flex; justify-content: space-between;
+             align-items: center; }
+.kb-header h2 { font-size: 13px; color: #e2e8f0; font-weight: 600; }
+.kb-stats { font-size: 11px; color: #718096; }
+.kb-body { padding: 0 12px 8px; max-height: 200px; overflow-y: auto; }
+.kb-file { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+           border-radius: 6px; font-size: 12px; color: #cbd5e0;
+           transition: background .15s; }
+.kb-file:hover { background: #16213e; }
+.kb-file .kb-name { flex: 1; white-space: nowrap; overflow: hidden;
+                   text-overflow: ellipsis; }
+.kb-file .kb-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+.kb-badge.in { background: #2f855a; color: #fff; }
+.kb-badge.out { background: #4a5568; color: #cbd5e0; }
+.kb-del { background: transparent; border: none; color: #718096; cursor: pointer;
+          font-size: 14px; padding: 0 2px; flex-shrink: 0; }
+.kb-del:hover { color: #e94560; }
+.kb-upload { padding: 0 16px 8px; }
+.kb-upload input[type=file] { display: none; }
+.kb-btn { width: 100%; padding: 7px; font-size: 12px; border-radius: 6px;
+          border: 1px dashed #4a5568; background: transparent; color: #a0aec0;
+          cursor: pointer; transition: all .15s; }
+.kb-btn:hover { color: #e94560; border-color: #e94560; }
+.kb-reindex { padding: 0 16px 12px; }
+.kb-reindex .kb-btn { border-style: solid; font-size: 11px; }
+
 /* ── 响应式 ── */
 @media (max-width: 700px) {
   .sidebar { width: 60px; min-width: 60px; }
@@ -354,6 +406,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
   <div class="session-list" id="sessionList">
     <div class="no-sessions">暂无会话记录</div>
+  </div>
+  <!-- ── 知识库管理（方案C） ── -->
+  <div class="kb-section">
+    <div class="kb-header">
+      <h2>📚 知识库</h2>
+      <span class="kb-stats" id="kbStats">-</span>
+    </div>
+    <div class="kb-body" id="kbFileList">
+      <div class="kb-file" style="color:#718096;justify-content:center;">加载中...</div>
+    </div>
+    <div class="kb-upload">
+      <input type="file" id="kbFileInput" multiple accept=".txt,.pdf,.docx,.md">
+      <button class="kb-btn" onclick="document.getElementById('kbFileInput').click()">＋ 上传并入库</button>
+    </div>
+    <div class="kb-reindex">
+      <button class="kb-btn" onclick="kbReindex()">⟳ 全量重建索引</button>
+    </div>
   </div>
   <div class="sidebar-footer">
     <button class="btn-logout" onclick="logout()"><span>登出</span></button>
@@ -700,8 +769,104 @@ function scrollToBottom() {
   setTimeout(() => { container.scrollTop = container.scrollHeight; }, 50);
 }
 
+// ── 知识库管理（方案C） ──
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + 'KB';
+  return (bytes/1048576).toFixed(1) + 'MB';
+}
+
+async function loadKbFiles() {
+  try {
+    const r = await fetch('/api/knowledge/files', {headers: authHeaders()});
+    if (!r.ok) { document.getElementById('kbFileList').innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
+    const data = await r.json();
+    const files = data.files || [];
+    const list = document.getElementById('kbFileList');
+    if (files.length === 0) {
+      list.innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">暂无知识库文件</div>';
+    } else {
+      list.innerHTML = files.map(f => {
+        const badge = f.ingested
+          ? '<span class="kb-badge in">已入库</span>'
+          : '<span class="kb-badge out">待入库</span>';
+        return `<div class="kb-file" title="${escapeHtml(f.filename)}">
+          <span class="kb-name">${escapeHtml(f.filename)}</span>
+          ${badge}
+          <button class="kb-del" onclick="deleteKbFile('${escapeHtml(f.filename)}')" title="删除">✕</button>
+        </div>`;
+      }).join('');
+    }
+    // 统计
+    loadKbStats();
+  } catch(e) {
+    console.log('加载知识库列表失败:', e);
+  }
+}
+
+async function loadKbStats() {
+  try {
+    const r = await fetch('/api/knowledge/stats', {headers: authHeaders()});
+    if (r.ok) {
+      const s = await r.json();
+      document.getElementById('kbStats').textContent =
+        (s.total_sources || 0) + '文件/' + (s.total_chunks || 0) + '分片';
+    }
+  } catch(e) {}
+}
+
+// 文件上传入库
+document.getElementById('kbFileInput').addEventListener('change', async (e) => {
+  const files = e.target.files;
+  if (!files || files.length === 0) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  try {
+    const r = await fetch('/api/knowledge/upload', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + authToken},
+      body: fd
+    });
+    const data = await r.json();
+    const ok = (data.results || []).filter(x => x.success).length;
+    alert('上传完成：成功 ' + ok + ' / ' + files.length + ' 个文件');
+    loadKbFiles();
+  } catch(err) { alert('上传失败: ' + err.message); }
+  e.target.value = '';
+});
+
+async function deleteKbFile(filename) {
+  if (!confirm('确认删除知识库文件及其分片？\n' + filename)) return;
+  try {
+    const r = await fetch('/api/knowledge/files/' + encodeURIComponent(filename), {
+      method: 'DELETE', headers: authHeaders()
+    });
+    const data = await r.json();
+    if (data.success !== undefined && !data.success) {
+      alert(data.error || '删除失败'); return;
+    }
+    loadKbFiles();
+  } catch(e) { alert('删除失败: ' + e.message); }
+}
+
+async function kbReindex() {
+  if (!confirm('全量重建将清空当前向量库并重新入库所有文件，耗时较长。确认继续？')) return;
+  try {
+    const r = await fetch('/api/knowledge/reindex', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({confirm: true})
+    });
+    const data = await r.json();
+    if (data.error) { alert(data.error); return; }
+    alert('重建完成：重载 ' + (data.reloaded_files || 0) + ' 个文件，共 ' +
+          ((data.stats && data.stats.total_chunks) || 0) + ' 个分片');
+    loadKbFiles();
+  } catch(e) { alert('重建失败: ' + e.message); }
+}
+
 // ── 初始化 ──
 loadSessions();
+loadKbFiles();
 document.getElementById('userInput').focus();
 </script>
 </body>
@@ -817,7 +982,8 @@ async def api_chat(request: Request):
             if new_session:
                 yield f"data: [SESSIONS_RELOAD]\n\n"
 
-            for chunk in agent.execute_stream(query, history=mem_context):
+            for chunk in agent.execute_stream(query, history=mem_context,
+                                              user_id=user_id, session_id=session_id):
                 if not chunk:
                     continue
                 stripped = chunk.strip()
@@ -886,7 +1052,7 @@ async def api_analysis(request: Request):
 
     try:
         analyst = _get_planner_agent()
-        result = analyst.run({"query": query})
+        result = analyst.run({"query": query, "user_id": user_id})
 
         # 将分析结果摘要存入记忆
         report = result.get("report", {})
@@ -939,6 +1105,151 @@ async def api_get_session(request: Request, session_id: str):
 async def health():
     """健康检查。"""
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+# ── 知识库管理（方案C-5） ──
+
+def _kb_data_dir() -> str:
+    try:
+        from utils.config_handler import chroma_conf
+    except ModuleNotFoundError:
+        from agent.utils.config_handler import chroma_conf
+    return get_abs_path(chroma_conf["data_path"])
+
+
+def _kb_allowed_types() -> tuple:
+    try:
+        from utils.config_handler import chroma_conf
+    except ModuleNotFoundError:
+        from agent.utils.config_handler import chroma_conf
+    return tuple(chroma_conf["allowed_knowledge_file_type"])
+
+
+@app.get("/api/knowledge/files")
+async def kb_list_files(request: Request):
+    """列出 data/ 下知识库文件，含大小/类型/md5/是否已入库。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    data_dir = _kb_data_dir()
+    allowed = _kb_allowed_types()
+    try:
+        from utils.file_handler import get_file_md5_hex
+    except ModuleNotFoundError:
+        from agent.utils.file_handler import get_file_md5_hex
+
+    vs = _get_vector_store()
+    ingested_md5 = vs._load_md5_store()
+    files = []
+    if os.path.isdir(data_dir):
+        for fname in sorted(os.listdir(data_dir)):
+            fpath = os.path.join(data_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            ext = os.path.splitext(fname)[1].lower().lstrip(".")
+            if ext not in allowed:
+                continue
+            size = os.path.getsize(fpath)
+            md5 = get_file_md5_hex(fpath) or ""
+            files.append({
+                "filename": fname,
+                "size": size,
+                "type": ext,
+                "md5": md5,
+                "ingested": md5 in ingested_md5 if md5 else False,
+            })
+    return JSONResponse({"files": files, "count": len(files)})
+
+
+@app.post("/api/knowledge/upload")
+async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
+    """上传文件到 data/ 并增量入库。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    data_dir = _kb_data_dir()
+    allowed = _kb_allowed_types()
+    os.makedirs(data_dir, exist_ok=True)
+    vs = _get_vector_store()
+
+    results = []
+    for f in files:
+        fname = os.path.basename(f.filename or "")
+        ext = os.path.splitext(fname)[1].lower().lstrip(".")
+        if ext not in allowed:
+            results.append({"filename": fname, "success": False,
+                            "error": f"不支持的文件类型: {ext}"})
+            continue
+        fpath = os.path.join(data_dir, fname)
+        try:
+            content = await f.read()
+            with open(fpath, "wb") as out:
+                out.write(content)
+            chunks, skipped = vs.load_single_document(fpath)
+            results.append({
+                "filename": fname,
+                "success": True,
+                "chunks": chunks,
+                "skipped": skipped,
+            })
+        except Exception as e:
+            logger.error(f"知识库上传入库失败 {fname}: {traceback.format_exc()}")
+            results.append({"filename": fname, "success": False, "error": str(e)})
+    return JSONResponse({"results": results})
+
+
+@app.delete("/api/knowledge/files/{filename}")
+async def kb_delete_file(request: Request, filename: str):
+    """删除 data/ 下指定文件，并从向量库移除其分片。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    # 防路径穿越
+    if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
+        return JSONResponse({"error": "非法文件名"}, status_code=400)
+    data_dir = _kb_data_dir()
+    fpath = os.path.join(data_dir, filename)
+    if not os.path.isfile(fpath):
+        return JSONResponse({"error": "文件不存在"}, status_code=404)
+    try:
+        vs = _get_vector_store()
+        removed = vs.delete_by_source(fpath)
+        os.remove(fpath)
+        return JSONResponse({"success": True, "removed_chunks": removed})
+    except Exception as e:
+        logger.error(f"知识库删除失败 {filename}: {traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/knowledge/reindex")
+async def kb_reindex(request: Request):
+    """清空向量库并全量重建索引（二次确认通过 confirm=true 才执行）。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    if not body.get("confirm"):
+        return JSONResponse({"error": "需传 confirm=true 以确认全量重建"}, status_code=400)
+    try:
+        vs = _get_vector_store()
+        result = vs.reindex_all()
+        return JSONResponse({"success": True, **result})
+    except Exception as e:
+        logger.error(f"知识库重建失败: {traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/knowledge/stats")
+async def kb_stats(request: Request):
+    """返回知识库统计信息。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    try:
+        vs = _get_vector_store()
+        return JSONResponse(vs.get_stats())
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── 静态文件（报告和图表） ──

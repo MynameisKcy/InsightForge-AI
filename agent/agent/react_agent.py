@@ -41,7 +41,18 @@ class ReactAgent:
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
-    def execute_stream(self, query: str, history: list[dict] | None = None):
+    def execute_stream(self, query: str, history: list[dict] | None = None,
+                       user_id: str = "default", session_id: str = ""):
+        # 构建完整上下文：历史消息 + 当前问题
+        # 设置请求级 user_id，供下游 @tool 工具（run_full_analysis 等）读取，实现多用户隔离
+        from utils.request_context import set_request_context, reset_request_context
+        ctx_token = set_request_context(user_id=user_id, session_id=session_id)
+        try:
+            yield from self._execute_stream_inner(query, history)
+        finally:
+            reset_request_context(ctx_token)
+
+    def _execute_stream_inner(self, query: str, history: list[dict] | None = None):
         # 构建完整上下文：历史消息 + 当前问题
         messages = []
         if history:
