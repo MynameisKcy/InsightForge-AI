@@ -2,6 +2,13 @@ import time
 import os
 import sys
 
+# ── 方案C：在导入任何会实例化模型的模块之前，先加载 .env（DASHSCOPE_API_KEY）──
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
+except ImportError:
+    pass
+
 import streamlit as st
 
 # 确保 agent 目录在 path 中

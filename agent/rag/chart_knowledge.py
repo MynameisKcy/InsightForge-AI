@@ -101,8 +101,17 @@ class ChartKnowledgeBase:
             return chart_id
 
     def search_by_keywords(self, keywords: str, limit: int = 5) -> list[dict]:
-        """按关键词搜索相关图表（在 title, analysis_text, task_context 中匹配）。"""
-        terms = [f"%{kw.strip()}%" for kw in keywords.split() if kw.strip()]
+        """按关键词搜索相关图表（在 title, analysis_text, task_context 中匹配）。
+
+        中文查询用 jieba 搜索引擎模式分词，比按空格 split 多召回若干 term，
+        显著提升「销售下降原因分析」这类无空格中文查询的 LIKE 命中率。
+        """
+        try:
+            import jieba
+            tokens = jieba.cut_for_search(keywords)
+        except ImportError:
+            tokens = keywords.split()
+        terms = [f"%{kw.strip()}%" for kw in tokens if kw.strip()]
         if not terms:
             return self.get_recent_charts(limit)
 

@@ -2,6 +2,8 @@
 Schema Loader: Extract table/column metadata from DuckDB for the SQL Agent.
 """
 
+from database.duckdb_manager import _validate_table_name
+
 
 class SchemaLoader:
     """Reads schema information from a DuckDBManager and returns a text
@@ -17,6 +19,7 @@ class SchemaLoader:
 
         parts = []
         for (table_name,) in tables:
+            _validate_table_name(table_name)
             cols = duckdb_manager.execute(
                 f"DESCRIBE {table_name}"
             ).fetchall()
@@ -34,6 +37,7 @@ class SchemaLoader:
         tables = duckdb_manager.execute("SHOW TABLES").fetchall()
         schema = {}
         for (table_name,) in tables:
+            _validate_table_name(table_name)
             cols = duckdb_manager.execute(
                 f"DESCRIBE {table_name}"
             ).fetchall()
