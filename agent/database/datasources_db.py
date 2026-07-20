@@ -3,9 +3,11 @@ Datasources DB: SQLite 元数据管理，记录所有已注册的数据集（CSV
 """
 
 import os
+import re
 import sqlite3
 import sys
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +21,9 @@ from utils.path_tool import get_abs_path
 
 _DB_PATH = get_abs_path("database/datasources.db")
 
+# 合法表名/数据集名：字母/下划线开头，仅含字母数字下划线（与 duckdb_manager._TABLE_NAME_RE 一致）
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class DatasourcesDB:
     """数据源元数据管理。"""
@@ -28,10 +33,15 @@ class DatasourcesDB:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_tables()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+    @contextmanager
+    def _get_conn(self):
+        """获取 SQLite 连接（自动关闭）。"""
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_tables(self):
         with self._get_conn() as conn:
@@ -60,8 +70,10 @@ class DatasourcesDB:
     def add_dataset(self, name: str, source_type: str, file_path: str,
                     table_name: str, schema_json: str, row_count: int,
                     description: str = "") -> dict:
-        if not name or not table_name:
-            return {"success": False, "error": "name 和 table_name 不能为空"}
+        if not name or not _TABLE_NAME_RE.match(name):
+            raise ValueError(f"非法数据集名: {name!r}")
+        if not table_name or not _TABLE_NAME_RE.match(table_name):
+            raise ValueError(f"非法表名: {table_name!r}")
         try:
             ds_id = str(uuid.uuid4())
             now = datetime.now().isoformat()

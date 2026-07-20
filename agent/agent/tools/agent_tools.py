@@ -115,10 +115,10 @@ def run_full_analysis(query: str) -> str:
 def get_data_overview() -> str:
     """返回所有数据集的概况信息，自动适配当前数据集的实际列名。"""
     try:
-        from database.duckdb_manager import init_duckdb
+        from database.duckdb_manager import init_duckdb, safe_ident
         from utils.request_context import get_user_id
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.duckdb_manager import init_duckdb, safe_ident
         from utils.request_context import get_user_id
 
     try:
@@ -131,8 +131,9 @@ def get_data_overview() -> str:
         all_parts = []
         for table_name in tables:
             try:
-                row_count = db.query_df(f"SELECT COUNT(*) AS cnt FROM {table_name}").iloc[0, 0]
-                cols_info = db.execute(f"DESCRIBE {table_name}").fetchall()
+                qname = safe_ident(table_name)
+                row_count = db.query_df(f"SELECT COUNT(*) AS cnt FROM {qname}").iloc[0, 0]
+                cols_info = db.execute(f"DESCRIBE {qname}").fetchall()
                 orig_cols = [c[0] for c in cols_info]
 
                 parts = [

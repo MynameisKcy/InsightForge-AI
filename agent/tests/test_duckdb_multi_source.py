@@ -1,7 +1,6 @@
 import os
 import sys
 import unittest
-import tempfile
 import csv
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -14,7 +13,11 @@ for p in (PROJECT_ROOT, PROJECT_PARENT):
 
 class TestDuckDBMultiSource(unittest.TestCase):
     def setUp(self):
-        self.tmp_dir = tempfile.mkdtemp()
+        # 使用 data/datasets 目录，满足 _validate_csv_path 路径穿越防护
+        from utils.path_tool import get_abs_path
+        self.tmp_dir = get_abs_path("data/datasets")
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        self._created_files = []
 
     def _make_csv(self, filename, rows):
         path = os.path.join(self.tmp_dir, filename)
@@ -22,7 +25,15 @@ class TestDuckDBMultiSource(unittest.TestCase):
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             writer.writeheader()
             writer.writerows(rows)
+        self._created_files.append(path)
         return path
+
+    def tearDown(self):
+        for f in self._created_files:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
 
     def test_load_csv_dataset(self):
         from database.duckdb_manager import DuckDBManager
