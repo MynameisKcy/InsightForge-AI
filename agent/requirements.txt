@@ -26,6 +26,7 @@ websockets==15.0.1
 pandas==2.3.3
 numpy==2.2.6
 duckdb==1.5.4
+sqlglot==30.12.0  # SQL 沙箱 AST 校验（防多语句/文件读/SSRF/DDL 注入）
 SQLAlchemy==2.0.51
 
 # ── 可视化 ──
