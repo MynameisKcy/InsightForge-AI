@@ -449,7 +449,8 @@ body { font-family: var(--font-sans);
 .kb-header h2 { font-size: 13px; color: var(--sb-text); font-weight: 600; }
 .kb-stats { font-size: 11px; color: var(--sb-text-3); }
 .kb-body { padding: 0 var(--sp-3) var(--sp-2); max-height: 200px; overflow-y: auto; }
-.kb-file { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2);
+.kb-file, .ds-item { min-height: 36px; padding: 8px 12px; }
+.kb-file { display: flex; align-items: center; gap: var(--sp-1);
            border-radius: var(--r-sm); font-size: 12px; color: var(--sb-text);
            transition: background var(--t-fast); }
 .kb-file:hover { background: var(--sb-bg-elev); }
@@ -458,9 +459,16 @@ body { font-family: var(--font-sans);
 .kb-file .kb-badge { font-size: 10px; padding: 1px var(--sp-1); border-radius: var(--r-pill); flex-shrink: 0; }
 .kb-badge.in { background: var(--success); color: var(--surface); }
 .kb-badge.out { background: var(--text-2); color: var(--sb-text); }
-.kb-del { background: transparent; border: none; color: var(--sb-text-muted); cursor: pointer;
-          font-size: 14px; padding: 0 2px; flex-shrink: 0; }
-.kb-del:hover { color: var(--accent); }
+.kb-del, .ds-del {
+  min-width: 28px; min-height: 28px;
+  padding: 4px 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
+  background: transparent; border: none; color: var(--sb-text-muted);
+  cursor: pointer; font-size: 14px; flex-shrink: 0;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.kb-del:hover, .ds-del:hover { background: rgba(233,69,96,.15); color: var(--accent); }
 .kb-upload { padding: 0 var(--sp-4) var(--sp-2); }
 .kb-upload input[type=file] { display: none; }
 .kb-btn { width: 100%; padding: 7px; font-size: 12px; border-radius: var(--r-sm);
@@ -482,40 +490,73 @@ body { font-family: var(--font-sans);
 .ds-header h2 { font-size: 13px; color: var(--sb-text); font-weight: 600; }
 .ds-count { font-size: 11px; color: var(--sb-text-3); }
 .ds-body { padding: 0 var(--sp-3) var(--sp-2); max-height: 200px; overflow-y: auto; }
-.ds-item { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2);
+.ds-item { display: flex; align-items: center; gap: var(--sp-1);
            border-radius: var(--r-sm); font-size: 12px; color: var(--sb-text);
            transition: background var(--t-fast); cursor: pointer; }
 .ds-item:hover { background: var(--sb-bg-elev); }
 .ds-item .ds-icon { flex-shrink: 0; font-size: 14px; }
 .ds-item .ds-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ds-item .ds-rows { font-size: 10px; color: var(--sb-text-3); flex-shrink: 0; }
-.ds-del { background: transparent; border: none; color: var(--sb-text-muted); cursor: pointer;
-          font-size: 14px; padding: 0 2px; flex-shrink: 0; }
-.ds-del:hover { color: var(--accent); }
 .ds-upload { padding: 0 var(--sp-4) var(--sp-2); }
 .ds-upload input[type=file] { display: none; }
 .ds-btn { width: 100%; padding: 7px; font-size: 12px; border-radius: var(--r-sm);
           border: 1px dashed var(--text-2); background: transparent; color: var(--sb-text-2);
           cursor: pointer; transition: all var(--t-fast); }
 .ds-btn:hover { color: var(--accent); border-color: var(--accent); }
-.ds-detail { display: none; padding: var(--sp-2) var(--sp-3); background: var(--sb-bg-elev); border-radius: var(--r-sm);
-             margin: var(--sp-1) var(--sp-3); font-size: 11px; color: var(--sb-text-2); }
-.ds-detail.show { display: block; }
+.ds-detail {
+  max-height: 0; overflow: hidden;
+  padding: 0 12px; background: var(--sb-bg-elev);
+  border-radius: var(--r-sm); margin: 0 12px;
+  font-size: 11px; color: var(--sb-text-2);
+  transition: max-height var(--t-slow), padding var(--t-slow), margin var(--t-slow);
+}
+.ds-detail.show { max-height: 400px; padding: 8px 12px; margin: 4px 12px; }
 .ds-detail table { width: 100%; font-size: 10px; border-collapse: collapse; }
 .ds-detail th, .ds-detail td { padding: 2px var(--sp-1); text-align: left; border-bottom: 1px solid var(--sb-border); }
 .ds-detail tbody tr:nth-child(even) { background: rgba(255,255,255,.03); }
 .ds-detail tbody tr:hover { background: rgba(233,69,96,.15); }
 
+/* ── 可折叠侧边栏分区 ── */
+.ds-header, .kb-header { cursor: pointer; user-select: none; }
+.section-chevron {
+  display: inline-block; font-size: 10px; transition: transform var(--t-fast);
+  margin-right: 4px; color: var(--sb-text-muted);
+}
+.section-body {
+  max-height: 600px; overflow: hidden;
+  transition: max-height var(--t-slow), opacity var(--t-med);
+  opacity: 1;
+}
+.section-body.collapsed { max-height: 0; opacity: 0; }
+.section-chevron.collapsed { transform: rotate(-90deg); }
+
 /* ── 响应式 ── */
+.hamburger { display: none; }
+.sidebar-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.5); z-index: 25;
+  opacity: 0; transition: opacity var(--t-med);
+}
+.sidebar-overlay.show { display: block; opacity: 1; }
+
 @media (max-width: 700px) {
-  .sidebar { width: 60px; min-width: 60px; }
-  .sidebar-header h1, .sidebar-header .user-info,
-  .session-item .s-title, .session-item .s-time,
-  .btn-new-session span, .btn-logout span { display: none; }
-  .sidebar-header { padding: 10px; }
-  .session-item { padding: 10px; text-align: center; }
-  .btn-new-session { padding: 10px; font-size: 16px; }
-  .btn-new-session::after { content: '+'; }
+  .hamburger {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; top: var(--sp-3); left: var(--sp-3);
+    width: 40px; height: 40px; border-radius: var(--r-sm);
+    background: var(--surface); border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm); font-size: 20px;
+    color: var(--text); cursor: pointer; z-index: 10;
+  }
+  .sidebar {
+    position: fixed; top: 0; left: 0; height: 100vh;
+    transform: translateX(-100%); z-index: 30;
+    transition: transform var(--t-slow);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .chat-container { padding-top: 64px; }
+  .message { max-width: 92%; }
+  .scroll-bottom-btn { right: var(--sp-4); bottom: 80px; }
 }
 /* ── 侧边栏滚动容器 ── */
 .sidebar-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
@@ -577,6 +618,22 @@ body { font-family: var(--font-sans);
 .modal-btn:hover { background: var(--surface-2); }
 .modal-btn.ok { background: var(--accent); color: #fff; border-color: var(--accent); }
 .modal-btn.ok:hover { background: var(--accent-hover); }
+
+/* ── 收尾打磨 ── */
+.avatar { font-size: 16px; line-height: 1; }
+.sidebar-header h1 { display: flex; align-items: center; gap: var(--sp-2); }
+.sidebar-header h1 .emoji, .sidebar-header .logo-emoji { font-size: 18px; line-height: 1; }
+*:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm);
+}
+.chat-container::-webkit-scrollbar { width: 8px; }
+.chat-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--r-pill); }
+.chat-container::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.chat-container::-webkit-scrollbar-track { background: transparent; }
+.typing-indicator span { background: var(--text-muted); }
+.chat-status .spinner {
+  border: 2px solid var(--border); border-top-color: var(--accent);
+}
 </style>
 </head>
 <body>
@@ -584,7 +641,7 @@ body { font-family: var(--font-sans);
 <!-- ── 侧边栏 ── -->
 <div class="sidebar">
   <div class="sidebar-header">
-    <h1>🤖 AI Data Analyst</h1>
+    <h1><span class="logo-emoji">🤖</span> AI Data Analyst</h1>
     <div class="user-info" id="userDisplay"></div>
     <button class="btn-new-session" onclick="newSession()"><span>+ 新会话</span></button>
   </div>
@@ -594,10 +651,11 @@ body { font-family: var(--font-sans);
   </div>
   <!-- ── 数据集管理 ── -->
   <div class="ds-section">
-    <div class="ds-header">
-      <h2>📁 数据集</h2>
+    <div class="ds-header" onclick="toggleSection('ds')">
+      <h2><span class="section-chevron" id="chevronDs">▼</span> 📁 数据集</h2>
       <span class="ds-count" id="dsCount">-</span>
     </div>
+    <div class="section-body" id="sectionBodyDs">
     <div class="ds-body" id="dsList">
       <div class="ds-item" style="color:var(--sb-text-muted);justify-content:center;">加载中...</div>
     </div>
@@ -605,13 +663,15 @@ body { font-family: var(--font-sans);
       <input type="file" id="dsFileInput" accept=".csv,.xlsx,.xls">
       <button class="ds-btn" onclick="document.getElementById('dsFileInput').click()">＋ 上传 CSV/Excel</button>
     </div>
+    </div>
   </div>
   <!-- ── 知识库管理（方案C） ── -->
   <div class="kb-section">
-    <div class="kb-header">
-      <h2>📚 知识库</h2>
+    <div class="kb-header" onclick="toggleSection('kb')">
+      <h2><span class="section-chevron" id="chevronKb">▼</span> 📚 知识库</h2>
       <span class="kb-stats" id="kbStats">-</span>
     </div>
+    <div class="section-body" id="sectionBodyKb">
     <div class="kb-body" id="kbFileList">
       <div class="kb-file" style="color:var(--sb-text-muted);justify-content:center;">加载中...</div>
     </div>
@@ -622,15 +682,18 @@ body { font-family: var(--font-sans);
     <div class="kb-reindex">
       <button class="kb-btn" onclick="kbReindex()">⟳ 全量重建索引</button>
     </div>
+    </div>
   </div>
   </div>
   <div class="sidebar-footer">
     <button class="btn-logout" onclick="logout()"><span>登出</span></button>
   </div>
 </div>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
 <!-- ── 主内容区 ── -->
 <div class="main-area">
+  <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="菜单">☰</button>
   <div class="chat-container" id="chatContainer">
     <div class="welcome-msg">
       <h2>👋 你好，我是 AI 数据分析顾问</h2>
@@ -658,6 +721,27 @@ let currentSessionId = '';
 if (!authToken) { window.location.href = '/'; }
 
 document.getElementById('userDisplay').textContent = '👤 ' + accountName;
+
+// ── 可折叠侧边栏分区 ──
+function toggleSection(name) {
+  var body = document.getElementById('sectionBody' + (name === 'ds' ? 'Ds' : 'Kb'));
+  var chevron = document.getElementById('chevron' + (name === 'ds' ? 'Ds' : 'Kb'));
+  if (!body || !chevron) return;
+  body.classList.toggle('collapsed');
+  chevron.classList.toggle('collapsed');
+}
+
+// ── 移动端抽屉 ──
+function toggleSidebar() {
+  var sb = document.querySelector('.sidebar');
+  var ov = document.getElementById('sidebarOverlay');
+  sb.classList.toggle('open');
+  ov.classList.toggle('show');
+}
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}
 
 // ── 加载侧边栏会话列表 ──
 async function loadSessions() {
@@ -692,6 +776,7 @@ function renderSessionList(sessions) {
 
 // ── 切换到指定会话 ──
 async function switchSession(sessionId) {
+  if (window.innerWidth <= 700) { closeSidebar(); }
   if (currentSessionId === sessionId) return;
   currentSessionId = sessionId;
   updateActiveSession();
