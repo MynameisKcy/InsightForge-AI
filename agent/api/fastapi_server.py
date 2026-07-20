@@ -382,6 +382,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .kb-reindex { padding: 0 16px 12px; }
 .kb-reindex .kb-btn { border-style: solid; font-size: 11px; }
 
+/* ── 数据集管理 ── */
+.ds-section { border-top: 1px solid #2d3748; padding: 12px 0 0; }
+.ds-header { padding: 0 16px 8px; display: flex; justify-content: space-between; align-items: center; }
+.ds-header h2 { font-size: 13px; color: #e2e8f0; font-weight: 600; }
+.ds-count { font-size: 11px; color: #718096; }
+.ds-body { padding: 0 12px 8px; max-height: 200px; overflow-y: auto; }
+.ds-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+           border-radius: 6px; font-size: 12px; color: #cbd5e0;
+           transition: background .15s; cursor: pointer; }
+.ds-item:hover { background: #16213e; }
+.ds-item .ds-icon { flex-shrink: 0; font-size: 14px; }
+.ds-item .ds-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-item .ds-rows { font-size: 10px; color: #718096; flex-shrink: 0; }
+.ds-del { background: transparent; border: none; color: #718096; cursor: pointer;
+          font-size: 14px; padding: 0 2px; flex-shrink: 0; }
+.ds-del:hover { color: #e94560; }
+.ds-upload { padding: 0 16px 8px; }
+.ds-upload input[type=file] { display: none; }
+.ds-btn { width: 100%; padding: 7px; font-size: 12px; border-radius: 6px;
+          border: 1px dashed #4a5568; background: transparent; color: #a0aec0;
+          cursor: pointer; transition: all .15s; }
+.ds-btn:hover { color: #e94560; border-color: #e94560; }
+.ds-detail { display: none; padding: 8px 12px; background: #16213e; border-radius: 6px;
+             margin: 4px 12px; font-size: 11px; color: #a0aec0; }
+.ds-detail.show { display: block; }
+.ds-detail table { width: 100%; font-size: 10px; border-collapse: collapse; }
+.ds-detail th, .ds-detail td { padding: 2px 4px; text-align: left; border-bottom: 1px solid #2d3748; }
+
 /* ── 响应式 ── */
 @media (max-width: 700px) {
   .sidebar { width: 60px; min-width: 60px; }
@@ -406,6 +434,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
   <div class="session-list" id="sessionList">
     <div class="no-sessions">暂无会话记录</div>
+  </div>
+  <!-- ── 数据集管理 ── -->
+  <div class="ds-section">
+    <div class="ds-header">
+      <h2>📁 数据集</h2>
+      <span class="ds-count" id="dsCount">-</span>
+    </div>
+    <div class="ds-body" id="dsList">
+      <div class="ds-item" style="color:#718096;justify-content:center;">加载中...</div>
+    </div>
+    <div class="ds-upload">
+      <input type="file" id="dsFileInput" accept=".csv,.xlsx,.xls">
+      <button class="ds-btn" onclick="document.getElementById('dsFileInput').click()">＋ 上传 CSV/Excel</button>
+    </div>
   </div>
   <!-- ── 知识库管理（方案C） ── -->
   <div class="kb-section">
@@ -863,6 +905,94 @@ async function kbReindex() {
     loadKbFiles();
   } catch(e) { alert('重建失败: ' + e.message); }
 }
+
+// ── 数据集管理 ──
+function dsIcon(type) {
+  if (type === 'csv') return '📄';
+  if (type === 'excel') return '📊';
+  if (type === 'mysql') return '🗄️';
+  if (type === 'postgres') return '🐘';
+  return '📁';
+}
+
+async function loadDatasets() {
+  try {
+    const r = await fetch('/api/datasets', {headers: authHeaders()});
+    if (!r.ok) { document.getElementById('dsList').innerHTML = '<div class="ds-item" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
+    const data = await r.json();
+    const datasets = data.datasets || [];
+    document.getElementById('dsCount').textContent = datasets.length + ' 个';
+    const list = document.getElementById('dsList');
+    if (datasets.length === 0) {
+      list.innerHTML = '<div class="ds-item" style="color:#718096;justify-content:center;">暂无数据集</div>';
+    } else {
+      list.innerHTML = datasets.map(d => {
+        const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
+        return `<div class="ds-item" onclick="toggleDsDetail('${d.name}')">
+          <span class="ds-icon">${dsIcon(d.source_type)}</span>
+          <span class="ds-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
+          <span class="ds-rows">${rows}</span>
+          <button class="ds-del" onclick="event.stopPropagation();deleteDs('${escapeHtml(d.name)}')" title="删除">✕</button>
+        </div>
+        <div class="ds-detail" id="ds-detail-${d.name}">加载中...</div>`;
+      }).join('');
+    }
+  } catch(e) { console.log('加载数据集失败:', e); }
+}
+
+async function toggleDsDetail(name) {
+  const el = document.getElementById('ds-detail-' + name);
+  if (!el) return;
+  if (el.classList.contains('show')) { el.classList.remove('show'); return; }
+  el.classList.add('show');
+  try {
+    const r = await fetch('/api/datasets/' + encodeURIComponent(name) + '/schema', {headers: authHeaders()});
+    if (r.ok) {
+      const d = await r.json();
+      const cols = (d.columns || []).map(c => `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.type)}</td></tr>`).join('');
+      el.innerHTML = `<strong>${escapeHtml(d.name)}</strong> (${d.source_type}, ${d.row_count}行)<table><tr><th>列名</th><th>类型</th></tr>${cols}</table>`;
+    } else {
+      el.innerHTML = '加载失败';
+    }
+  } catch(e) { el.innerHTML = '加载失败: ' + e.message; }
+}
+
+// 数据集上传
+document.getElementById('dsFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/datasets/upload', {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + authToken},
+      body: fd
+    });
+    const data = await r.json();
+    if (data.success) {
+      alert('✅ 已加载数据集「' + data.name + '」，' + data.row_count + ' 行，' + data.columns.length + ' 列');
+    } else {
+      alert('❌ 上传失败: ' + (data.error || '未知错误'));
+    }
+    loadDatasets();
+  } catch(err) { alert('上传失败: ' + err.message); }
+  e.target.value = '';
+});
+
+async function deleteDs(name) {
+  if (!confirm('确认删除数据集「' + name + '」？\n将同时删除 DuckDB 表和本地文件。')) return;
+  try {
+    const r = await fetch('/api/datasets/' + encodeURIComponent(name), {
+      method: 'DELETE', headers: authHeaders()
+    });
+    const data = await r.json();
+    if (data.success) { loadDatasets(); }
+    else { alert(data.error || '删除失败'); }
+  } catch(e) { alert('删除失败: ' + e.message); }
+}
+
+loadDatasets();
 
 // ── 初始化 ──
 loadSessions();
