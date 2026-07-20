@@ -337,7 +337,21 @@ body { font-family: var(--font-sans);
 .no-sessions { padding: var(--sp-5) var(--sp-4); color: var(--sb-text-3); font-size: 13px; text-align: center; }
 
 /* ── 主内容区 ── */
-.main-area { flex: 1; display: flex; flex-direction: column; height: 100vh; }
+.main-area { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
+.scroll-bottom-btn {
+  position: absolute; right: var(--sp-6); bottom: 90px;
+  width: 40px; height: 40px; border-radius: var(--r-pill);
+  background: var(--surface); color: var(--accent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  font-size: 18px; cursor: pointer;
+  opacity: 0; visibility: hidden;
+  transform: translateY(8px);
+  transition: opacity var(--t-med), transform var(--t-med), visibility var(--t-med);
+  z-index: 10;
+}
+.scroll-bottom-btn.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.scroll-bottom-btn:hover { background: var(--accent); color: #fff; }
 .chat-container { flex: 1; overflow-y: auto; padding: var(--sp-5) var(--sp-6); display: flex;
                   flex-direction: column; gap: var(--sp-4); max-width: 900px;
                   margin: 0 auto; width: 100%; position: relative; }
@@ -375,6 +389,13 @@ body { font-family: var(--font-sans);
                      color: var(--text-muted); margin: var(--sp-2) 0; }
 .bubble hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-3) 0; }
 .bubble img { max-width: 100%; border-radius: var(--r-md); }
+.msg-meta {
+  display: flex; align-items: center; gap: var(--sp-1);
+  font-size: 10px; color: var(--text-muted);
+  margin-top: var(--sp-1);
+  font-variant-numeric: tabular-nums;
+}
+.message.user .msg-meta { justify-content: flex-end; }
 .input-area { padding: var(--sp-4) var(--sp-6); background: var(--surface);
               border-top: 1px solid var(--border);
               box-shadow: 0 -2px 12px rgba(0,0,0,.04); }
@@ -515,6 +536,47 @@ body { font-family: var(--font-sans);
 .bubble pre:hover .copy-btn { opacity: 1; }
 .copy-btn:hover { background: rgba(255,255,255,.18); }
 .copy-btn.copied { background: var(--success); border-color: var(--success); }
+.toast-container {
+  position: fixed; top: var(--sp-4); right: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  z-index: 100; pointer-events: none;
+}
+.toast {
+  min-width: 240px; padding: var(--sp-3) var(--sp-4);
+  background: var(--surface); color: var(--text);
+  border-radius: var(--r-md); border-left: 4px solid var(--accent);
+  box-shadow: var(--shadow-lg); pointer-events: auto;
+  font-size: 13px; animation: toastIn .3s ease;
+}
+.toast.success { border-left-color: var(--success); }
+.toast.error { border-left-color: var(--danger); }
+.toast.removing { animation: toastOut .3s ease forwards; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toastOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(40px); } }
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  display: none; align-items: center; justify-content: center;
+  z-index: 200;
+}
+.modal-overlay.show { display: flex; }
+.modal-card {
+  background: var(--surface); border-radius: var(--r-lg);
+  padding: var(--sp-5); max-width: 360px; width: 90%;
+  box-shadow: var(--shadow-lg); animation: modalIn .2s ease;
+}
+@keyframes modalIn { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: scale(1); } }
+.modal-msg { font-size: 14px; color: var(--text); margin-bottom: var(--sp-4); line-height: 1.6; }
+.modal-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
+.modal-btn {
+  padding: var(--sp-2) var(--sp-4); border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-size: 13px; cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.modal-btn:hover { background: var(--surface-2); }
+.modal-btn.ok { background: var(--accent); color: #fff; border-color: var(--accent); }
+.modal-btn.ok:hover { background: var(--accent-hover); }
 </style>
 </head>
 <body>
@@ -577,6 +639,7 @@ body { font-family: var(--font-sans);
       请直接描述你的需求，我会自动选择合适的分析方式。</p>
     </div>
   </div>
+  <button class="scroll-bottom-btn" id="scrollBottomBtn" onclick="scrollToBottom()" aria-label="滚动到底部" title="滚动到底部">↓</button>
   <div class="input-area">
     <div class="input-row">
       <input type="text" id="userInput" placeholder="请输入你的问题..."
@@ -743,7 +806,7 @@ async function streamChat(text, bubble) {
   let statusEl = null; // 思考状态 DOM 元素
 
   // 查找当前消息的 status 行
-  const msgDiv = bubble.parentElement;
+  const msgDiv = bubble.closest('.message');
   if (msgDiv) {
     statusEl = msgDiv.querySelector('.chat-status');
     if (statusEl) {
@@ -845,15 +908,17 @@ async function streamChat(text, bubble) {
 }
 
 function appendMessage(role, text) {
-  const container = document.getElementById('chatContainer');
-  const div = document.createElement('div');
-  div.className = `message ${role}`;
-  const statusDiv = role === 'assistant'
+  var container = document.getElementById('chatContainer');
+  var div = document.createElement('div');
+  div.className = 'message ' + role;
+  var statusDiv = role === 'assistant'
     ? '<div class="chat-status" style="display:none"><span class="spinner"></span><span class="status-text"></span></div>'
     : '';
-  div.innerHTML = `
-    <div class="avatar">${role === 'user' ? '👤' : '🤖'}</div>
-    <div class="bubble">${escapeHtml(text)}</div>${statusDiv}`;
+  var now = new Date();
+  var ts = now.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+  div.innerHTML = '<div class="avatar">' + (role === 'user' ? '👤' : '🤖') + '</div>'
+    + '<div class="bubble-wrap"><div class="bubble">' + escapeHtml(text) + '</div>'
+    + '<div class="msg-meta">' + ts + '</div></div>' + statusDiv;
   container.appendChild(div);
   return div;
 }
@@ -914,9 +979,16 @@ function copyCode(btn) {
 }
 
 function scrollToBottom() {
-  const container = document.getElementById('chatContainer');
-  setTimeout(() => { container.scrollTop = container.scrollHeight; }, 50);
+  var container = document.getElementById('chatContainer');
+  setTimeout(function() { container.scrollTop = container.scrollHeight; }, 50);
 }
+
+var _chatContainer = document.getElementById('chatContainer');
+var _scrollBottomBtn = document.getElementById('scrollBottomBtn');
+_chatContainer.addEventListener('scroll', function() {
+  var atBottom = _chatContainer.scrollHeight - _chatContainer.scrollTop - _chatContainer.clientHeight < 80;
+  _scrollBottomBtn.classList.toggle('show', !atBottom);
+});
 
 // ── 知识库管理（方案C） ──
 function fmtSize(bytes) {
@@ -978,39 +1050,39 @@ document.getElementById('kbFileInput').addEventListener('change', async (e) => {
     });
     const data = await r.json();
     const ok = (data.results || []).filter(x => x.success).length;
-    alert('上传完成：成功 ' + ok + ' / ' + files.length + ' 个文件');
+    showToast('上传完成：成功 ' + ok + ' / ' + files.length + ' 个文件', 'success');
     loadKbFiles();
-  } catch(err) { alert('上传失败: ' + err.message); }
+  } catch(err) { showToast('上传失败: ' + err.message, 'error', 4000); }
   e.target.value = '';
 });
 
 async function deleteKbFile(filename) {
-  if (!confirm('确认删除知识库文件及其分片？\n' + filename)) return;
+  if (!(await showConfirm('确认删除知识库文件及其分片？\n' + filename))) return;
   try {
     const r = await fetch('/api/knowledge/files/' + encodeURIComponent(filename), {
       method: 'DELETE', headers: authHeaders()
     });
     const data = await r.json();
     if (data.success !== undefined && !data.success) {
-      alert(data.error || '删除失败'); return;
+      showToast(data.error || '删除失败', 'error', 4000); return;
     }
     loadKbFiles();
-  } catch(e) { alert('删除失败: ' + e.message); }
+  } catch(e) { showToast('删除失败: ' + e.message, 'error', 4000); }
 }
 
 async function kbReindex() {
-  if (!confirm('全量重建将清空当前向量库并重新入库所有文件，耗时较长。确认继续？')) return;
+  if (!(await showConfirm('全量重建将清空当前向量库并重新入库所有文件，耗时较长。确认继续？'))) return;
   try {
     const r = await fetch('/api/knowledge/reindex', {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({confirm: true})
     });
     const data = await r.json();
-    if (data.error) { alert(data.error); return; }
-    alert('重建完成：重载 ' + (data.reloaded_files || 0) + ' 个文件，共 ' +
-          ((data.stats && data.stats.total_chunks) || 0) + ' 个分片');
+    if (data.error) { showToast(data.error, 'error', 4000); return; }
+    showToast('重建完成：重载 ' + (data.reloaded_files || 0) + ' 个文件，共 ' +
+          ((data.stats && data.stats.total_chunks) || 0) + ' 个分片', 'success');
     loadKbFiles();
-  } catch(e) { alert('重建失败: ' + e.message); }
+  } catch(e) { showToast('重建失败: ' + e.message, 'error', 4000); }
 }
 
 // ── 数据集管理 ──
@@ -1079,34 +1151,72 @@ document.getElementById('dsFileInput').addEventListener('change', async (e) => {
     });
     const data = await r.json();
     if (data.success) {
-      alert('✅ 已加载数据集「' + data.name + '」，' + data.row_count + ' 行，' + data.columns.length + ' 列');
+      showToast('已加载数据集「' + data.name + '」，' + data.row_count + ' 行，' + data.columns.length + ' 列', 'success');
     } else {
-      alert('❌ 上传失败: ' + (data.error || '未知错误'));
+      showToast('上传失败: ' + (data.error || '未知错误'), 'error', 4000);
     }
     loadDatasets();
-  } catch(err) { alert('上传失败: ' + err.message); }
+  } catch(err) { showToast('上传失败: ' + err.message, 'error', 4000); }
   e.target.value = '';
 });
 
 async function deleteDs(name) {
-  if (!confirm('确认删除数据集「' + name + '」？\n将同时删除 DuckDB 表和本地文件。')) return;
+  if (!(await showConfirm('确认删除数据集「' + name + '」？\n将同时删除 DuckDB 表和本地文件。'))) return;
   try {
     const r = await fetch('/api/datasets/' + encodeURIComponent(name), {
       method: 'DELETE', headers: authHeaders()
     });
     const data = await r.json();
     if (data.success) { loadDatasets(); }
-    else { alert(data.error || '删除失败'); }
-  } catch(e) { alert('删除失败: ' + e.message); }
+    else { showToast(data.error || '删除失败', 'error', 4000); }
+  } catch(e) { showToast('删除失败: ' + e.message, 'error', 4000); }
 }
 
 loadDatasets();
+
+// ── Toast / Modal ──
+function showToast(msg, type, duration) {
+  type = type || 'info';
+  duration = duration || 3000;
+  var container = document.getElementById('toastContainer');
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(function() {
+    toast.classList.add('removing');
+    setTimeout(function() { toast.remove(); }, 300);
+  }, duration);
+}
+
+var _modalResolve = null;
+function showConfirm(msg) {
+  return new Promise(function(resolve) {
+    _modalResolve = resolve;
+    document.getElementById('modalMsg').textContent = msg;
+    document.getElementById('modalOverlay').classList.add('show');
+  });
+}
+function resolveModal(result) {
+  document.getElementById('modalOverlay').classList.remove('show');
+  if (_modalResolve) { _modalResolve(result); _modalResolve = null; }
+}
 
 // ── 初始化 ──
 loadSessions();
 loadKbFiles();
 document.getElementById('userInput').focus();
 </script>
+<div class="toast-container" id="toastContainer"></div>
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal-card">
+    <div class="modal-msg" id="modalMsg"></div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="resolveModal(false)">取消</button>
+      <button class="modal-btn ok" onclick="resolveModal(true)">确认</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>"""
 
