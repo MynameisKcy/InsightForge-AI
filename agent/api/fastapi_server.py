@@ -1562,7 +1562,7 @@ async def list_datasets(request: Request):
         from database.datasources_db import datasources_db
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
-    datasets = datasources_db.list_datasets()
+    datasets = datasources_db.list_datasets(owner_user_id=user_id)
     return JSONResponse({"datasets": datasets, "count": len(datasets)})
 
 
@@ -1604,7 +1604,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
     table_name = safe_name
     counter = 2
-    while datasources_db.get_dataset(table_name):
+    while datasources_db.get_dataset(table_name, owner_user_id=user_id):
         table_name = f"{safe_name}_{counter}"
         counter += 1
 
@@ -1644,7 +1644,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
         except Exception:
             sample_data = []
 
-        # 写入元数据
+        # 写入元数据（带 owner_user_id 实现多用户隔离）
         source_type = "csv" if ext == "csv" else "excel"
         datasources_db.add_dataset(
             name=table_name,
@@ -1653,6 +1653,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
             table_name=table_name,
             schema_json=schema_json,
             row_count=load_result["row_count"],
+            owner_user_id=user_id,
         )
 
         return JSONResponse({
@@ -1685,9 +1686,9 @@ async def delete_dataset(request: Request, name: str):
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
 
-    ds = datasources_db.get_dataset(name)
+    ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
-        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+        return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 删除表
     try:
@@ -1713,8 +1714,8 @@ async def delete_dataset(request: Request, name: str):
         except Exception as e:
             logger.warning(f"Failed to delete file {ds['file_path']}: {e}")
 
-    # 删除元数据
-    datasources_db.delete_dataset(name)
+    # 删除元数据（带归属校验，防越权）
+    datasources_db.delete_dataset(name, owner_user_id=user_id)
     return JSONResponse({"success": True})
 
 
@@ -1730,9 +1731,9 @@ async def get_dataset_schema(request: Request, name: str):
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
 
-    ds = datasources_db.get_dataset(name)
+    ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
-        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+        return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 获取实时 schema
     try:
