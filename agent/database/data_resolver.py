@@ -1,5 +1,6 @@
 """
 Data Resolver: 根据用户提示词从 data/ 目录的 .txt 描述文件中自动匹配合适的数据集。
+支持从 datasources_db 动态读取数据集列表，旧 DATASET_MAP 作为 fallback。
 """
 
 import os
@@ -14,7 +15,7 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
-# 预定义的数据集描述文件 → 数据文件映射
+# 预定义的数据集描述文件 → 数据文件映射（fallback）
 DATASET_MAP = {
     "About_dataset_train.txt": {
         "csv": "data/train.csv",
@@ -36,18 +37,100 @@ DATASET_MAP = {
 DEFAULT_DATASET = "About_dataset_train.txt"
 
 
+def _import_datasources_db():
+    """尝试导入 datasources_db 单例，失败返回 None。"""
+    try:
+        from database.datasources_db import datasources_db
+        return datasources_db
+    except ModuleNotFoundError:
+        try:
+            from agent.database.datasources_db import datasources_db
+            return datasources_db
+        except ImportError:
+            return None
+
+
 class DataResolver:
     """根据用户查询自动选择最合适的数据集。"""
+
+    @staticmethod
+    def _load_dynamic_datasets() -> list[dict]:
+        """从 datasources_db 动态读取数据集列表。
+
+        Returns:
+            list[dict]: 每个元素包含 name, file_path, table_name, description 等字段。
+            如果 datasources_db 不可用或无数据集，返回空列表。
+        """
+        db = _import_datasources_db()
+        if db is None:
+            logger.debug("DataResolver: datasources_db not available, skipping dynamic load")
+            return []
+        try:
+            datasets = db.list_datasets()
+            if datasets:
+                logger.info(f"DataResolver: loaded {len(datasets)} dynamic dataset(s) from datasources_db")
+            return datasets
+        except Exception as e:
+            logger.warning(f"DataResolver: failed to load dynamic datasets: {e}")
+            return []
 
     @staticmethod
     def resolve(query: str) -> dict:
         """
         根据用户查询返回最匹配的数据集配置。
-        return: {"csv_path": str, "name": str, "description": str, "matched_by": str}
+
+        优先从 datasources_db 动态匹配；若无动态数据集则 fallback 到 DATASET_MAP 关键词打分。
+
+        return: {
+            "csv_path": str,
+            "name": str,
+            "description": str,
+            "matched_by": str,
+            "desc_file": str,
+            "table_names": list[str],
+            "datasets": list[dict],
+        }
         """
         query_lower = query.lower()
 
-        # 1. 关键词匹配打分
+        # --- 1. 尝试动态数据集 ---
+        dynamic_datasets = DataResolver._load_dynamic_datasets()
+        if dynamic_datasets:
+            # 关键词匹配：在 name 和 description 中搜索
+            matched = []
+            for ds in dynamic_datasets:
+                name_lower = (ds.get("name") or "").lower()
+                desc_lower = (ds.get("description") or "").lower()
+                if query_lower and (name_lower in query_lower or any(
+                        w in name_lower or w in desc_lower
+                        for w in query_lower.split() if len(w) > 1)):
+                    matched.append(ds)
+
+            # 如果没有关键词匹配，返回所有动态数据集
+            if not matched:
+                matched = dynamic_datasets
+                matched_by = "dynamic_all"
+            else:
+                matched_by = "dynamic_keyword_match"
+
+            # 取第一个匹配的数据集作为主结果
+            primary = matched[0]
+            csv_path = get_abs_path(primary.get("file_path", ""))
+            table_names = [ds.get("table_name", "transactions") for ds in matched]
+
+            logger.info(f"DataResolver: matched '{primary['name']}' for query "
+                        f"(method={matched_by}, dynamic_count={len(matched)})")
+            return {
+                "csv_path": csv_path,
+                "name": primary["name"],
+                "description": primary.get("description", ""),
+                "matched_by": matched_by,
+                "desc_file": "",
+                "table_names": table_names,
+                "datasets": matched,
+            }
+
+        # --- 2. Fallback: 旧 DATASET_MAP 关键词打分 ---
         scores = {}
         for desc_file, info in DATASET_MAP.items():
             score = 0
@@ -56,11 +139,11 @@ class DataResolver:
                     score += 1
             scores[desc_file] = score
 
-        # 2. 找最高分
+        # 找最高分
         best = max(scores, key=scores.get)
         best_score = scores[best]
 
-        # 3. 如果最高分为 0（无关键词匹配），返回默认
+        # 如果最高分为 0（无关键词匹配），返回默认
         if best_score == 0:
             best = DEFAULT_DATASET
             matched_by = "default"
@@ -92,19 +175,41 @@ class DataResolver:
             "description": info.get("description", ""),
             "matched_by": matched_by,
             "desc_file": best,
+            "table_names": ["transactions"],
+            "datasets": [],
         }
 
     @staticmethod
     def get_all_datasets() -> list[dict]:
-        """返回所有可用数据集的列表。"""
+        """返回所有可用数据集的列表（动态 + 静态合并）。"""
         results = []
+
+        # 动态数据集
+        dynamic_datasets = DataResolver._load_dynamic_datasets()
+        for ds in dynamic_datasets:
+            results.append({
+                "name": ds.get("name", ""),
+                "csv_path": get_abs_path(ds.get("file_path", "")),
+                "description": ds.get("description", ""),
+                "desc_file": "",
+                "table_name": ds.get("table_name", ""),
+                "source": "dynamic",
+            })
+
+        # 静态数据集（去重：如果 name 已在动态列表中则跳过）
+        dynamic_names = {ds.get("name") for ds in dynamic_datasets}
         for desc_file, info in DATASET_MAP.items():
+            if info["name"] in dynamic_names:
+                continue
             results.append({
                 "name": info["name"],
                 "csv_path": get_abs_path(info["csv"]),
                 "description": info.get("description", ""),
                 "desc_file": desc_file,
+                "table_name": "transactions",
+                "source": "static",
             })
+
         return results
 
     @staticmethod
