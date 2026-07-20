@@ -1,0 +1,25 @@
+# datasources.yml — 管理员预配置的数据库连接
+# 密码通过 password_env 字段从 .env 读取，不硬编码
+# 如果 databases 为空列表或不配置，则不连接任何外部数据库
+
+databases: []
+# 示例配置（取消注释并修改后使用）:
+# - name: local_mysql
+#   type: mysql
+#   host: 127.0.0.1
+#   port: 3306
+#   database: my_business
+#   user: root
+#   password_env: MYSQL_PASSWORD
+#   tables: []  # 空列表 = 暴露所有表；指定表名则只暴露列出的表
+#
+# - name: local_postgres
+#   type: postgres
+#   host: 127.0.0.1
+#   port: 5432
+#   database: analytics
+#   user: postgres
+#   password_env: PG_PASSWORD
+#   tables:
+#     - orders
+#     - customers
