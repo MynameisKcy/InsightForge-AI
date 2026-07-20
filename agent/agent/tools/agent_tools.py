@@ -111,9 +111,9 @@ def run_full_analysis(query: str) -> str:
         return f"数据分析调用失败: {str(e)}"
 
 
-@tool(description="快速查询数据集概况，返回数据集的表结构、行数、关键统计信息，无需参数")
+@tool(description="快速查询数据集概况，返回所有已加载数据集的表结构、行数、关键统计信息，无需参数")
 def get_data_overview() -> str:
-    """返回数据集的概况信息，自动适配当前数据集的实际列名。"""
+    """返回所有数据集的概况信息，自动适配当前数据集的实际列名。"""
     try:
         from database.duckdb_manager import init_duckdb
         from utils.request_context import get_user_id
@@ -123,115 +123,29 @@ def get_data_overview() -> str:
 
     try:
         db = init_duckdb(user_id=get_user_id())
-        row_count = db.query_df("SELECT COUNT(*) AS cnt FROM transactions").iloc[0, 0]
+        tables = db.get_table_names()
 
-        # 获取实际列名
-        cols_info = db.execute("DESCRIBE transactions").fetchall()
-        col_names = [c[0].strip().lower().replace('"', '') for c in cols_info]
-        col_types = {c[0].strip().lower().replace('"', ''): c[1] for c in cols_info}
-        # 保留原始带引号的列名用于 SQL
-        orig_cols = [c[0] for c in cols_info]
+        if not tables:
+            return "当前没有加载任何数据集。请上传 CSV/Excel 文件开始分析。"
 
-        parts = [
-            f"数据集概况:",
-            f"- 总记录数: {row_count} 条",
-            f"- 字段数: {len(cols_info)} 个",
-        ]
-
-        # 动态发现各类列名
-        def _find_col(patterns: list[str], prefer_numeric: bool = False) -> str | None:
-            """根据关键词模式查找列名，返回原始列名（可用于 SQL 引用）。"""
-            for pat in patterns:
-                for orig, lower in zip(orig_cols, col_names):
-                    if pat in lower:
-                        return orig
-            # 如果没找到，尝试返回第一个数值/文本列
-            if prefer_numeric:
-                for orig, lower, ctype in zip(orig_cols, col_names, [c[1] for c in cols_info]):
-                    if any(t in str(ctype).lower() for t in ('int', 'float', 'double', 'decimal', 'numeric')):
-                        return orig
-            return None
-
-        def _quote(col: str | None) -> str:
-            if col is None:
-                return None
-            return f'"{col}"' if ' ' in col or '-' in col or col[0].isdigit() else col
-
-        # 查找销售/金额列
-        amount_col = _find_col(['sales', 'revenue', 'amount', 'price', 'profit', 'total', 'spend'], prefer_numeric=True)
-        qty_col = _find_col(['quantity', 'qty', 'count', 'units', 'volume'], prefer_numeric=True)
-        category_col = _find_col(['category', 'sub-category', 'sub_category', 'segment', 'department', 'product name', 'product_name', 'product id', 'product_id'])
-        date_col = _find_col(['date', 'order date', 'order_date', 'month', 'year', 'ship date', 'ship_date'])
-        region_col = _find_col(['region', 'state', 'city', 'country', 'location', 'province'])
-        customer_col = _find_col(['customer', 'customer id', 'customer_id', 'customer name', 'customer_name'])
-
-        # 添加列名说明
-        col_desc_parts = []
-        if amount_col:
-            col_desc_parts.append(f"销售额/金额: {amount_col}")
-        if qty_col:
-            col_desc_parts.append(f"数量: {qty_col}")
-        if category_col:
-            col_desc_parts.append(f"类别/产品: {category_col}")
-        if date_col:
-            col_desc_parts.append(f"日期: {date_col}")
-        if region_col:
-            col_desc_parts.append(f"地区: {region_col}")
-        if customer_col:
-            col_desc_parts.append(f"客户: {customer_col}")
-        if col_desc_parts:
-            parts.append(f"- 关键字段: {'; '.join(col_desc_parts)}")
-
-        # 全部列名列表
-        parts.append(f"- 全部列名: {', '.join(orig_cols)}")
-
-        # 按类别/区域统计（如果有相关列）
-        if category_col and row_count > 0:
+        all_parts = []
+        for table_name in tables:
             try:
-                qcat = _quote(category_col)
-                cat_sql = f'SELECT {qcat}, COUNT(*) AS cnt FROM transactions GROUP BY {qcat} ORDER BY cnt DESC LIMIT 5'
-                cat_stats = db.query_df(cat_sql)
-                parts.append(f"\n按 {category_col} 分布 (TOP 5):")
-                for _, row in cat_stats.iterrows():
-                    parts.append(f"  - {row[category_col]}: {row['cnt']} 条")
-            except Exception:
-                pass
+                row_count = db.query_df(f"SELECT COUNT(*) AS cnt FROM {table_name}").iloc[0, 0]
+                cols_info = db.execute(f"DESCRIBE {table_name}").fetchall()
+                orig_cols = [c[0] for c in cols_info]
 
-        # 如果有区域列
-        if region_col and region_col != category_col and row_count > 0:
-            try:
-                qreg = _quote(region_col)
-                reg_sql = f'SELECT {qreg}, COUNT(*) AS cnt FROM transactions GROUP BY {qreg} ORDER BY cnt DESC LIMIT 5'
-                reg_stats = db.query_df(reg_sql)
-                # 计算唯一值数量
-                unique_regions = db.query_df(f'SELECT COUNT(DISTINCT {qreg}) AS cnt FROM transactions').iloc[0, 0]
-                parts.append(f"\n地区分布 (共 {unique_regions} 个, TOP 5):")
-                for _, row in reg_stats.iterrows():
-                    parts.append(f"  - {row[region_col]}: {row['cnt']} 条")
-            except Exception:
-                pass
+                parts = [
+                    f"📊 数据集: {table_name}",
+                    f"- 总记录数: {row_count} 条",
+                    f"- 字段数: {len(cols_info)} 个",
+                    f"- 全部列名: {', '.join(orig_cols)}",
+                ]
+                all_parts.append("\n".join(parts))
+            except Exception as e:
+                all_parts.append(f"📊 数据集: {table_name} (读取失败: {e})")
 
-        # 如果有金额列，计算总金额
-        if amount_col and row_count > 0:
-            try:
-                qamt = _quote(amount_col)
-                total_amt = db.query_df(f"SELECT ROUND(SUM({qamt}), 2) AS total FROM transactions").iloc[0, 0]
-                parts.insert(2, f"- 总{amount_col}: {total_amt}")
-            except Exception:
-                pass
-
-        # 如果有日期列，计算日期范围
-        if date_col and row_count > 0:
-            try:
-                qdate = _quote(date_col)
-                date_range = db.query_df(f"SELECT MIN({qdate}) AS min_d, MAX({qdate}) AS max_d FROM transactions")
-                min_d = date_range.iloc[0, 0]
-                max_d = date_range.iloc[0, 1]
-                parts.insert(2, f"- 日期范围: {min_d} 至 {max_d}")
-            except Exception:
-                pass
-
-        return "\n".join(parts)
+        return "\n\n".join(all_parts)
     except Exception as e:
         return f"数据查询失败: {str(e)}"
 
