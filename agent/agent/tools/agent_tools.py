@@ -227,13 +227,18 @@ def get_chart_insights(query: str) -> str:
 
 @tool(description="查询持久化的客户数据概况。返回按订单数排名的 TOP 客户列表，包含客户ID、名称、所在城市、区域、部门、订单数等信息。参数 top_n 为返回数量，默认 10")
 def get_customer_overview_tool(top_n: int = 10) -> str:
-    """查询已持久化的客户数据，返回 TOP N 客户概况。"""
+    """查询已持久化的客户数据，返回 TOP N 客户概况（仅当前用户）。"""
     try:
         from database.duckdb_manager import get_customer_overview
     except ModuleNotFoundError:
         from agent.database.duckdb_manager import get_customer_overview
+    try:
+        from utils.request_context import get_user_id
+        uid = get_user_id()
+    except Exception:
+        uid = "default"
 
-    customers = get_customer_overview(top_n)
+    customers = get_customer_overview(uid, top_n)
     if not customers:
         return "暂无持久化的客户数据。请先加载包含客户信息的数据集（如 train.csv），系统会自动提取并存储客户数据。"
 
@@ -255,13 +260,18 @@ def get_customer_overview_tool(top_n: int = 10) -> str:
 
 @tool(description="获取持久化客户数据的统计信息。返回总客户数、按城市分布、按部门分布等汇总统计，无需参数")
 def get_customer_stats_tool() -> str:
-    """获取客户数据统计汇总。"""
+    """获取客户数据统计汇总（仅当前用户）。"""
     try:
         from database.duckdb_manager import get_customer_count
     except ModuleNotFoundError:
         from agent.database.duckdb_manager import get_customer_count
+    try:
+        from utils.request_context import get_user_id
+        uid = get_user_id()
+    except Exception:
+        uid = "default"
 
-    stats = get_customer_count()
+    stats = get_customer_count(uid)
     total = stats.get("total_customers", 0)
     if total == 0:
         return "暂无持久化的客户数据。请先加载包含客户信息的数据集。"

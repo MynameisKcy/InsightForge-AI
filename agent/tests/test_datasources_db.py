@@ -84,6 +84,41 @@ class TestDatasourcesDB(unittest.TestCase):
         self.assertIn("table_one", names)
         self.assertIn("erp_orders", names)
 
+    # ── 多用户隔离：A 用户的数据集对 B 用户不可见 ──
+    def test_isolation_list_by_owner(self):
+        self.db.add_dataset("a_ds", "csv", "/a.csv", "a_table", "[]", 10,
+                            owner_user_id="userA")
+        self.db.add_dataset("b_ds", "csv", "/b.csv", "b_table", "[]", 20,
+                            owner_user_id="userB")
+        a_list = self.db.list_datasets(owner_user_id="userA")
+        b_list = self.db.list_datasets(owner_user_id="userB")
+        a_names = {d["name"] for d in a_list}
+        b_names = {d["name"] for d in b_list}
+        self.assertEqual(a_names, {"a_ds"})
+        self.assertEqual(b_names, {"b_ds"})
+
+    def test_isolation_get_by_owner(self):
+        self.db.add_dataset("shared", "csv", "/a.csv", "a_table", "[]", 10,
+                            owner_user_id="userA")
+        # B 用户查不到 A 的数据集
+        self.assertIsNone(self.db.get_dataset("shared", owner_user_id="userB"))
+        # A 用户能查到
+        ds = self.db.get_dataset("shared", owner_user_id="userA")
+        self.assertIsNotNone(ds)
+        self.assertEqual(ds["owner_user_id"], "userA")
+
+    def test_isolation_delete_by_owner(self):
+        self.db.add_dataset("shared", "csv", "/a.csv", "a_table", "[]", 10,
+                            owner_user_id="userA")
+        # B 用户尝试删除 A 的数据集 —— 应失败（防越权）
+        result_b = self.db.delete_dataset("shared", owner_user_id="userB")
+        self.assertFalse(result_b["success"])
+        # 数据集仍存在（A 还能查到）
+        self.assertIsNotNone(self.db.get_dataset("shared", owner_user_id="userA"))
+        # A 用户删除自己的数据集 —— 成功
+        result_a = self.db.delete_dataset("shared", owner_user_id="userA")
+        self.assertTrue(result_a["success"])
+
 
 if __name__ == "__main__":
     unittest.main()

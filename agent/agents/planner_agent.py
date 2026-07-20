@@ -128,7 +128,7 @@ class PlannerAgent(BaseAgent):
         session_id = input_data.get("session_id", "")
 
         try:
-            resolved = DataResolver.resolve(input_data.get("query", ""))
+            resolved = DataResolver.resolve(input_data.get("query", ""), user_id=user_id)
             csv_path = resolved.get("csv_path", "")
             dataset_name = resolved.get("name", "Unknown Dataset")
             dataset_desc = resolved.get("description", "")

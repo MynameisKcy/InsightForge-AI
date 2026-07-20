@@ -8,6 +8,8 @@ import sqlite3
 import sys
 import duckdb
 import pandas as pd
+import sqlglot
+from sqlglot import exp
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -29,48 +31,109 @@ def safe_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-# 查询通道允许的 SQL 首关键词（大小写不敏感）。管理通道（_load_csv/reload_csv）不经此校验。
-_READ_ONLY_ALLOWED_PREFIXES = {
-    "SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA", "SUMMARIZE", "LIMIT",
+# 查询通道允许的 SQL 语句类型（AST 节点 key）。仅允许只读 SELECT 派生类型，
+# 以及只读 schema 探查语句（SHOW/DESCRIBE/SUMMARIZE）。
+# 注意：EXPLAIN/LOAD/CALL/VACUUM 在 DuckDB 方言下会回退为 'command' 类型，
+# 无法可靠校验内部，故 'command' 不在白名单——这些语句会被拒绝。
+# 管理通道（_load_csv/reload_csv）不经此校验。
+_READ_ONLY_STMT_TYPES = {
+    "select", "union", "intersect", "except", "subquery",
+    "show", "describe", "summarize",
 }
-# 显式拒绝的写操作关键词（防止通过注释/换行绕过首关键词检查，做二次扫描）。
-_FORBIDDEN_KEYWORDS = {
-    "DROP", "CREATE", "INSERT", "UPDATE", "DELETE", "ATTACH", "DETACH",
-    "COPY", "EXPORT", "ALTER", "TRUNCATE", "REPLACE", "MERGE", "VACUUM",
-    "CALL", "IMPORT", "INSTALL", "LOAD", "USE", "SET",
+# 显式拒绝的语句类型 key（DDL/DML/副作用类），双保险：即便上层放行也会拦下。
+_FORBIDDEN_STMT_TYPES = {
+    "create", "insert", "update", "delete", "drop", "alter", "truncate",
+    "copy", "attach", "detach", "call", "set", "pragma", "vacuum",
+    "merge", "replace", "install", "load",
+}
+# 禁用的函数名（规范化：去下划线大写）：任意文件读 / 网络访问 / 文件写入。
+# 这些函数即使在 SELECT 内也会泄露文件内容或触发 SSRF/写盘，故全量禁止。
+# 同时覆盖 sqlglot 的两种解析形态：Anonymous（read_csv_auto）与内置类（ReadCSV）。
+_FORBIDDEN_FUNCTIONS = {
+    # 文件读取
+    "READCSVAUTO", "READCSV", "READJSON", "READJSONAUTO",
+    "READPARQUET", "READBLOB", "READTEXT", "READTEXTAUTO",
+    "READFWF", "READFWFAUTO",
+    # 网络/远程
+    "HTTPFS", "GLOB", "GLOBRECURSIVE",
+    # DuckDB 扩展加载（不应在查询通道出现）
+    "INSTALL", "LOAD",
+    # 写文件（COPY/EXPORT 已在 stmt 层拦截，这里再防函数形态）
+    "EXPORTDATABASE", "EXPORTPARQUET", "EXPORTCSV",
+    # 执行外部
+    "SYSTEM", "SHELL",
 }
 # 合法表名：字母/下划线开头，仅含字母数字下划线。
 _TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _assert_read_only(sql: str) -> None:
-    """查询通道白名单校验：仅允许只读类语句，拦截所有写/DDL/危险操作。
+def _normalize_func_name(name: str) -> str:
+    """规范化函数名：大写并去掉下划线，使 read_csv_auto / READCSV / ReadParquet
+    等不同 sqlglot 解析形态（Anonymous vs 内置类）归一到同一可比较串。"""
+    return (name or "").upper().replace("_", "")
 
-    管理通道（_load_csv 的 CREATE TABLE、reload_csv 的 DROP TABLE）通过
-    self.conn.execute 直调，不经此方法，保持「管理通道 vs 查询通道」边界。
+
+def _collect_func_names(stmt: exp.Expression) -> set[str]:
+    """收集 SQL AST 中出现的所有函数名（含匿名函数如 read_csv_auto），
+
+    返回规范化后的集合（去掉下划线的大写名），如 {'READCSVAUTO', 'COUNT', 'SUM'}。
+    sqlglot 对 read_csv_auto/read_json 解析为 exp.Anonymous（.name 带 _），
+    对 read_csv/read_parquet 解析为内置类 ReadCSV/ReadParquet（类名无 _），
+    故统一去下划线后比较。
+    """
+    names: set[str] = set()
+    for f in stmt.find_all(exp.Func):
+        if isinstance(f, exp.Anonymous):
+            names.add(_normalize_func_name(f.name))
+        else:
+            names.add(_normalize_func_name(type(f).__name__))
+    return names
+
+
+def _assert_read_only(sql: str) -> None:
+    """查询通道 AST 校验：仅允许只读 SELECT 派生语句，拦截写/DDL/文件/网络函数与多语句。
+
+    使用 sqlglot 将 SQL 解析为 DuckDB 方言 AST，而非字符串关键词扫描，
+    杜绝注释/换行/字符串拼接/函数构造等绕过手段。管理通道（_load_csv 的
+    CREATE TABLE、reload_csv 的 DROP TABLE）通过 self.conn.execute 直调，
+    不经此方法，保持「管理通道 vs 查询通道」边界。
     """
     if not sql or not sql.strip():
         raise SecurityError("空 SQL 语句")
 
-    stripped = sql.strip()
-    # 去除前导注释和换行，取首个真实 SQL 关键词
-    first_word = stripped.lstrip("/-* \t\n;").split(None, 1)[0] if stripped else ""
-    first_word_upper = first_word.upper().rstrip("(")
+    try:
+        stmts = sqlglot.parse(sql, read="duckdb")
+    except Exception as e:  # ParseError 等
+        raise SecurityError(f"SQL 解析失败，拒绝执行: {type(e).__name__}: {e}")
 
-    if first_word_upper not in _READ_ONLY_ALLOWED_PREFIXES:
+    # 过滤掉纯空语句（仅注释等），保留真实语句
+    real_stmts = [s for s in stmts if s is not None]
+    if not real_stmts:
+        raise SecurityError("SQL 无有效语句")
+    if len(real_stmts) > 1:
+        # 多语句（如 `SELECT 1; DROP TABLE x`）会解析为多条 AST，一律拒绝，防分号注入
         raise SecurityError(
-            f"只读沙箱禁止执行以 '{first_word_upper}' 开头的语句（仅允许 "
-            f"{sorted(_READ_ONLY_ALLOWED_PREFIXES)}）"
+            f"只读沙箱禁止多语句执行（检测到 {len(real_stmts)} 条语句）"
         )
 
-    # 二次扫描：即便首关键词合法，也禁止任何写/DDL 关键词出现（防 /* */ 换行绕过）
-    # 用 word boundary 避免误伤列名（如 "updated_at"）
-    tokens = re.findall(r"[A-Za-z_]+", stripped)
-    for tok in tokens:
-        if tok.upper() in _FORBIDDEN_KEYWORDS:
-            raise SecurityError(
-                f"只读沙箱禁止包含写操作关键词 '{tok.upper()}' 的语句"
-            )
+    stmt = real_stmts[0]
+    stmt_key = stmt.key.lower()
+
+    # 1) 语句类型白名单
+    if stmt_key in _FORBIDDEN_STMT_TYPES:
+        raise SecurityError(f"只读沙箱禁止执行 '{stmt_key.upper()}' 语句")
+    if stmt_key not in _READ_ONLY_STMT_TYPES:
+        raise SecurityError(
+            f"只读沙箱禁止以 '{stmt_key.upper()}' 开头的语句（仅允许只读 SELECT 派生）"
+        )
+
+    # 2) 函数级黑名单：即便语句是 SELECT，也禁止任何文件/网络/写盘函数
+    func_names = _collect_func_names(stmt)
+    bad_funcs = func_names & _FORBIDDEN_FUNCTIONS
+    if bad_funcs:
+        raise SecurityError(
+            f"只读沙箱禁止调用文件/网络/写盘函数: {sorted(bad_funcs)}"
+        )
 
 
 def _validate_table_name(name: str) -> str:
@@ -215,7 +278,6 @@ class DuckDBManager:
             if df.empty:
                 return
 
-            # 持久化到 SQLite
             os.makedirs(os.path.dirname(_CUSTOMER_DB_PATH), exist_ok=True)
             conn = sqlite3.connect(_CUSTOMER_DB_PATH, timeout=30)
             # WAL 模式提升并发写性能，防 database is locked
@@ -225,17 +287,27 @@ class DuckDBManager:
                 pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS customer_profiles (
-                    customer_id TEXT PRIMARY KEY,
+                    customer_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     customer_name TEXT,
                     segment TEXT,
                     city TEXT,
                     region TEXT,
                     order_count INTEGER DEFAULT 0,
                     first_seen TEXT NOT NULL,
-                    last_seen TEXT NOT NULL
+                    last_seen TEXT NOT NULL,
+                    PRIMARY KEY (customer_id, user_id)
                 )
             """)
+            # 迁移：旧表无 user_id 列时补列（主键改造较复杂，对存量数据默认归属到 default 用户）
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(customer_profiles)").fetchall()}
+            if "user_id" not in cols:
+                conn.execute(
+                    "ALTER TABLE customer_profiles ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
+                )
+                logger.info("Migrated customer_profiles: added user_id column (legacy rows → 'default')")
             now = pd.Timestamp.now().isoformat()
+            uid = self.user_id or "default"
             for _, row in df.iterrows():
                 cid = str(row["customer_id"])
                 vals = {
@@ -246,20 +318,20 @@ class DuckDBManager:
                     "order_count": int(row.get("order_count", 0)),
                 }
                 conn.execute("""
-                    INSERT INTO customer_profiles (customer_id, customer_name, segment, city, region, order_count, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(customer_id) DO UPDATE SET
+                    INSERT INTO customer_profiles (customer_id, user_id, customer_name, segment, city, region, order_count, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(customer_id, user_id) DO UPDATE SET
                         customer_name = excluded.customer_name,
                         segment = excluded.segment,
                         city = excluded.city,
                         region = excluded.region,
                         order_count = excluded.order_count,
                         last_seen = excluded.last_seen
-                """, (cid, vals["customer_name"], vals["segment"], vals["city"], vals["region"],
+                """, (cid, uid, vals["customer_name"], vals["segment"], vals["city"], vals["region"],
                       vals["order_count"], now, now))
             conn.commit()
             conn.close()
-            logger.info(f"Persisted {len(df)} unique customers from {self.table_name}")
+            logger.info(f"Persisted {len(df)} unique customers from {self.table_name} (user={uid})")
         except Exception as e:
             logger.warning(f"Customer extraction skipped (non-critical): {e}")
 
@@ -393,11 +465,11 @@ class DuckDBManager:
         if not tables:
             return "No tables found."
 
-        # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}
+        # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}（仅本用户）
         meta_map: dict[str, dict] = {}
         try:
             from database.datasources_db import datasources_db
-            for ds in datasources_db.list_datasets():
+            for ds in datasources_db.list_datasets(owner_user_id=self.user_id):
                 meta_map[ds["table_name"]] = {
                     "source_type": ds.get("source_type", "unknown"),
                     "row_count": ds.get("row_count", 0),
@@ -540,8 +612,10 @@ _duckdb_instances: dict[str, "DuckDBManager"] = {}
 
 
 def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
-    """将 datasources_db 中记录的所有数据集重新加载到 DuckDB 实例中。
+    """将 datasources_db 中记录的、属于该实例用户的数据集重新加载到 DuckDB 实例中。
 
+    按 inst.user_id 过滤，只加载该用户拥有的数据集（跨用户隔离），
+    避免把 B 用户的私有数据集混入 A 的 DuckDB。
     仅加载文件类数据集（csv/excel），跳过外部数据库表（由 register_external_databases 处理）。
     失败不抛异常，仅记录日志。
     """
@@ -552,7 +626,7 @@ def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
         return
 
     try:
-        datasets = datasources_db.list_datasets()
+        datasets = datasources_db.list_datasets(owner_user_id=inst.user_id)
     except Exception as e:
         logger.warning(f"_reload_datasets_into_instance: failed to list datasets: {e}")
         return
@@ -613,8 +687,11 @@ def close_duckdb(user_id: str = "default") -> None:
         inst.close()
 
 
-def get_customer_overview(top_n: int = 10) -> list[dict]:
-    """查询持久化的客户数据概况：按订单数排名返回 TOP N 客户。"""
+def get_customer_overview(user_id: str, top_n: int = 10) -> list[dict]:
+    """查询指定用户持久化的客户数据概况：按订单数排名返回 TOP N 客户。
+
+    user_id 必填：只返回该用户上传数据集中提取的客户，跨用户隔离。
+    """
     try:
         if not os.path.exists(_CUSTOMER_DB_PATH):
             return []
@@ -624,33 +701,39 @@ def get_customer_overview(top_n: int = 10) -> list[dict]:
             """SELECT customer_id, customer_name, segment, city, region, order_count,
                       first_seen, last_seen
                FROM customer_profiles
+               WHERE user_id = ?
                ORDER BY order_count DESC
                LIMIT ?""",
-            (top_n,),
+            (user_id or "default", top_n),
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
     except Exception as e:
-        logger.warning(f"get_customer_overview failed: {e}")
+        logger.warning(f"get_customer_overview failed (user={user_id}): {e}")
         return []
 
 
-def get_customer_count() -> dict:
-    """获取持久化客户数据的统计信息。"""
+def get_customer_count(user_id: str) -> dict:
+    """获取指定用户持久化客户数据的统计信息（跨用户隔离）。"""
     try:
         if not os.path.exists(_CUSTOMER_DB_PATH):
             return {"total_customers": 0, "by_city": [], "by_segment": []}
         conn = sqlite3.connect(_CUSTOMER_DB_PATH)
         conn.row_factory = sqlite3.Row
+        uid = user_id or "default"
 
-        total = conn.execute("SELECT COUNT(*) AS cnt FROM customer_profiles").fetchone()["cnt"]
+        total = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ?", (uid,)
+        ).fetchone()["cnt"]
 
         by_city = conn.execute(
-            "SELECT city, COUNT(*) AS cnt FROM customer_profiles WHERE city != '' GROUP BY city ORDER BY cnt DESC LIMIT 10"
+            "SELECT city, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND city != '' GROUP BY city ORDER BY cnt DESC LIMIT 10",
+            (uid,),
         ).fetchall()
 
         by_segment = conn.execute(
-            "SELECT segment, COUNT(*) AS cnt FROM customer_profiles WHERE segment != '' GROUP BY segment ORDER BY cnt DESC"
+            "SELECT segment, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND segment != '' GROUP BY segment ORDER BY cnt DESC",
+            (uid,),
         ).fetchall()
 
         conn.close()
@@ -660,5 +743,5 @@ def get_customer_count() -> dict:
             "by_segment": [dict(r) for r in by_segment],
         }
     except Exception as e:
-        logger.warning(f"get_customer_count failed: {e}")
+        logger.warning(f"get_customer_count failed (user={user_id}): {e}")
         return {"total_customers": 0, "by_city": [], "by_segment": []}
