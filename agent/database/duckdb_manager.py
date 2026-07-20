@@ -24,6 +24,11 @@ class SecurityError(Exception):
     """SQL 语句未通过只读沙箱白名单校验时抛出。"""
 
 
+def safe_ident(name: str) -> str:
+    """转义 DuckDB 标识符，防止 SQL 注入。"""
+    return '"' + name.replace('"', '""') + '"'
+
+
 # 查询通道允许的 SQL 首关键词（大小写不敏感）。管理通道（_load_csv/reload_csv）不经此校验。
 _READ_ONLY_ALLOWED_PREFIXES = {
     "SELECT", "WITH", "SHOW", "DESCRIBE", "EXPLAIN", "PRAGMA", "SUMMARIZE", "LIMIT",
@@ -298,6 +303,215 @@ class DuckDBManager:
             logger.error(f"DuckDBManager.reload_csv failed: {e}")
             return False
 
+    def load_csv_dataset(self, csv_path: str, table_name: str) -> dict:
+        """加载 CSV 文件到指定表（管理通道，不经只读校验）。
+
+        若表已存在则先 DROP 再重建。返回 {"success": bool, "row_count": int, "error": str|None}。
+        """
+        try:
+            _validate_table_name(table_name)
+            _validate_csv_path(csv_path)
+            if not os.path.exists(csv_path):
+                return {"success": False, "row_count": 0, "error": f"文件不存在: {csv_path}"}
+            qname = safe_ident(table_name)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            self.conn.execute(
+                f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
+            )
+            row_count = self.conn.execute(
+                f"SELECT COUNT(*) FROM {qname}"
+            ).fetchone()[0]
+            logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path}")
+            return {"success": True, "row_count": row_count, "error": None}
+        except Exception as e:
+            logger.error(f"load_csv_dataset failed for '{table_name}': {e}")
+            return {"success": False, "row_count": 0, "error": str(e)}
+
+    def load_excel_dataset(self, excel_path: str, table_name: str, sheet: str | None = None) -> dict:
+        """加载 Excel 文件到指定表（管理通道，不经只读校验）。
+
+        若表已存在则先 DROP 再重建。sheet 参数可选，指定工作表名。
+        返回 {"success": bool, "row_count": int, "error": str|None}。
+        """
+        try:
+            _validate_table_name(table_name)
+            if not os.path.exists(excel_path):
+                return {"success": False, "row_count": 0, "error": f"文件不存在: {excel_path}"}
+            qname = safe_ident(table_name)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            # 构建 read_excel 参数
+            if sheet:
+                self.conn.execute(
+                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}', sheet_name='{sheet}')"
+                )
+            else:
+                self.conn.execute(
+                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}')"
+                )
+            row_count = self.conn.execute(
+                f"SELECT COUNT(*) FROM {qname}"
+            ).fetchone()[0]
+            logger.info(f"load_excel_dataset: loaded {row_count} rows into '{table_name}' from {excel_path}")
+            return {"success": True, "row_count": row_count, "error": None}
+        except Exception as e:
+            logger.error(f"load_excel_dataset failed for '{table_name}': {e}")
+            return {"success": False, "row_count": 0, "error": str(e)}
+
+    def drop_table(self, table_name: str) -> bool:
+        """删除指定表（管理通道，不经只读校验）。返回是否成功。"""
+        try:
+            _validate_table_name(table_name)
+            qname = safe_ident(table_name)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            logger.info(f"drop_table: dropped '{table_name}'")
+            return True
+        except Exception as e:
+            logger.error(f"drop_table failed for '{table_name}': {e}")
+            return False
+
+    def get_enhanced_schema_text(self) -> str:
+        """增强版 schema 文本，包含行数和来源类型标注。
+
+        从 datasources_db 读取元数据，格式：
+        Table: {name} ({source_type}) [{row_count} rows]
+          - col1 (TYPE)
+          - col2 (TYPE)
+        """
+        # 获取 DuckDB 中所有表
+        tables = self.get_table_names()
+        if not tables:
+            return "No tables found."
+
+        # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}
+        meta_map: dict[str, dict] = {}
+        try:
+            from database.datasources_db import datasources_db
+            for ds in datasources_db.list_datasets():
+                meta_map[ds["table_name"]] = {
+                    "source_type": ds.get("source_type", "unknown"),
+                    "row_count": ds.get("row_count", 0),
+                }
+        except Exception:
+            logger.debug("get_enhanced_schema_text: datasources_db unavailable, using defaults")
+
+        parts = []
+        for table_name in tables:
+            _validate_table_name(table_name)
+            qname = safe_ident(table_name)
+            cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
+            col_lines = [f"  - {col_name} ({col_type})" for col_name, col_type, *_ in cols]
+
+            # 获取元数据
+            meta = meta_map.get(table_name, {})
+            source_type = meta.get("source_type", "local")
+            # 优先使用元数据中的 row_count，否则实时查询
+            if "row_count" in meta and meta["row_count"] > 0:
+                row_count = meta["row_count"]
+            else:
+                try:
+                    row_count = self.conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()[0]
+                except Exception:
+                    row_count = 0
+
+            parts.append(
+                f"Table: {table_name} ({source_type}) [{row_count} rows]\n" + "\n".join(col_lines)
+            )
+        return "\n\n".join(parts)
+
+    def register_external_databases(self) -> dict:
+        """读取 datasources_conf 配置，安装 DuckDB 扩展，注册外部数据库表为视图。
+
+        返回 {"registered": [...], "failed": [...]}。
+        失败时不会崩溃，仅记录错误并继续。
+        """
+        registered = []
+        failed = []
+
+        try:
+            from utils.config_handler import datasources_conf
+        except Exception:
+            logger.info("register_external_databases: datasources_conf not available, skipping")
+            return {"registered": registered, "failed": failed}
+
+        if not datasources_conf or not datasources_conf.get("databases"):
+            return {"registered": registered, "failed": failed}
+
+        for db_conf in datasources_conf["databases"]:
+            db_name = db_conf.get("name", "unknown")
+            db_type = db_conf.get("type", "").lower()
+
+            try:
+                # 安装并加载对应扩展
+                if db_type == "postgres":
+                    self.conn.execute("INSTALL postgres_scan")
+                    self.conn.execute("LOAD postgres_scan")
+                elif db_type == "mysql":
+                    self.conn.execute("INSTALL mysql_scan")
+                    self.conn.execute("LOAD mysql_scan")
+                else:
+                    failed.append({"name": db_name, "error": f"不支持的数据库类型: {db_type}"})
+                    continue
+
+                # 读取密码（从环境变量）
+                import os as _os
+                password = _os.environ.get(db_conf.get("password_env", ""), "")
+
+                # 构建连接参数
+                host = db_conf.get("host", "127.0.0.1")
+                port = db_conf.get("port", 5432 if db_type == "postgres" else 3306)
+                database = db_conf.get("database", "")
+                user = db_conf.get("user", "")
+
+                # ATTACH 外部数据库
+                attach_name = safe_ident(db_name)
+                if db_type == "postgres":
+                    self.conn.execute(
+                        f"ATTACH 'host={host} port={port} user={user} password={password} dbname={database}' AS {attach_name} (TYPE postgres)"
+                    )
+                elif db_type == "mysql":
+                    self.conn.execute(
+                        f"ATTACH 'host={host} port={port} user={user} password={password} database={database}' AS {attach_name} (TYPE mysql)"
+                    )
+
+                # 确定要暴露的表
+                tables_list = db_conf.get("tables", [])
+                if not tables_list:
+                    # 自动发现：查询 information_schema
+                    try:
+                        if db_type == "postgres":
+                            schema_rows = self.conn.execute(
+                                f"SELECT table_name FROM {attach_name}.information_schema.tables WHERE table_schema='public'"
+                            ).fetchall()
+                        elif db_type == "mysql":
+                            schema_rows = self.conn.execute(
+                                f"SELECT table_name FROM {attach_name}.information_schema.tables WHERE table_schema=DATABASE()"
+                            ).fetchall()
+                        else:
+                            schema_rows = []
+                        tables_list = [r[0] for r in schema_rows]
+                    except Exception as e:
+                        logger.warning(f"register_external_databases: auto-discover tables failed for {db_name}: {e}")
+                        tables_list = []
+
+                # 为每个表创建视图
+                for tbl in tables_list:
+                    try:
+                        view_name = safe_ident(tbl)
+                        self.conn.execute(
+                            f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM {attach_name}.{safe_ident(tbl)}"
+                        )
+                        registered.append({"database": db_name, "table": tbl})
+                        logger.info(f"register_external_databases: registered view '{tbl}' from {db_name}")
+                    except Exception as e:
+                        failed.append({"name": f"{db_name}.{tbl}", "error": str(e)})
+                        logger.warning(f"register_external_databases: failed to create view for {db_name}.{tbl}: {e}")
+
+            except Exception as e:
+                failed.append({"name": db_name, "error": str(e)})
+                logger.warning(f"register_external_databases: failed for {db_name}: {e}")
+
+        return {"registered": registered, "failed": failed}
+
     def close(self):
         """Close the DuckDB connection."""
         self.conn.close()
@@ -308,11 +522,48 @@ class DuckDBManager:
 _duckdb_instances: dict[str, "DuckDBManager"] = {}
 
 
+def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
+    """将 datasources_db 中记录的所有数据集重新加载到 DuckDB 实例中。
+
+    仅加载文件类数据集（csv/excel），跳过外部数据库表（由 register_external_databases 处理）。
+    失败不抛异常，仅记录日志。
+    """
+    try:
+        from database.datasources_db import datasources_db
+    except Exception:
+        logger.debug("_reload_datasets_into_instance: datasources_db unavailable, skipping")
+        return
+
+    try:
+        datasets = datasources_db.list_datasets()
+    except Exception as e:
+        logger.warning(f"_reload_datasets_into_instance: failed to list datasets: {e}")
+        return
+
+    for ds in datasets:
+        source_type = ds.get("source_type", "")
+        file_path = ds.get("file_path", "")
+        table_name = ds.get("table_name", "")
+        name = ds.get("name", "unknown")
+
+        # 仅处理文件类数据集
+        if source_type == "csv":
+            result = inst.load_csv_dataset(file_path, table_name)
+            if not result["success"]:
+                logger.warning(f"_reload_datasets_into_instance: failed to reload CSV '{name}': {result.get('error')}")
+        elif source_type == "excel":
+            result = inst.load_excel_dataset(file_path, table_name)
+            if not result["success"]:
+                logger.warning(f"_reload_datasets_into_instance: failed to reload Excel '{name}': {result.get('error')}")
+        # external db 类型由 register_external_databases 处理，此处跳过
+
+
 def init_duckdb(csv_path: str | None = None, user_id: str = "default") -> DuckDBManager:
     """获取（或创建）指定 user_id 的 DuckDBManager 实例。
 
     每个 user_id 拥有独立的 :memory: 连接和表，多用户并发不会互相覆盖数据。
     若提供 csv_path 且与该实例上次加载的不同，会触发 reload。
+    新建实例时会重新加载 datasources_db 中记录的所有数据集，并注册外部数据库连接。
     """
     if user_id is None:
         user_id = "default"
@@ -325,6 +576,12 @@ def init_duckdb(csv_path: str | None = None, user_id: str = "default") -> DuckDB
     if inst is None:
         inst = DuckDBManager(csv_path=csv_path, user_id=user_id)
         _duckdb_instances[user_id] = inst
+        # 新建实例：重新加载所有已注册的数据集，并注册外部数据库连接
+        _reload_datasets_into_instance(inst)
+        try:
+            inst.register_external_databases()
+        except Exception as e:
+            logger.warning(f"init_duckdb: register_external_databases failed for user={user_id}: {e}")
     else:
         # 已有实例：若需要切换到不同 CSV 则 reload
         if inst.last_loaded_csv != csv_path:
