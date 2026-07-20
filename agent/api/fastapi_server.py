@@ -928,13 +928,14 @@ async function loadDatasets() {
     } else {
       list.innerHTML = datasets.map(d => {
         const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
-        return `<div class="ds-item" onclick="toggleDsDetail('${d.name}')">
+        const safeId = String(d.name).replace(/[^A-Za-z0-9_]/g,'_');
+        return `<div class="ds-item" onclick="toggleDsDetail('${safeId}')">
           <span class="ds-icon">${dsIcon(d.source_type)}</span>
           <span class="ds-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
           <span class="ds-rows">${rows}</span>
           <button class="ds-del" onclick="event.stopPropagation();deleteDs('${escapeHtml(d.name)}')" title="删除">✕</button>
         </div>
-        <div class="ds-detail" id="ds-detail-${d.name}">加载中...</div>`;
+        <div class="ds-detail" id="ds-detail-${safeId}">加载中...</div>`;
       }).join('');
     }
   } catch(e) { console.log('加载数据集失败:', e); }
@@ -1289,9 +1290,9 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
     ds_dir = _datasets_dir()
     # 生成安全的表名：文件名去扩展名，替换非法字符
     base_name = os.path.splitext(fname)[0]
-    safe_name = re_module.sub(r'[^A-Za-z0-9_]', '_', base_name)
+    safe_name = re_module.sub(r'[^A-Za-z0-9]+', '_', base_name).strip('_')
     if not safe_name or not safe_name[0].isalpha():
-        safe_name = "ds_" + safe_name
+        safe_name = "ds_" + (safe_name or "upload")
 
     # 处理同名冲突
     try:
@@ -1311,9 +1312,9 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
     # 加载到 DuckDB
     try:
-        from database.duckdb_manager import init_duckdb
+        from database.duckdb_manager import init_duckdb, safe_ident
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.duckdb_manager import init_duckdb, safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -1328,14 +1329,15 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
             return JSONResponse({"success": False, "error": load_result["error"]}, status_code=400)
 
         # 解析 schema
-        cols = db.execute(f"DESCRIBE {table_name}").fetchall()
+        qname = safe_ident(table_name)
+        cols = db.execute(f"DESCRIBE {qname}").fetchall()
         schema_json = json.dumps([
             {"name": c[0], "type": c[1]} for c in cols
         ], ensure_ascii=False)
 
         # 获取样本数据（前5行）
         try:
-            sample_df = db.query_df(f"SELECT * FROM {table_name} LIMIT 5")
+            sample_df = db.query_df(f"SELECT * FROM {qname} LIMIT 5")
             sample_data = sample_df.to_dict(orient="records")
         except Exception:
             sample_data = []
@@ -1397,10 +1399,15 @@ async def delete_dataset(request: Request, name: str):
     except Exception as e:
         logger.warning(f"Failed to drop table {ds['table_name']}: {e}")
 
-    # 删除文件
+    # 删除文件（路径穿越防护：仅允许删除 datasets 目录下的文件）
     if ds["file_path"] and os.path.exists(ds["file_path"]):
         try:
-            os.remove(ds["file_path"])
+            allowed_dir = os.path.abspath(_datasets_dir())
+            real_path = os.path.realpath(ds["file_path"])
+            if real_path.startswith(allowed_dir + os.sep):
+                os.remove(real_path)
+            else:
+                logger.warning(f"Refusing to delete file outside datasets dir: {real_path}")
         except Exception as e:
             logger.warning(f"Failed to delete file {ds['file_path']}: {e}")
 
@@ -1427,15 +1434,16 @@ async def get_dataset_schema(request: Request, name: str):
 
     # 从 DuckDB 获取实时 schema
     try:
-        from database.duckdb_manager import init_duckdb
+        from database.duckdb_manager import init_duckdb, safe_ident
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.duckdb_manager import init_duckdb, safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)
-        cols = db.execute(f"DESCRIBE {ds['table_name']}").fetchall()
-        stats = db.execute(f"SUMMARIZE {ds['table_name']}").fetchall()
-        sample_df = db.query_df(f"SELECT * FROM {ds['table_name']} LIMIT 5")
+        qname = safe_ident(ds['table_name'])
+        cols = db.execute(f"DESCRIBE {qname}").fetchall()
+        stats = db.execute(f"SUMMARIZE {qname}").fetchall()
+        sample_df = db.query_df(f"SELECT * FROM {qname} LIMIT 5")
 
         return JSONResponse({
             "name": name,

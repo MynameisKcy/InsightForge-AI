@@ -37,7 +37,7 @@ _READ_ONLY_ALLOWED_PREFIXES = {
 _FORBIDDEN_KEYWORDS = {
     "DROP", "CREATE", "INSERT", "UPDATE", "DELETE", "ATTACH", "DETACH",
     "COPY", "EXPORT", "ALTER", "TRUNCATE", "REPLACE", "MERGE", "VACUUM",
-    "CALL", "ATTACH", "IMPORT",
+    "CALL", "IMPORT", "INSTALL", "LOAD", "USE", "SET",
 }
 # 合法表名：字母/下划线开头，仅含字母数字下划线。
 _TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -81,11 +81,20 @@ def _validate_table_name(name: str) -> str:
 
 
 def _validate_csv_path(path: str) -> str:
-    """校验 CSV 路径安全：必须在数据目录下且不含单引号（防 read_csv_auto 注入）。"""
+    """校验数据文件路径安全：必须在 data 目录下且不含单引号（防 read_csv_auto 注入与路径穿越）。"""
     if not path:
-        raise SecurityError("空 CSV 路径")
-    if "'" in path or "\\" in path and "'" in path:
-        raise SecurityError(f"CSV 路径含非法字符: {path!r}")
+        raise SecurityError("空数据文件路径")
+    if "'" in path:
+        raise SecurityError(f"数据文件路径含非法字符: {path!r}")
+    # 路径穿越防护：realpath 必须在 data 目录下
+    try:
+        from utils.path_tool import get_abs_path
+    except ModuleNotFoundError:
+        from agent.utils.path_tool import get_abs_path
+    allowed_root = os.path.realpath(get_abs_path("data"))
+    real = os.path.realpath(path)
+    if not real.startswith(allowed_root + os.sep) and real != allowed_root:
+        raise SecurityError(f"数据文件路径越界: {path!r}")
     return path
 
 
@@ -335,14 +344,16 @@ class DuckDBManager:
         """
         try:
             _validate_table_name(table_name)
+            _validate_csv_path(excel_path)
             if not os.path.exists(excel_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {excel_path}"}
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             # 构建 read_excel 参数
             if sheet:
+                sheet_escaped = sheet.replace("'", "''")
                 self.conn.execute(
-                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}', sheet_name='{sheet}')"
+                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}', sheet_name='{sheet_escaped}')"
                 )
             else:
                 self.conn.execute(
@@ -462,15 +473,21 @@ class DuckDBManager:
                 database = db_conf.get("database", "")
                 user = db_conf.get("user", "")
 
-                # ATTACH 外部数据库
+                # ATTACH 外部数据库（连接字符串中的单引号需转义，防 SQL 注入）
                 attach_name = safe_ident(db_name)
+                # 数值型 port 不转义；其余字段单引号需翻倍转义
+                port_str = str(port) if str(port).isdigit() else str(port).replace("'", "''")
+                host_e = str(host).replace("'", "''")
+                user_e = str(user).replace("'", "''")
+                password_e = str(password).replace("'", "''")
+                database_e = str(database).replace("'", "''")
                 if db_type == "postgres":
                     self.conn.execute(
-                        f"ATTACH 'host={host} port={port} user={user} password={password} dbname={database}' AS {attach_name} (TYPE postgres)"
+                        f"ATTACH 'host={host_e} port={port_str} user={user_e} password={password_e} dbname={database_e}' AS {attach_name} (TYPE postgres)"
                     )
                 elif db_type == "mysql":
                     self.conn.execute(
-                        f"ATTACH 'host={host} port={port} user={user} password={password} database={database}' AS {attach_name} (TYPE mysql)"
+                        f"ATTACH 'host={host_e} port={port_str} user={user_e} password={password_e} database={database_e}' AS {attach_name} (TYPE mysql)"
                     )
 
                 # 确定要暴露的表
