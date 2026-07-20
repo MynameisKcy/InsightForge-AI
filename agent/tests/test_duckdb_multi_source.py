@@ -84,6 +84,57 @@ class TestDuckDBMultiSource(unittest.TestCase):
         self.assertEqual(safe_ident("normal"), '"normal"')
         self.assertEqual(safe_ident('has"quote'), '"has""quote"')
 
+    def test_customer_isolation_by_user(self):
+        """客户数据按 user_id 隔离：A 上传的客户对 B 不可见。"""
+        import database.duckdb_manager as dmod
+        from database.duckdb_manager import DuckDBManager, get_customer_overview, get_customer_count
+
+        # 用临时 customers.db，避免污染真实库
+        orig_path = dmod._CUSTOMER_DB_PATH
+        tmp_cust = os.path.join(self.tmp_dir, "test_customers.db")
+        dmod._CUSTOMER_DB_PATH = tmp_cust
+        try:
+            csv_a = self._make_csv("cust_a.csv", [
+                {"customer_id": "C1", "customer_name": "Alice", "city": "BJ"},
+                {"customer_id": "C2", "customer_name": "Bob", "city": "SH"},
+            ])
+            csv_b = self._make_csv("cust_b.csv", [
+                {"customer_id": "C1", "customer_name": "Carol", "city": "GZ"},
+            ])
+            # 通过构造函数触发 _load_csv → _extract_and_persist_customers
+            db_a = DuckDBManager(csv_path=csv_a, table_name="cust_table_a", user_id="userA")
+            db_a.close()
+
+            db_b = DuckDBManager(csv_path=csv_b, table_name="cust_table_b", user_id="userB")
+            db_b.close()
+
+            # A 用户只看到自己的 2 个客户（含 Alice），看不到 B 的 Carol
+            a_overview = get_customer_overview("userA", top_n=10)
+            a_names = {c["customer_name"] for c in a_overview}
+            self.assertEqual(a_names, {"Alice", "Bob"})
+
+            # B 用户只看到自己的 Carol（C1 在 B 这里是 Carol，不是 Alice）
+            b_overview = get_customer_overview("userB", top_n=10)
+            b_names = {c["customer_name"] for c in b_overview}
+            self.assertEqual(b_names, {"Carol"})
+
+            # 复合主键生效：A 的 C1(Alice) 与 B 的 C1(Carol) 互不覆盖
+            a_c1 = [c for c in a_overview if c["customer_id"] == "C1"][0]
+            self.assertEqual(a_c1["customer_name"], "Alice")
+
+            # 统计也按用户隔离
+            self.assertEqual(get_customer_count("userA")["total_customers"], 2)
+            self.assertEqual(get_customer_count("userB")["total_customers"], 1)
+            # 不存在的用户返回 0
+            self.assertEqual(get_customer_count("userX")["total_customers"], 0)
+        finally:
+            dmod._CUSTOMER_DB_PATH = orig_path
+            for f in (tmp_cust, tmp_cust + "-wal", tmp_cust + "-shm"):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()

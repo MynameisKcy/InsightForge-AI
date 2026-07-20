@@ -54,8 +54,11 @@ class DataResolver:
     """根据用户查询自动选择最合适的数据集。"""
 
     @staticmethod
-    def _load_dynamic_datasets() -> list[dict]:
+    def _load_dynamic_datasets(user_id: str | None = None) -> list[dict]:
         """从 datasources_db 动态读取数据集列表。
+
+        Args:
+            user_id: 若提供，只返回该用户拥有的数据集（跨用户隔离）。
 
         Returns:
             list[dict]: 每个元素包含 name, file_path, table_name, description 等字段。
@@ -66,18 +69,18 @@ class DataResolver:
             logger.debug("DataResolver: datasources_db not available, skipping dynamic load")
             return []
         try:
-            datasets = db.list_datasets()
+            datasets = db.list_datasets(owner_user_id=user_id)
             if datasets:
-                logger.info(f"DataResolver: loaded {len(datasets)} dynamic dataset(s) from datasources_db")
+                logger.info(f"DataResolver: loaded {len(datasets)} dynamic dataset(s) for user={user_id}")
             return datasets
         except Exception as e:
             logger.warning(f"DataResolver: failed to load dynamic datasets: {e}")
             return []
 
     @staticmethod
-    def resolve(query: str) -> dict:
+    def resolve(query: str, user_id: str | None = None) -> dict:
         """
-        根据用户查询返回最匹配的数据集配置。
+        根据用户查询返回最匹配的数据集配置。仅在该用户拥有的数据集中匹配（隔离）。
 
         优先从 datasources_db 动态匹配；若无动态数据集则 fallback 到 DATASET_MAP 关键词打分。
 
@@ -93,8 +96,8 @@ class DataResolver:
         """
         query_lower = query.lower()
 
-        # --- 1. 尝试动态数据集 ---
-        dynamic_datasets = DataResolver._load_dynamic_datasets()
+        # --- 1. 尝试动态数据集（按 user_id 隔离）---
+        dynamic_datasets = DataResolver._load_dynamic_datasets(user_id=user_id)
         if dynamic_datasets:
             # 关键词匹配：在 name 和 description 中搜索
             matched = []
@@ -180,12 +183,15 @@ class DataResolver:
         }
 
     @staticmethod
-    def get_all_datasets() -> list[dict]:
-        """返回所有可用数据集的列表（动态 + 静态合并）。"""
+    def get_all_datasets(user_id: str | None = None) -> list[dict]:
+        """返回所有可用数据集的列表（动态 + 静态合并）。
+
+        动态部分按 user_id 隔离，只返回该用户拥有的数据集。
+        """
         results = []
 
         # 动态数据集
-        dynamic_datasets = DataResolver._load_dynamic_datasets()
+        dynamic_datasets = DataResolver._load_dynamic_datasets(user_id=user_id)
         for ds in dynamic_datasets:
             results.append({
                 "name": ds.get("name", ""),

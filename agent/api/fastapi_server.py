@@ -940,9 +940,10 @@ async function streamChat(text, bubble) {
 
       if (data.startsWith('[CHART:')) {
         const chartUrl = data.slice(7, -1).trim();
-        if (chartUrl) {
+        // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
+        if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
           const iframe = document.createElement('iframe');
-          iframe.src = chartUrl.startsWith('/') ? chartUrl : '/' + chartUrl.replace(/\\\\/g, '/');
+          iframe.src = chartUrl;
           iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
           const wrapper = document.createElement('div');
           if (!wrapper.dataset.created) {
@@ -1009,10 +1010,18 @@ function appendMessage(role, text) {
 }
 
 function renderMarkdown(text) {
-  let html = text;
-  // 代码块
+  // XSS 防护：先对整段原始文本做 HTML 转义，使 LLM 输出中的 <script>/<img onerror>
+  // 等字面量标签失效，再做 markdown 语法替换。代码块内容亦已转义，无需二次转义。
+  let html = escapeHtml(text);
+  // 协议白名单：仅放行 http(s) 与相对路径，拦截 javascript:/data: 等
+  function safeUrl(u) {
+    var s = (u || '').trim();
+    if (/^(https?:|\/|\.\/|\.\.\/|#)/i.test(s)) return s;
+    return '';
+  }
+  // 代码块（内容已转义，直接包裹）
   html = html.replace(/```(\\w*)\\n([\\s\\S]*?)```/g, function(_, lang, code) {
-    return '<pre><button class="copy-btn" onclick="copyCode(this)">复制</button><code>' + escapeHtml(code.trim()) + '</code></pre>';
+    return '<pre><button class="copy-btn" onclick="copyCode(this)">复制</button><code>' + code.trim() + '</code></pre>';
   });
   // 标题
   html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
@@ -1026,10 +1035,15 @@ function renderMarkdown(text) {
   html = html.replace(/`(.+?)`/g, '<code>$1</code>');
   // 分隔线
   html = html.replace(/^---+$/gm, '<hr>');
-  // 图片
-  html = html.replace(/!\\[(.*?)\\]\\((.*?)\\)/g, '<img src="$2" alt="$1">');
-  // 链接
-  html = html.replace(/\\[(.*?)\\]\\((.*?)\\)/g, '<a href="$2">$1</a>');
+  // 图片（协议白名单，非 http(s)/相对路径则丢弃 src）
+  html = html.replace(/!\\[(.*?)\\]\\((.*?)\\)/g, function(_, alt, url) {
+    var u = safeUrl(url); return u ? '<img src="' + u + '" alt="' + alt + '">' : alt;
+  });
+  // 链接（协议白名单）
+  html = html.replace(/\\[(.*?)\\]\\((.*?)\\)/g, function(_, label, url) {
+    var u = safeUrl(url);
+    return u ? '<a href="' + u + '">' + label + '</a>' : label;
+  });
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   html = html.replace(/(<li>.*<\\/li>)/s, '<ul>$1</ul>');
@@ -1383,6 +1397,8 @@ async def api_chat(request: Request):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     memory = get_session(user_id)
 
     # ── 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复） ──
@@ -1396,6 +1412,10 @@ async def api_chat(request: Request):
         session_id = _long_term_memory.create_session(user_id, title=title)
         new_session = True
     else:
+        # IDOR 防护：传入的 session 必须属于当前用户，否则拒绝（防写入/读取他人会话）
+        owner = _long_term_memory.get_session_owner(session_id)
+        if owner is None or owner != user_id:
+            return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
 
     agent = _get_react_agent()
@@ -1480,6 +1500,8 @@ async def api_analysis(request: Request):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     memory = get_session(user_id)
     memory.add_user_message(query)
 
@@ -1509,6 +1531,8 @@ async def api_analysis(request: Request):
 async def api_conversation_history(request: Request, limit: int = 20):
     """获取用户历史会话记录（长期记忆）。"""
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
@@ -1517,14 +1541,25 @@ async def api_conversation_history(request: Request, limit: int = 20):
 async def api_list_sessions(request: Request):
     """获取用户的所有会话列表（按最近活跃排序）。"""
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     sessions = _long_term_memory.get_user_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
 @app.get("/api/sessions/{session_id}")
 async def api_get_session(request: Request, session_id: str):
-    """获取指定会话的完整对话历史。"""
+    """获取指定会话的完整对话历史。
+
+    IDOR 防护：校验该会话归属当前用户，拒绝读取他人会话。
+    """
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    # 归属校验：会话不存在或不属于当前用户一律 404（避免枚举）
+    owner = _long_term_memory.get_session_owner(session_id)
+    if owner is None or owner != user_id:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     conversation = _long_term_memory.get_session_conversation(session_id)
     return JSONResponse(content={
         "session_id": session_id,
@@ -1562,7 +1597,7 @@ async def list_datasets(request: Request):
         from database.datasources_db import datasources_db
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
-    datasets = datasources_db.list_datasets()
+    datasets = datasources_db.list_datasets(owner_user_id=user_id)
     return JSONResponse({"datasets": datasets, "count": len(datasets)})
 
 
@@ -1604,7 +1639,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
     table_name = safe_name
     counter = 2
-    while datasources_db.get_dataset(table_name):
+    while datasources_db.get_dataset(table_name, owner_user_id=user_id):
         table_name = f"{safe_name}_{counter}"
         counter += 1
 
@@ -1644,7 +1679,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
         except Exception:
             sample_data = []
 
-        # 写入元数据
+        # 写入元数据（带 owner_user_id 实现多用户隔离）
         source_type = "csv" if ext == "csv" else "excel"
         datasources_db.add_dataset(
             name=table_name,
@@ -1653,6 +1688,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
             table_name=table_name,
             schema_json=schema_json,
             row_count=load_result["row_count"],
+            owner_user_id=user_id,
         )
 
         return JSONResponse({
@@ -1685,9 +1721,9 @@ async def delete_dataset(request: Request, name: str):
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
 
-    ds = datasources_db.get_dataset(name)
+    ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
-        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+        return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 删除表
     try:
@@ -1713,8 +1749,8 @@ async def delete_dataset(request: Request, name: str):
         except Exception as e:
             logger.warning(f"Failed to delete file {ds['file_path']}: {e}")
 
-    # 删除元数据
-    datasources_db.delete_dataset(name)
+    # 删除元数据（带归属校验，防越权）
+    datasources_db.delete_dataset(name, owner_user_id=user_id)
     return JSONResponse({"success": True})
 
 
@@ -1730,9 +1766,9 @@ async def get_dataset_schema(request: Request, name: str):
     except ModuleNotFoundError:
         from agent.database.datasources_db import datasources_db
 
-    ds = datasources_db.get_dataset(name)
+    ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
-        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+        return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 获取实时 schema
     try:

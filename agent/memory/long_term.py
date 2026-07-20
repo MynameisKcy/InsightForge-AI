@@ -175,6 +175,18 @@ class LongTermMemory:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_session_owner(self, session_id: str) -> str | None:
+        """返回指定会话的归属 user_id；会话不存在返回 None。
+
+        用于 /api/sessions/{id} 端点做 IDOR 归属校验，防止用户读取他人会话历史。
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM chat_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return row["user_id"] if row else None
+
     def get_session_conversation(self, session_id: str) -> list[dict]:
         """获取指定会话的完整对话历史。"""
         with self._get_conn() as conn:
