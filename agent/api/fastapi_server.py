@@ -1383,6 +1383,8 @@ async def api_chat(request: Request):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     memory = get_session(user_id)
 
     # ── 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复） ──
@@ -1396,6 +1398,10 @@ async def api_chat(request: Request):
         session_id = _long_term_memory.create_session(user_id, title=title)
         new_session = True
     else:
+        # IDOR 防护：传入的 session 必须属于当前用户，否则拒绝（防写入/读取他人会话）
+        owner = _long_term_memory.get_session_owner(session_id)
+        if owner is None or owner != user_id:
+            return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
 
     agent = _get_react_agent()
@@ -1480,6 +1486,8 @@ async def api_analysis(request: Request):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     memory = get_session(user_id)
     memory.add_user_message(query)
 
@@ -1509,6 +1517,8 @@ async def api_analysis(request: Request):
 async def api_conversation_history(request: Request, limit: int = 20):
     """获取用户历史会话记录（长期记忆）。"""
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
@@ -1517,14 +1527,25 @@ async def api_conversation_history(request: Request, limit: int = 20):
 async def api_list_sessions(request: Request):
     """获取用户的所有会话列表（按最近活跃排序）。"""
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
     sessions = _long_term_memory.get_user_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
 @app.get("/api/sessions/{session_id}")
 async def api_get_session(request: Request, session_id: str):
-    """获取指定会话的完整对话历史。"""
+    """获取指定会话的完整对话历史。
+
+    IDOR 防护：校验该会话归属当前用户，拒绝读取他人会话。
+    """
     user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    # 归属校验：会话不存在或不属于当前用户一律 404（避免枚举）
+    owner = _long_term_memory.get_session_owner(session_id)
+    if owner is None or owner != user_id:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     conversation = _long_term_memory.get_session_conversation(session_id)
     return JSONResponse(content={
         "session_id": session_id,
