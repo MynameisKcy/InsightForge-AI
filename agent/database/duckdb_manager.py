@@ -278,7 +278,6 @@ class DuckDBManager:
             if df.empty:
                 return
 
-            # 持久化到 SQLite
             os.makedirs(os.path.dirname(_CUSTOMER_DB_PATH), exist_ok=True)
             conn = sqlite3.connect(_CUSTOMER_DB_PATH, timeout=30)
             # WAL 模式提升并发写性能，防 database is locked
@@ -288,17 +287,27 @@ class DuckDBManager:
                 pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS customer_profiles (
-                    customer_id TEXT PRIMARY KEY,
+                    customer_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
                     customer_name TEXT,
                     segment TEXT,
                     city TEXT,
                     region TEXT,
                     order_count INTEGER DEFAULT 0,
                     first_seen TEXT NOT NULL,
-                    last_seen TEXT NOT NULL
+                    last_seen TEXT NOT NULL,
+                    PRIMARY KEY (customer_id, user_id)
                 )
             """)
+            # 迁移：旧表无 user_id 列时补列（主键改造较复杂，对存量数据默认归属到 default 用户）
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(customer_profiles)").fetchall()}
+            if "user_id" not in cols:
+                conn.execute(
+                    "ALTER TABLE customer_profiles ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
+                )
+                logger.info("Migrated customer_profiles: added user_id column (legacy rows → 'default')")
             now = pd.Timestamp.now().isoformat()
+            uid = self.user_id or "default"
             for _, row in df.iterrows():
                 cid = str(row["customer_id"])
                 vals = {
@@ -309,20 +318,20 @@ class DuckDBManager:
                     "order_count": int(row.get("order_count", 0)),
                 }
                 conn.execute("""
-                    INSERT INTO customer_profiles (customer_id, customer_name, segment, city, region, order_count, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(customer_id) DO UPDATE SET
+                    INSERT INTO customer_profiles (customer_id, user_id, customer_name, segment, city, region, order_count, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(customer_id, user_id) DO UPDATE SET
                         customer_name = excluded.customer_name,
                         segment = excluded.segment,
                         city = excluded.city,
                         region = excluded.region,
                         order_count = excluded.order_count,
                         last_seen = excluded.last_seen
-                """, (cid, vals["customer_name"], vals["segment"], vals["city"], vals["region"],
+                """, (cid, uid, vals["customer_name"], vals["segment"], vals["city"], vals["region"],
                       vals["order_count"], now, now))
             conn.commit()
             conn.close()
-            logger.info(f"Persisted {len(df)} unique customers from {self.table_name}")
+            logger.info(f"Persisted {len(df)} unique customers from {self.table_name} (user={uid})")
         except Exception as e:
             logger.warning(f"Customer extraction skipped (non-critical): {e}")
 
@@ -456,11 +465,11 @@ class DuckDBManager:
         if not tables:
             return "No tables found."
 
-        # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}
+        # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}（仅本用户）
         meta_map: dict[str, dict] = {}
         try:
             from database.datasources_db import datasources_db
-            for ds in datasources_db.list_datasets():
+            for ds in datasources_db.list_datasets(owner_user_id=self.user_id):
                 meta_map[ds["table_name"]] = {
                     "source_type": ds.get("source_type", "unknown"),
                     "row_count": ds.get("row_count", 0),
@@ -603,8 +612,10 @@ _duckdb_instances: dict[str, "DuckDBManager"] = {}
 
 
 def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
-    """将 datasources_db 中记录的所有数据集重新加载到 DuckDB 实例中。
+    """将 datasources_db 中记录的、属于该实例用户的数据集重新加载到 DuckDB 实例中。
 
+    按 inst.user_id 过滤，只加载该用户拥有的数据集（跨用户隔离），
+    避免把 B 用户的私有数据集混入 A 的 DuckDB。
     仅加载文件类数据集（csv/excel），跳过外部数据库表（由 register_external_databases 处理）。
     失败不抛异常，仅记录日志。
     """
@@ -615,7 +626,7 @@ def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
         return
 
     try:
-        datasets = datasources_db.list_datasets()
+        datasets = datasources_db.list_datasets(owner_user_id=inst.user_id)
     except Exception as e:
         logger.warning(f"_reload_datasets_into_instance: failed to list datasets: {e}")
         return
@@ -676,8 +687,11 @@ def close_duckdb(user_id: str = "default") -> None:
         inst.close()
 
 
-def get_customer_overview(top_n: int = 10) -> list[dict]:
-    """查询持久化的客户数据概况：按订单数排名返回 TOP N 客户。"""
+def get_customer_overview(user_id: str, top_n: int = 10) -> list[dict]:
+    """查询指定用户持久化的客户数据概况：按订单数排名返回 TOP N 客户。
+
+    user_id 必填：只返回该用户上传数据集中提取的客户，跨用户隔离。
+    """
     try:
         if not os.path.exists(_CUSTOMER_DB_PATH):
             return []
@@ -687,33 +701,39 @@ def get_customer_overview(top_n: int = 10) -> list[dict]:
             """SELECT customer_id, customer_name, segment, city, region, order_count,
                       first_seen, last_seen
                FROM customer_profiles
+               WHERE user_id = ?
                ORDER BY order_count DESC
                LIMIT ?""",
-            (top_n,),
+            (user_id or "default", top_n),
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
     except Exception as e:
-        logger.warning(f"get_customer_overview failed: {e}")
+        logger.warning(f"get_customer_overview failed (user={user_id}): {e}")
         return []
 
 
-def get_customer_count() -> dict:
-    """获取持久化客户数据的统计信息。"""
+def get_customer_count(user_id: str) -> dict:
+    """获取指定用户持久化客户数据的统计信息（跨用户隔离）。"""
     try:
         if not os.path.exists(_CUSTOMER_DB_PATH):
             return {"total_customers": 0, "by_city": [], "by_segment": []}
         conn = sqlite3.connect(_CUSTOMER_DB_PATH)
         conn.row_factory = sqlite3.Row
+        uid = user_id or "default"
 
-        total = conn.execute("SELECT COUNT(*) AS cnt FROM customer_profiles").fetchone()["cnt"]
+        total = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ?", (uid,)
+        ).fetchone()["cnt"]
 
         by_city = conn.execute(
-            "SELECT city, COUNT(*) AS cnt FROM customer_profiles WHERE city != '' GROUP BY city ORDER BY cnt DESC LIMIT 10"
+            "SELECT city, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND city != '' GROUP BY city ORDER BY cnt DESC LIMIT 10",
+            (uid,),
         ).fetchall()
 
         by_segment = conn.execute(
-            "SELECT segment, COUNT(*) AS cnt FROM customer_profiles WHERE segment != '' GROUP BY segment ORDER BY cnt DESC"
+            "SELECT segment, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND segment != '' GROUP BY segment ORDER BY cnt DESC",
+            (uid,),
         ).fetchall()
 
         conn.close()
@@ -723,5 +743,5 @@ def get_customer_count() -> dict:
             "by_segment": [dict(r) for r in by_segment],
         }
     except Exception as e:
-        logger.warning(f"get_customer_count failed: {e}")
+        logger.warning(f"get_customer_count failed (user={user_id}): {e}")
         return {"total_customers": 0, "by_city": [], "by_segment": []}
