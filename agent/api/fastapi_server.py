@@ -940,9 +940,10 @@ async function streamChat(text, bubble) {
 
       if (data.startsWith('[CHART:')) {
         const chartUrl = data.slice(7, -1).trim();
-        if (chartUrl) {
+        // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
+        if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
           const iframe = document.createElement('iframe');
-          iframe.src = chartUrl.startsWith('/') ? chartUrl : '/' + chartUrl.replace(/\\\\/g, '/');
+          iframe.src = chartUrl;
           iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
           const wrapper = document.createElement('div');
           if (!wrapper.dataset.created) {
@@ -1009,10 +1010,18 @@ function appendMessage(role, text) {
 }
 
 function renderMarkdown(text) {
-  let html = text;
-  // 代码块
+  // XSS 防护：先对整段原始文本做 HTML 转义，使 LLM 输出中的 <script>/<img onerror>
+  // 等字面量标签失效，再做 markdown 语法替换。代码块内容亦已转义，无需二次转义。
+  let html = escapeHtml(text);
+  // 协议白名单：仅放行 http(s) 与相对路径，拦截 javascript:/data: 等
+  function safeUrl(u) {
+    var s = (u || '').trim();
+    if (/^(https?:|\/|\.\/|\.\.\/|#)/i.test(s)) return s;
+    return '';
+  }
+  // 代码块（内容已转义，直接包裹）
   html = html.replace(/```(\\w*)\\n([\\s\\S]*?)```/g, function(_, lang, code) {
-    return '<pre><button class="copy-btn" onclick="copyCode(this)">复制</button><code>' + escapeHtml(code.trim()) + '</code></pre>';
+    return '<pre><button class="copy-btn" onclick="copyCode(this)">复制</button><code>' + code.trim() + '</code></pre>';
   });
   // 标题
   html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
@@ -1026,10 +1035,15 @@ function renderMarkdown(text) {
   html = html.replace(/`(.+?)`/g, '<code>$1</code>');
   // 分隔线
   html = html.replace(/^---+$/gm, '<hr>');
-  // 图片
-  html = html.replace(/!\\[(.*?)\\]\\((.*?)\\)/g, '<img src="$2" alt="$1">');
-  // 链接
-  html = html.replace(/\\[(.*?)\\]\\((.*?)\\)/g, '<a href="$2">$1</a>');
+  // 图片（协议白名单，非 http(s)/相对路径则丢弃 src）
+  html = html.replace(/!\\[(.*?)\\]\\((.*?)\\)/g, function(_, alt, url) {
+    var u = safeUrl(url); return u ? '<img src="' + u + '" alt="' + alt + '">' : alt;
+  });
+  // 链接（协议白名单）
+  html = html.replace(/\\[(.*?)\\]\\((.*?)\\)/g, function(_, label, url) {
+    var u = safeUrl(url);
+    return u ? '<a href="' + u + '">' + label + '</a>' : label;
+  });
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   html = html.replace(/(<li>.*<\\/li>)/s, '<ul>$1</ul>');
