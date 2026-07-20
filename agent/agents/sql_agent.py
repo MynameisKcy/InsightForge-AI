@@ -23,27 +23,25 @@ from utils.logger_handler import logger
 SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用户的数据分析需求和数据库 Schema，生成可执行的 DuckDB SQL 语句。
 
 ## 规则
-1. **严格使用下面 Schema 中列出的列名** —— 不要编造任何 Schema 中不存在的列名。
+1. **严格使用下面 Schema 中列出的列名和表名** —— 不要编造任何 Schema 中不存在的列名或表名。
 2. 只输出 SQL 语句，放在 ```sql 代码块中。
 3. SQL 必须完整、可直接执行，不要使用占位符。
 4. 使用双引号引用列名（如果列名包含空格或特殊字符）。
 5. 对于聚合查询，确保 GROUP BY 包含所有非聚合列。
 6. 如果用户没有指定 LIMIT，默认添加 LIMIT 100。
 7. 使用 DuckDB 兼容的 SQL 语法。
-8. **只生成 SELECT 查询** —— 禁止生成 DROP/CREATE/INSERT/UPDATE/DELETE/ATTACH/ALTER/TRUNCATE 等任何写操作或 DDL 语句，系统会在执行层强制拦截。
+8. **只生成 SELECT 查询** —— 禁止生成 DROP/CREATE/INSERT/UPDATE/DELETE/ATTACH/ALTER/TRUNCATE 等任何写操作或 DDL 语句。
+9. **跨表查询时请使用标准 SQL JOIN** —— 系统支持跨数据集关联分析。
 
 ## 数据库 Schema
 {schema}
 
-## 当前表
-当前数据库中可查询的表:
-- {table_name}: 包含该数据集的所有字段
-
 ## 重要提示
-请仔细阅读上述 Schema 中的列名。只能使用 Schema 中实际存在的列名来编写 SQL。
-如果 Schema 中有 "Product Name" 列，请用双引号引用为 "Product Name"。
-如果 Schema 中有 "State" 列，它就是 State 列。
-不要假设存在 "Product_Category"、"Avg_Price"、"Month" 等列名 —— 必须根据实际 Schema 来写。
+- 仔细阅读上述 Schema 中的表名和列名。
+- 只能使用 Schema 中实际存在的表名和列名来编写 SQL。
+- 如果 Schema 中有 "Product Name" 列，请用双引号引用为 "Product Name"。
+- 不要假设存在 Schema 中未出现的列名。
+- 如果用户的问题涉及多个表，请使用 JOIN 关联查询。
 
 请根据用户需求生成 SQL："""
 
@@ -115,13 +113,10 @@ class SQLAgent(BaseAgent):
 
         return {"error": str(last_error), "dataframe_json": "[]", "row_count": 0, "sql": current_sql}
 
-    def _generate_sql(self, task: str, table_name: str, fix_hint: str | None = None) -> str:
+    def _generate_sql(self, task: str, table_name: str = "", fix_hint: dict | None = None) -> str:
         """使用 LLM 生成 SQL。若提供 fix_hint（上一轮错误信息），则要求 LLM 据此修正。"""
-        schema_text = self.db.get_schema_text()
-        prompt = SQL_AGENT_SYSTEM_PROMPT.format(
-            schema=schema_text,
-            table_name=table_name,
-        )
+        schema_text = self.db.get_enhanced_schema_text()
+        prompt = SQL_AGENT_SYSTEM_PROMPT.format(schema=schema_text)
         if fix_hint:
             user_content = (
                 f"之前生成的 SQL 执行失败，请根据错误信息修正后重新生成 SQL。\n"
