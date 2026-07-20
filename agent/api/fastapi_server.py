@@ -1107,6 +1107,256 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
 
 
+# ── 数据集管理 ──
+
+def _datasets_dir() -> str:
+    """用户上传的数据集存放目录。"""
+    d = get_abs_path("data/datasets")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+_ALLOWED_DATASET_TYPES = {"csv", "xlsx", "xls"}
+_MAX_DATASET_SIZE = 100 * 1024 * 1024  # 100MB
+
+
+@app.get("/api/datasets")
+async def list_datasets(request: Request):
+    """列出所有可用数据集。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+    datasets = datasources_db.list_datasets()
+    return JSONResponse({"datasets": datasets, "count": len(datasets)})
+
+
+@app.post("/api/datasets/upload")
+async def upload_dataset(request: Request, file: UploadFile = File(...)):
+    """上传 CSV/Excel 文件，解析并加载到 DuckDB。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    fname = os.path.basename(file.filename or "")
+    ext = os.path.splitext(fname)[1].lower().lstrip(".")
+    if ext not in _ALLOWED_DATASET_TYPES:
+        return JSONResponse(
+            {"success": False, "error": f"不支持的文件类型: {ext}，仅支持 CSV/XLSX/XLS"},
+            status_code=400,
+        )
+
+    content = await file.read()
+    if len(content) > _MAX_DATASET_SIZE:
+        return JSONResponse(
+            {"success": False, "error": f"文件超过大小限制(100MB)"},
+            status_code=413,
+        )
+
+    # 保存文件
+    ds_dir = _datasets_dir()
+    # 生成安全的表名：文件名去扩展名，替换非法字符
+    base_name = os.path.splitext(fname)[0]
+    safe_name = re_module.sub(r'[^A-Za-z0-9_]', '_', base_name)
+    if not safe_name or not safe_name[0].isalpha():
+        safe_name = "ds_" + safe_name
+
+    # 处理同名冲突
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+
+    table_name = safe_name
+    counter = 2
+    while datasources_db.get_dataset(table_name):
+        table_name = f"{safe_name}_{counter}"
+        counter += 1
+
+    fpath = os.path.join(ds_dir, f"{table_name}.{ext}")
+    with open(fpath, "wb") as out:
+        out.write(content)
+
+    # 加载到 DuckDB
+    try:
+        from database.duckdb_manager import init_duckdb
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import init_duckdb
+
+    try:
+        db = init_duckdb(user_id=user_id)
+        if ext == "csv":
+            load_result = db.load_csv_dataset(fpath, table_name)
+        else:
+            load_result = db.load_excel_dataset(fpath, table_name)
+
+        if not load_result["success"]:
+            # 加载失败，删除文件
+            os.remove(fpath)
+            return JSONResponse({"success": False, "error": load_result["error"]}, status_code=400)
+
+        # 解析 schema
+        cols = db.execute(f"DESCRIBE {table_name}").fetchall()
+        schema_json = json.dumps([
+            {"name": c[0], "type": c[1]} for c in cols
+        ], ensure_ascii=False)
+
+        # 获取样本数据（前5行）
+        try:
+            sample_df = db.query_df(f"SELECT * FROM {table_name} LIMIT 5")
+            sample_data = sample_df.to_dict(orient="records")
+        except Exception:
+            sample_data = []
+
+        # 写入元数据
+        source_type = "csv" if ext == "csv" else "excel"
+        datasources_db.add_dataset(
+            name=table_name,
+            source_type=source_type,
+            file_path=fpath,
+            table_name=table_name,
+            schema_json=schema_json,
+            row_count=load_result["row_count"],
+        )
+
+        return JSONResponse({
+            "success": True,
+            "name": table_name,
+            "source_type": source_type,
+            "row_count": load_result["row_count"],
+            "columns": [c[0] for c in cols],
+            "sample": sample_data,
+        })
+
+    except Exception as e:
+        logger.error(f"Dataset upload failed: {traceback.format_exc()}")
+        if os.path.exists(fpath):
+            os.remove(fpath)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.delete("/api/datasets/{name}")
+async def delete_dataset(request: Request, name: str):
+    """删除数据集（卸载 DuckDB 表 + 删除文件 + 删除元数据）。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        return JSONResponse({"error": "非法数据集名"}, status_code=400)
+
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+
+    ds = datasources_db.get_dataset(name)
+    if not ds:
+        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+
+    # 从 DuckDB 删除表
+    try:
+        from database.duckdb_manager import init_duckdb
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import init_duckdb
+
+    try:
+        db = init_duckdb(user_id=user_id)
+        db.drop_table(ds["table_name"])
+    except Exception as e:
+        logger.warning(f"Failed to drop table {ds['table_name']}: {e}")
+
+    # 删除文件
+    if ds["file_path"] and os.path.exists(ds["file_path"]):
+        try:
+            os.remove(ds["file_path"])
+        except Exception as e:
+            logger.warning(f"Failed to delete file {ds['file_path']}: {e}")
+
+    # 删除元数据
+    datasources_db.delete_dataset(name)
+    return JSONResponse({"success": True})
+
+
+@app.get("/api/datasets/{name}/schema")
+async def get_dataset_schema(request: Request, name: str):
+    """获取数据集的详细 schema。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+
+    ds = datasources_db.get_dataset(name)
+    if not ds:
+        return JSONResponse({"error": f"数据集 '{name}' 不存在"}, status_code=404)
+
+    # 从 DuckDB 获取实时 schema
+    try:
+        from database.duckdb_manager import init_duckdb
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import init_duckdb
+
+    try:
+        db = init_duckdb(user_id=user_id)
+        cols = db.execute(f"DESCRIBE {ds['table_name']}").fetchall()
+        stats = db.execute(f"SUMMARIZE {ds['table_name']}").fetchall()
+        sample_df = db.query_df(f"SELECT * FROM {ds['table_name']} LIMIT 5")
+
+        return JSONResponse({
+            "name": name,
+            "table_name": ds["table_name"],
+            "source_type": ds["source_type"],
+            "row_count": ds["row_count"],
+            "columns": [{"name": c[0], "type": c[1]} for c in cols],
+            "statistics": [
+                {"column": s[0], "type": s[1], "min": str(s[2]) if s[2] is not None else None,
+                 "max": str(s[3]) if s[3] is not None else None,
+                 "avg": str(s[4]) if s[4] is not None else None,
+                 "std": str(s[5]) if s[5] is not None else None,
+                 "count": s[6], "null_count": s[7]}
+                for s in stats
+            ],
+            "sample": sample_df.to_dict(orient="records"),
+        })
+    except Exception as e:
+        # DuckDB 中表可能尚未加载，返回元数据中的 schema_json
+        import json as _json
+        return JSONResponse({
+            "name": name,
+            "table_name": ds["table_name"],
+            "source_type": ds["source_type"],
+            "row_count": ds["row_count"],
+            "columns": _json.loads(ds.get("schema_json", "[]")),
+            "note": "DuckDB 中未加载，显示的是缓存 schema",
+        })
+
+
+@app.post("/api/datasources/reload")
+async def reload_datasources(request: Request):
+    """热加载 datasources.yml 配置的数据库连接。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+
+    try:
+        from database.duckdb_manager import init_duckdb
+    except ModuleNotFoundError:
+        from agent.database.duckdb_manager import init_duckdb
+
+    try:
+        db = init_duckdb(user_id=user_id)
+        result = db.register_external_databases()
+        return JSONResponse({"success": True, **result})
+    except Exception as e:
+        logger.error(f"Datasource reload failed: {traceback.format_exc()}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 # ── 知识库管理（方案C-5） ──
 
 def _kb_data_dir() -> str:
