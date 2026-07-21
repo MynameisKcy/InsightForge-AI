@@ -18,14 +18,14 @@ try:
     from agent.utils.logger_handler import logger
     from agent.utils.path_tool import get_abs_path
     from agent.utils.config_handler import chroma_conf
-    from agent.model.factory import embed_model
+    from agent.model.factory import get_embed_model
 except ModuleNotFoundError:
     from utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
     from utils.file_handler import text_loader, pdf_loader, docx_loader, markdown_loader
     from utils.logger_handler import logger
     from utils.path_tool import get_abs_path
     from utils.config_handler import chroma_conf
-    from model.factory import embed_model
+    from model.factory import get_embed_model
 
 
 def _load_file_documents(read_path: str) -> list[Document]:
@@ -47,7 +47,7 @@ class VectorStoreService:
         self.config_path = config_path
         self.vector_store = Chroma(
             collection_name=chroma_conf["collection_name"],
-            embedding_function=embed_model,
+            embedding_function=get_embed_model(),
             persist_directory=get_abs_path(chroma_conf["persist_directory"]),
         )
         self.spliter = RecursiveCharacterTextSplitter(
