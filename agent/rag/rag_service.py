@@ -20,12 +20,12 @@ try:
     from agent.rag.vector_store import VectorStoreService
     from agent.utils.prompt_loader import load_rag_prompts
     from agent.utils.config_handler import rag_conf
-    from agent.model.factory import chat_model
+    from agent.model.factory import get_chat_model
 except ModuleNotFoundError:
     from rag.vector_store import VectorStoreService
     from utils.prompt_loader import load_rag_prompts
     from utils.config_handler import rag_conf
-    from model.factory import chat_model
+    from model.factory import get_chat_model
 
 try:
     from utils.logger_handler import logger
@@ -47,7 +47,7 @@ class RagSummarizerService(object):
         self.rerank_score_threshold = float(rag_conf.get("rerank_score_threshold", 0.3))
         self.prompt_text = load_rag_prompts()
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
-        self.model = chat_model
+        self.model = get_chat_model()
         self.chain = self.__init_chain()
 
     def __init_chain(self):

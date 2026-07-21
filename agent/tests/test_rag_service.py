@@ -32,6 +32,29 @@ class DummyRetrieverWithLegacyMethod:
         return [Document(page_content=f"legacy::{query}", metadata={"source": "legacy"})]
 
 
+class DummyVectorStore:
+    """桩向量库：get_retriver 返回注入的 retriever，避免依赖真实 Chroma。"""
+    def __init__(self, retriever):
+        self._retriever = retriever
+
+    def get_retriver(self):
+        return self._retriever
+
+
+def _make_service(retriever):
+    """用 __new__ 构造未初始化的 service，注入桩 vector_store 与 rerank 配置，
+    使 _coarse_retrieve / _rerank 不依赖真实 Chroma 与 DashScope。"""
+    service = RagSummarizerService.__new__(RagSummarizerService)
+    service.retriever = retriever
+    service.vector_store = DummyVectorStore(retriever)
+    # _coarse_retrieve 用 retrieve_k 覆盖 search_kwargs
+    service.retrieve_k = 15
+    # _rerank 当 docs 数 <= rerank_top_n 时直接截断返回，不调 DashScope
+    service.rerank_top_n = 3
+    service.rerank_score_threshold = 0.3
+    return service
+
+
 class RagServiceTests(unittest.TestCase):
     def test_load_rag_prompts_reads_existing_file(self):
         prompt_text = load_rag_prompts()
@@ -39,8 +62,7 @@ class RagServiceTests(unittest.TestCase):
         self.assertIn("{context}", prompt_text)
 
     def test_retriever_docs_prefers_invoke(self):
-        service = RagSummarizerService.__new__(RagSummarizerService)
-        service.retriever = DummyRetrieverWithInvoke()
+        service = _make_service(DummyRetrieverWithInvoke())
 
         docs = service.retriever_docs("扫地机器人")
 
@@ -48,8 +70,7 @@ class RagServiceTests(unittest.TestCase):
         self.assertEqual(docs[0].page_content, "扫地机器人 的参考内容")
 
     def test_retriever_docs_supports_legacy_langchain_api(self):
-        service = RagSummarizerService.__new__(RagSummarizerService)
-        service.retriever = DummyRetrieverWithLegacyMethod()
+        service = _make_service(DummyRetrieverWithLegacyMethod())
 
         docs = service.retriever_docs("小户型")
 
@@ -57,8 +78,7 @@ class RagServiceTests(unittest.TestCase):
         self.assertEqual(docs[0].page_content, "legacy::小户型")
 
     def test_rag_summarize_formats_context(self):
-        service = RagSummarizerService.__new__(RagSummarizerService)
-        service.retriever = DummyRetrieverWithInvoke()
+        service = _make_service(DummyRetrieverWithInvoke())
 
         captured = {}
 

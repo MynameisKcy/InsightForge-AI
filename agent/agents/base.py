@@ -12,7 +12,7 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from model.factory import chat_model
+from model.factory import get_chat_model
 
 
 class BaseAgent:
@@ -21,7 +21,7 @@ class BaseAgent:
     name: str = "base"
 
     def __init__(self):
-        self.model = chat_model
+        self.model = get_chat_model()
 
     def _call_llm(self, messages: list[dict]) -> str:
         """调用 LLM 并返回文本结果。"""
