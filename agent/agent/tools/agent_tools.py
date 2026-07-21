@@ -291,3 +291,93 @@ def get_customer_stats_tool() -> str:
             lines.append(f"  - {s['segment']}: {s['cnt']} 位客户")
 
     return "\n".join(lines)
+
+
+# ── 需求③：文件引用与文本报告 ──
+import json as _json
+
+try:
+    from utils.request_context import get_user_id as _get_user_id_ctx
+except ModuleNotFoundError:
+    from agent.utils.request_context import get_user_id as _get_user_id_ctx
+
+
+def _current_user_id() -> str:
+    try:
+        return _get_user_id_ctx()
+    except Exception:
+        return "default"
+
+
+def _list_text_files(user_id: str):
+    """列出文本类知识库文件（PDF/Word/TXT/MD，进 Chroma）。"""
+    try:
+        from utils.config_handler import chroma_conf
+    except ModuleNotFoundError:
+        from agent.utils.config_handler import chroma_conf
+    try:
+        from utils.file_handler import get_file_md5_hex
+    except ModuleNotFoundError:
+        from agent.utils.file_handler import get_file_md5_hex
+    try:
+        from utils.path_tool import get_abs_path
+    except ModuleNotFoundError:
+        from agent.utils.path_tool import get_abs_path
+    import os as _os
+    data_dir = get_abs_path(chroma_conf["data_path"])
+    allowed = tuple(chroma_conf.get("allowed_knowledge_file_type", ["txt", "pdf", "docx", "md"]))
+    files = []
+    if _os.path.isdir(data_dir):
+        for fname in sorted(_os.listdir(data_dir)):
+            fpath = _os.path.join(data_dir, fname)
+            if not _os.path.isfile(fpath):
+                continue
+            ext = _os.path.splitext(fname)[1].lower().lstrip(".")
+            if ext not in allowed:
+                continue
+            files.append({"name": fname, "type": "text",
+                          "status": "已完成", "size": _os.path.getsize(fpath),
+                          "path": fpath})
+    return files
+
+
+def _list_table_files(user_id: str):
+    """列出表格类数据集（CSV/Excel，进 DuckDB）。"""
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+    try:
+        return datasources_db.list_datasets(owner_user_id=user_id) or []
+    except Exception:
+        return []
+
+
+def _new_document_report_agent():
+    from agents.document_report_agent import DocumentReportAgent
+    return DocumentReportAgent()
+
+
+@tool(description="列出当前用户已上传的所有文件（文本类与表格类），含文件名、类型(text/table)、表名、状态。当用户要求基于某文件生成报告/分析时，先调用此工具确认可用文件。返回 JSON 字符串。")
+def list_user_files() -> str:
+    uid = _current_user_id()
+    files = []
+    for f in _list_text_files(uid):
+        files.append({"name": f.get("name"), "type": "text",
+                      "status": f.get("status", "已完成"),
+                      "path": f.get("path")})
+    for d in _list_table_files(uid):
+        files.append({"name": d.get("name"), "type": "table",
+                      "table_name": d.get("table_name"),
+                      "status": "已完成"})
+    return _json.dumps(files, ensure_ascii=False)
+
+
+@tool(description="对指定的文本类文件（PDF/Word/TXT/MD）生成结构化报告（摘要+关键要点+问答）。file_path 为文件完整路径，question 为可选问题（留空则自动生成要点问答）。返回 Markdown 字符串。")
+def document_report(file_path: str, question: str = "") -> str:
+    try:
+        agent = _new_document_report_agent()
+        result = agent.run(file_path, question=question or None)
+        return result["markdown"]
+    except Exception as e:
+        return f"报告生成失败：{e}"

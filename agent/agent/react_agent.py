@@ -12,32 +12,35 @@ for path in (PROJECT_ROOT, PROJECT_PARENT):
         sys.path.insert(0, path)
 
 try:
-    from agent.model.factory import chat_model
+    from agent.model.factory import get_chat_model
     from agent.utils.prompt_loader import load_system_prompts
     from agent.agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
                                                get_current_month,get_external_data,fill_report_context_for_report,
                                                run_full_analysis,get_data_overview,quick_data_insight,
-                                               get_chart_insights,get_customer_overview_tool,get_customer_stats_tool)
+                                               get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
+                                               list_user_files,document_report)
     from agent.agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
 except ModuleNotFoundError:
-    from model.factory import chat_model
+    from model.factory import get_chat_model
     from utils.prompt_loader import load_system_prompts
     from agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
                                          get_current_month,get_external_data,fill_report_context_for_report,
                                          run_full_analysis,get_data_overview,quick_data_insight,
-                                         get_chart_insights,get_customer_overview_tool,get_customer_stats_tool)
+                                         get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
+                                         list_user_files,document_report)
     from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
 
 
 class ReactAgent:
     def __init__(self):
         self.agent = create_agent(
-            model=chat_model,
+            model=get_chat_model(),
             system_prompt=load_system_prompts(),
             tools=[rag_sumarize, get_weather, get_user_id, get_user_location,
                    get_current_month, get_external_data, fill_report_context_for_report,
                    run_full_analysis, get_data_overview, quick_data_insight,
-                   get_chart_insights, get_customer_overview_tool, get_customer_stats_tool],
+                   get_chart_insights, get_customer_overview_tool, get_customer_stats_tool,
+                   list_user_files, document_report],
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
