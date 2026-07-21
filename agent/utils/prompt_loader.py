@@ -42,6 +42,9 @@ def load_rag_prompts():
 def load_report_prompts():
     return _load_prompt_file("report_prompt_path", "load report prompts")
 
+def load_document_report_prompts():
+    return _load_prompt_file("document_report_prompt_path", "load document report prompts")
+
 
 if __name__ == '__main__':
     print(load_system_prompts())
