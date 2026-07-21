@@ -772,6 +772,23 @@ body { font-family: var(--font-sans);
       </div>
     </div>
   </div>
+  <!-- ── 文件管理（需求②：统一文本/表格） ── -->
+  <div class="kb-section">
+    <div class="kb-header" onclick="toggleFilesSection()">
+      <h2><span class="section-chevron" id="chevronFiles">▼</span> 🗂️ 文件管理</h2>
+      <span class="kb-stats" id="filesCount">-</span>
+    </div>
+    <div class="section-body collapsed" id="sectionBodyFiles">
+      <div class="kb-body" id="allFileList" style="max-height:240px;">
+        <div class="kb-file" style="color:var(--sb-text-muted);justify-content:center;">加载中...</div>
+      </div>
+      <div class="kb-upload">
+        <input type="file" id="allFileInput" multiple accept=".txt,.pdf,.docx,.md,.csv,.xlsx,.xls">
+        <button class="kb-btn" onclick="document.getElementById('allFileInput').click()">＋ 上传文件（拖拽或选择）</button>
+        <div id="uploadProgress" style="margin-top:6px;font-size:11px;color:var(--sb-text-3);"></div>
+      </div>
+    </div>
+  </div>
   </div>
   <div class="sidebar-footer">
     <button class="btn-logout" onclick="logout()"><span>登出</span></button>
@@ -1482,6 +1499,156 @@ async function saveSettings() {
   } catch(e) {
     showToast('保存失败：' + e, 'error');
   }
+}
+
+// ── 文件管理（需求②：统一文本/表格 + 进度 + 状态轮询） ──
+function toggleFilesSection() {
+  var body = document.getElementById('sectionBodyFiles');
+  var chevron = document.getElementById('chevronFiles');
+  if (!body || !chevron) return;
+  body.classList.toggle('collapsed');
+  chevron.classList.toggle('collapsed');
+  if (!body.classList.contains('collapsed')) loadAllFiles();
+}
+async function loadAllFiles() {
+  try {
+    var r = await fetch('/api/files', {headers: authHeaders()});
+    if (!r.ok) {
+      document.getElementById('allFileList').innerHTML =
+        '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>';
+      return;
+    }
+    var data = await r.json();
+    var files = data.files || [];
+    document.getElementById('filesCount').textContent = files.length;
+    var list = document.getElementById('allFileList');
+    if (files.length === 0) {
+      list.innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">暂无文件</div>';
+      return;
+    }
+    list.innerHTML = files.map(function(f) {
+      var icon = f.type === 'table' ? '📊' : '📄';
+      var badge = f.status === '已完成'
+        ? '<span class="kb-badge in">完成</span>'
+        : (f.status === '失败'
+            ? '<span class="kb-badge" style="background:#e94560;color:#fff;">失败</span>'
+            : '<span class="kb-badge out">处理中</span>');
+      var sizeStr = f.size ? fmtSize(f.size) : '';
+      var delFn = f.type === 'table'
+        ? "deleteFile('" + escapeHtml(f.name) + "','table')"
+        : "deleteFile('" + escapeHtml(f.name) + "','text')";
+      var tail = f.type === 'table'
+        ? (f.table_name ? '<span style="font-size:10px;color:var(--sb-text-3);">表:' + escapeHtml(f.table_name) + '</span>' : '')
+        : (sizeStr ? '<span style="font-size:10px;color:var(--sb-text-3);">' + sizeStr + '</span>' : '');
+      return '<div class="kb-file" title="' + escapeHtml(f.name) + '">' +
+        '<span style="flex-shrink:0;">' + icon + '</span>' +
+        '<span class="kb-name">' + escapeHtml(f.name) + '</span>' +
+        tail + badge +
+        '<button class="kb-del" onclick="' + delFn + '" title="删除">✕</button>' +
+        '</div>';
+    }).join('');
+  } catch(e) {
+    console.log('加载文件列表失败:', e);
+  }
+}
+function _routeFileByExt(fname) {
+  var ext = (fname.split('.').pop() || '').toLowerCase();
+  if (['csv','xlsx','xls'].indexOf(ext) >= 0) return {kind:'table', endpoint:'/api/datasets/upload', field:'file'};
+  return {kind:'text', endpoint:'/api/knowledge/upload', field:'files'};
+}
+function _uploadOneWithProgress(file, progEl) {
+  return new Promise(function(resolve) {
+    var route = _routeFileByExt(file.name);
+    // 大文件阈值：PDF/Excel > 50MB 给提示
+    var bigExts = ['pdf','xlsx','xls'];
+    var ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (bigExts.indexOf(ext) >= 0 && file.size > 50 * 1024 * 1024) {
+      var mb = Math.round(file.size / 1024 / 1024);
+      progEl.textContent = '⚠️ ' + file.name + '（' + mb + 'MB）较大，预计解析较慢，正在上传...';
+    }
+    var xhr = new XMLHttpRequest();
+    var fd = new FormData();
+    fd.append(route.field, file);
+    xhr.open('POST', route.endpoint);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable) {
+        var pct = Math.round(e.loaded * 100 / e.total);
+        progEl.textContent = '上传中 ' + file.name + '：' + pct + '%';
+      }
+    };
+    xhr.onload = function() {
+      try {
+        var data = JSON.parse(xhr.responseText);
+        progEl.textContent = '';
+        // 文本类上传结果在 data.results[]，提取 advisory
+        if (data && data.results) {
+          data.results.forEach(function(r) {
+            if (r.ok !== false && r.success !== false && r.advisory) {
+              showToast(r.advisory, 'info', 5000);
+            }
+          });
+        }
+        resolve({ok: xhr.status >= 200 && xhr.status < 300, data: data, file: file.name, kind: route.kind});
+      } catch(e) {
+        progEl.textContent = '';
+        resolve({ok: false, error: '响应解析失败', file: file.name});
+      }
+    };
+    xhr.onerror = function() {
+      progEl.textContent = '';
+      resolve({ok: false, error: '网络错误', file: file.name});
+    };
+    xhr.send(fd);
+  });
+}
+document.getElementById('allFileInput').addEventListener('change', async function(e) {
+  var files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  var prog = document.getElementById('uploadProgress');
+  var results = [];
+  for (var i = 0; i < files.length; i++) {
+    var r = await _uploadOneWithProgress(files[i], prog);
+    results.push(r);
+  }
+  var ok = results.filter(function(x){return x.ok;}).length;
+  var fails = results.filter(function(x){return !x.ok;});
+  if (ok) showToast('上传完成：成功 ' + ok + ' / ' + files.length + ' 个', 'success');
+  fails.forEach(function(f) {
+    var msg = (f.data && f.data.error) || f.error || '失败';
+    showToast(f.file + ' 上传失败：' + msg, 'error', 5000);
+  });
+  loadAllFiles();
+  // 若有处理中项，轮询直到全部完成或超时
+  _pollFilesStatus(60000);
+  e.target.value = '';
+});
+function _pollFilesStatus(timeoutMs) {
+  var start = Date.now();
+  function tick() {
+    if (Date.now() - start > timeoutMs) return;
+    fetch('/api/files', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(data) {
+      var pending = (data.files || []).some(function(f){return f.status === '处理中';});
+      loadAllFiles();
+      if (pending) setTimeout(tick, 2000);
+    }).catch(function(){ /* ignore */ });
+  }
+  setTimeout(tick, 1500);
+}
+async function deleteFile(name, type) {
+  if (!(await showConfirm('确认删除「' + name + '」？\n' + (type === 'table' ? '将同时删除 DuckDB 表和本地文件' : '将从向量库移除对应分片')))) return;
+  var url = type === 'table'
+    ? '/api/datasets/' + encodeURIComponent(name)
+    : '/api/knowledge/files/' + encodeURIComponent(name);
+  try {
+    var r = await fetch(url, {method: 'DELETE', headers: authHeaders()});
+    var data = await r.json();
+    if (data.success !== undefined && !data.success) {
+      showToast(data.error || '删除失败', 'error', 4000); return;
+    }
+    showToast('已删除「' + name + '」', 'success');
+    loadAllFiles();
+  } catch(e) { showToast('删除失败：' + e.message, 'error', 4000); }
 }
 
 // ── 初始化 ──
@@ -2206,6 +2373,16 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
             results.append({"filename": fname, "success": False,
                             "error": f"不支持的文件类型: {ext}"})
             continue
+        # 大文件保护：超过 100MB 拒绝；PDF/Excel >50MB 给预估提示
+        size = f.size if hasattr(f, "size") and f.size is not None else 0
+        if size > _MAX_DATASET_SIZE:
+            results.append({"filename": fname, "success": False,
+                            "error": "文件过大（超过 100MB 上限），请拆分或压缩后再上传"})
+            continue
+        advisory = ""
+        if ext in ("pdf", "docx") and size > 50 * 1024 * 1024:
+            mb = max(1, round(size / 1024 / 1024))
+            advisory = f"文件较大（{mb}MB），解析入库预计较慢，请耐心等待"
         fpath = os.path.join(data_dir, fname)
         try:
             content = await f.read()
@@ -2217,6 +2394,7 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
                 "success": True,
                 "chunks": chunks,
                 "skipped": skipped,
+                "advisory": advisory,
             })
         except Exception as e:
             logger.error(f"知识库上传入库失败 {fname}: {traceback.format_exc()}")
