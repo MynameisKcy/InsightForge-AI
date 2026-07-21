@@ -8,14 +8,8 @@ for p in (PROJECT_ROOT, PROJECT_PARENT):
 
 import agent.tools.agent_tools as tools
 
-def test_list_user_files_returns_json(monkeypatch):
-    monkeypatch.setattr(tools, "_current_user_id", lambda: "u1")
-    monkeypatch.setattr(tools, "_list_text_files", lambda u: [{"name": "a.pdf", "status": "已完成"}])
-    monkeypatch.setattr(tools, "_list_table_files", lambda u: [{"name": "sales.csv", "table_name": "sales"}])
-    out = tools.list_user_files.invoke({})
-    data = json.loads(out)
-    assert any(f["name"] == "a.pdf" and f["type"] == "text" for f in data)
-    assert any(f["name"] == "sales.csv" and f["type"] == "table" for f in data)
+# list_user_files 的格式 + 隔离契约见 test_user_isolation_files.py
+# 这里只守 document_report 工具的契约
 
 def test_document_report_calls_agent(monkeypatch, tmp_path):
     txt = tmp_path / "note.txt"
@@ -27,3 +21,11 @@ def test_document_report_calls_agent(monkeypatch, tmp_path):
     monkeypatch.setattr(tools, "_new_document_report_agent", lambda: _StubAgent())
     out = tools.document_report.invoke({"file_path": str(txt), "question": ""})
     assert "stub" in out
+
+def test_document_report_error_is_friendly(monkeypatch):
+    """document_report 内部异常时应返回友好错误，而非抛栈。"""
+    def _boom():
+        raise RuntimeError("boom")
+    monkeypatch.setattr(tools, "_new_document_report_agent", _boom)
+    out = tools.document_report.invoke({"file_path": "x.pdf", "question": ""})
+    assert "报告生成失败" in out
