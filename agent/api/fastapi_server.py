@@ -478,6 +478,37 @@ body { font-family: var(--font-sans);
 .kb-reindex { padding: 0 var(--sp-4) var(--sp-3); }
 .kb-reindex .kb-btn { border-style: solid; font-size: 11px; }
 
+/* ── 账号设置（需求①） ── */
+.set-section {
+  margin: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3);
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--sb-border);
+  border-radius: var(--r-lg);
+}
+.set-header { padding: 0 var(--sp-4) var(--sp-2); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+.set-header h2 { font-size: 13px; color: var(--sb-text); font-weight: 600; display:flex; align-items:center; gap:var(--sp-1); }
+.set-dot { width:8px; height:8px; border-radius:50%; background: var(--accent); display:inline-block; }
+.set-dot.ok { background: var(--success); }
+.set-body { padding: 0 var(--sp-3) var(--sp-2); }
+.set-group { margin-bottom: var(--sp-3); }
+.set-group-title { font-size: 11px; color: var(--sb-text-3); margin-bottom: var(--sp-1); text-transform: uppercase; letter-spacing:.5px; }
+.set-field { margin-bottom: var(--sp-2); }
+.set-field label { display:block; font-size: 11px; color: var(--sb-text-2); margin-bottom: 2px; }
+.set-field input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 12px;
+  border-radius: var(--r-sm); border: 1px solid var(--sb-border);
+  background: var(--sb-bg-elev); color: var(--sb-text); }
+.set-key-row { display:flex; gap: var(--sp-1); }
+.set-key-row input { flex: 1; }
+.set-toggle { min-width:32px; min-height:30px; padding:4px 8px; border-radius: var(--r-sm);
+  border:1px solid var(--sb-border); background:transparent; color:var(--sb-text-muted); cursor:pointer; font-size:11px; }
+.set-actions { padding: 0 var(--sp-4) var(--sp-3); display:flex; gap:var(--sp-2); }
+.set-actions .kb-btn { flex: 1; border-style: solid; }
+.set-banner { margin: var(--sp-2) var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  background: rgba(233,69,96,.12); border:1px solid var(--accent); border-radius: var(--r-md);
+  color: var(--sb-text); font-size: 12px; display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2); }
+.set-banner a { color: var(--accent); cursor:pointer; font-weight:600; text-decoration:underline; }
+
 /* ── 数据集管理 ── */
 .ds-section {
   margin: var(--sp-2) var(--sp-3);
@@ -646,6 +677,10 @@ body { font-family: var(--font-sans);
     <button class="btn-new-session" onclick="newSession()"><span>+ 新会话</span></button>
   </div>
   <div class="sidebar-scroll">
+  <div class="set-banner" id="settingsBanner" style="display:none;">
+    <span>⚠️ 检测到尚未配置 LLM，将使用默认值。建议先配置。</span>
+    <a onclick="openSettingsPanel()">前往配置</a>
+  </div>
   <div class="session-list" id="sessionList">
     <div class="no-sessions">暂无会话记录</div>
   </div>
@@ -682,6 +717,59 @@ body { font-family: var(--font-sans);
     <div class="kb-reindex">
       <button class="kb-btn" onclick="kbReindex()">⟳ 全量重建索引</button>
     </div>
+    </div>
+  </div>
+  <!-- ── 账号设置（需求①） ── -->
+  <div class="set-section">
+    <div class="set-header" onclick="toggleSection('set')">
+      <h2><span class="section-chevron" id="chevronSet">▼</span> ⚙️ 账号设置 <span class="set-dot" id="settingsDot"></span></h2>
+    </div>
+    <div class="section-body collapsed" id="sectionBodySet">
+      <div class="set-body">
+        <div class="set-group">
+          <div class="set-group-title">LLM 配置</div>
+          <div class="set-field">
+            <label>API Key</label>
+            <div class="set-key-row">
+              <input type="password" id="setApiKey" placeholder="sk-****（掩码显示，点击编辑明文输入）" autocomplete="off">
+              <button class="set-toggle" id="setKeyToggle" onclick="toggleKeyEdit()">编辑</button>
+            </div>
+          </div>
+          <div class="set-field">
+            <label>模型名称（如 qwen-max）</label>
+            <input type="text" id="setChatModel" placeholder="qwen-max">
+          </div>
+        </div>
+        <div class="set-group">
+          <div class="set-group-title">向量配置</div>
+          <div class="set-field">
+            <label>向量模型名称（如 text-embedding-v2）</label>
+            <input type="text" id="setEmbedModel" placeholder="text-embedding-v2">
+          </div>
+          <div class="set-field">
+            <label>向量库 host（可选，留空用本地 ChromaDB）</label>
+            <input type="text" id="setVdbHost" placeholder="（本地模式，留空）">
+          </div>
+          <div class="set-field">
+            <label>向量库 port</label>
+            <input type="text" id="setVdbPort" placeholder="">
+          </div>
+          <div class="set-field">
+            <label>collection / tenant</label>
+            <input type="text" id="setVdbCollection" placeholder="">
+          </div>
+        </div>
+        <div class="set-group">
+          <div class="set-group-title">数据库配置</div>
+          <div class="set-field">
+            <label>本地数据库连接串（SQLite 路径或 MySQL DSN）</label>
+            <input type="text" id="setLocalDb" placeholder="sqlite:///database/memory.db">
+          </div>
+        </div>
+      </div>
+      <div class="set-actions">
+        <button class="kb-btn" onclick="saveSettings()">💾 保存</button>
+      </div>
     </div>
   </div>
   </div>
@@ -724,11 +812,17 @@ document.getElementById('userDisplay').textContent = '👤 ' + accountName;
 
 // ── 可折叠侧边栏分区 ──
 function toggleSection(name) {
-  var body = document.getElementById('sectionBody' + (name === 'ds' ? 'Ds' : 'Kb'));
-  var chevron = document.getElementById('chevron' + (name === 'ds' ? 'Ds' : 'Kb'));
+  var suffix = {ds:'Ds', kb:'Kb', set:'Set'}[name];
+  if (!suffix) return;
+  var body = document.getElementById('sectionBody' + suffix);
+  var chevron = document.getElementById('chevron' + suffix);
   if (!body || !chevron) return;
   body.classList.toggle('collapsed');
   chevron.classList.toggle('collapsed');
+  // 账号设置面板展开时加载掩码配置
+  if (name === 'set' && !body.classList.contains('collapsed')) {
+    loadSettings();
+  }
 }
 
 // ── 移动端抽屉 ──
@@ -1301,9 +1395,99 @@ function resolveModal(result) {
   if (_modalResolve) { _modalResolve(result); _modalResolve = null; }
 }
 
+// ── 账号设置（需求①） ──
+var _setKeyEditing = false;
+async function loadSettingsStatus() {
+  // 登录后查是否已配置；未配置则弹提示横幅 + 侧边栏红点
+  try {
+    var r = await fetch('/api/settings/status', {headers: authHeaders()});
+    var d = await r.json();
+    var banner = document.getElementById('settingsBanner');
+    var dot = document.getElementById('settingsDot');
+    if (d.authed && !d.configured) {
+      if (banner) banner.style.display = 'flex';
+      if (dot) dot.classList.remove('ok');
+    } else {
+      if (banner) banner.style.display = 'none';
+      if (dot) dot.classList.add('ok');
+    }
+  } catch(e) { console.log('加载配置状态失败:', e); }
+}
+async function loadSettings() {
+  // 拉取掩码配置填表
+  try {
+    var r = await fetch('/api/settings', {headers: authHeaders()});
+    if (r.status === 401) return;
+    var d = await r.json();
+    if (!d.configured) return;
+    var s = d.settings || {};
+    document.getElementById('setApiKey').value = s.llm_api_key || '';
+    document.getElementById('setApiKey').type = 'password';
+    document.getElementById('setChatModel').value = s.llm_model_name || '';
+    document.getElementById('setEmbedModel').value = s.embedding_model_name || '';
+    document.getElementById('setVdbHost').value = s.vector_db_host || '';
+    document.getElementById('setVdbPort').value = s.vector_db_port || '';
+    document.getElementById('setVdbCollection').value = s.vector_db_collection || '';
+    document.getElementById('setLocalDb').value = s.local_db_conn || '';
+    _setKeyEditing = false;
+    document.getElementById('setKeyToggle').textContent = '编辑';
+  } catch(e) { console.log('加载配置失败:', e); }
+}
+function toggleKeyEdit() {
+  var inp = document.getElementById('setApiKey');
+  var btn = document.getElementById('setKeyToggle');
+  _setKeyEditing = !_setKeyEditing;
+  if (_setKeyEditing) {
+    // 进入编辑：清空掩码值，明文输入
+    inp.value = '';
+    inp.type = 'text';
+    inp.placeholder = '输入新的 API Key（明文）';
+    btn.textContent = '取消';
+  } else {
+    // 取消编辑：重新拉取掩码值
+    loadSettings();
+  }
+}
+function openSettingsPanel() {
+  var body = document.getElementById('sectionBodySet');
+  var chevron = document.getElementById('chevronSet');
+  if (body) body.classList.remove('collapsed');
+  if (chevron) chevron.classList.remove('collapsed');
+}
+async function saveSettings() {
+  var payload = {
+    llm_api_key: document.getElementById('setApiKey').value,
+    llm_model_name: document.getElementById('setChatModel').value,
+    embedding_model_name: document.getElementById('setEmbedModel').value,
+    vector_db_host: document.getElementById('setVdbHost').value,
+    vector_db_port: document.getElementById('setVdbPort').value,
+    vector_db_collection: document.getElementById('setVdbCollection').value,
+    local_db_conn: document.getElementById('setLocalDb').value
+  };
+  // 若未进入编辑模式且 key 含掩码标记，则不发送明文 key 字段（后端会保留旧值）
+  try {
+    var r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+    if (d.ok) {
+      showToast('配置已生效（无需重启）', 'success');
+      await loadSettings();        // 刷新掩码展示
+      await loadSettingsStatus();  // 刷新红点/横幅
+    } else {
+      showToast('保存失败：' + (d.error || '未知错误'), 'error');
+    }
+  } catch(e) {
+    showToast('保存失败：' + e, 'error');
+  }
+}
+
 // ── 初始化 ──
 loadSessions();
 loadKbFiles();
+loadSettingsStatus();
 document.getElementById('userInput').focus();
 </script>
 <div class="toast-container" id="toastContainer"></div>
@@ -1849,6 +2033,68 @@ def _kb_allowed_types() -> tuple:
     except ModuleNotFoundError:
         from agent.utils.config_handler import chroma_conf
     return tuple(chroma_conf["allowed_knowledge_file_type"])
+
+
+# ── 账号设置（需求①：配置管理 + 热重载） ──
+try:
+    from database.user_settings_db import user_settings_db
+except ModuleNotFoundError:
+    from agent.database.user_settings_db import user_settings_db
+
+try:
+    from model.factory import reload_model_config
+except ModuleNotFoundError:
+    from agent.model.factory import reload_model_config
+
+
+@app.get("/api/settings/status")
+async def get_settings_status(request: Request):
+    """返回当前用户是否已配置。前端登录后据此决定是否弹提示。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"configured": False, "authed": False})
+    return {"configured": user_settings_db.has(user_id), "authed": True}
+
+
+@app.get("/api/settings")
+async def get_settings(request: Request):
+    """返回当前用户配置（API Key 掩码）。未登录 401，未配置返回 null。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"configured": False, "settings": None}, status_code=401)
+    data = user_settings_db.get_masked(user_id)
+    if data is None:
+        return {"configured": False, "settings": None}
+    return {"configured": True, "settings": data}
+
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    """保存用户配置并触发热重载。前端回传掩码值时不覆盖已存明文 key。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+    allowed = {"llm_api_key", "llm_model_name", "embedding_model_name",
+               "vector_db_host", "vector_db_port", "vector_db_collection",
+               "vector_db_tenant", "local_db_conn"}
+    cleaned = {k: v for k, v in body.items() if k in allowed}
+    # 前端回传掩码值（含 ****）：不覆盖已存明文 key
+    if "****" in str(cleaned.get("llm_api_key", "")):
+        cleaned.pop("llm_api_key", None)
+        existing = user_settings_db.get(user_id) or {}
+        if existing.get("llm_api_key"):
+            cleaned["llm_api_key"] = existing["llm_api_key"]
+    try:
+        user_settings_db.upsert(user_id, cleaned)
+        reload_model_config(user_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.exception("保存配置失败")
+        return JSONResponse({"ok": False, "error": f"保存失败: {e}"}, status_code=500)
 
 
 @app.get("/api/knowledge/files")
