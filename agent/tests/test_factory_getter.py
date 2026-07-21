@@ -8,12 +8,6 @@ for p in (PROJECT_ROOT, PROJECT_PARENT):
 
 import model.factory as fac
 
-def test_getter_returns_model_instance():
-    # bump 版本确保初始化
-    fac._config_version += 1
-    m = fac.get_chat_model()
-    assert m is not None
-
 def test_reload_returns_new_instance_after_bump(monkeypatch):
     fac._config_version += 1
     a = fac.get_chat_model()
