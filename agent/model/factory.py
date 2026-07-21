@@ -44,10 +44,8 @@ _embed_model_version = -1
 def _current_user_id() -> str:
     """从 request_context 取当前 user_id；取不到返回 'default'。"""
     try:
-        from utils.request_context import get_request_context
-        ctx = get_request_context()
-        if ctx and getattr(ctx, "user_id", None):
-            return ctx.user_id
+        from utils.request_context import get_user_id
+        return get_user_id()
     except Exception:
         pass
     return "default"
