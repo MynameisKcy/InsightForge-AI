@@ -21,7 +21,7 @@
 
 ## 项目亮点
 
-- **自然语言驱动，多智能体协作**：用一句话描述需求，7 个专业 Agent（规划 / SQL / 趋势 / 产品 / 风险 / 可视化 / 报告 / 导出）自动编排成完整分析链路，无需手写 SQL 或脚本。
+- **自然语言驱动，多智能体协作**：用一句话描述需求，多个专业 Agent（规划 / SQL / 趋势 / 产品 / 风险 / 可视化 / 报告 / 导出 / 文本报告）自动编排成完整分析链路，无需手写 SQL 或脚本。
 - **多格式文件上传与处理**：支持 **CSV / Excel**（表格类，入 DuckDB 可直接 SQL 查询与跨表 JOIN）和 **PDF / Word / TXT / Markdown**（文本类，入 ChromaDB 向量库做 RAG 问答与摘要报告）。上传后自动解析、分块、向量化，全程进度可视、状态可轮询。
 - **多种交互式图表生成**：Visualization Agent 根据数据特征自动选择图表类型，Plotly 渲染 **折线图 / 柱状图 / 饼图 / 热力图 / 散点图**，图表内嵌 SSE 流式回传前端。
 - **多格式报告导出**：Jinja2 模板渲染结构化 Markdown 分析报告，一键导出 **Markdown / Word (docx) / PDF / HTML**。
@@ -40,7 +40,7 @@ User (FastAPI / Streamlit)
   │
   ▼
 ReactAgent (智能客服入口 — LangGraph Agent)
-  │  自动判断需求类型，调度工具
+  │  自动判断需求类型，调度工具（共 15 个 @tool）
   │
   ├── rag_sumarize         → RAG 知识库问答（ChromaDB）
   ├── run_full_analysis    → 触发完整分析流程（表格类文件）
@@ -49,7 +49,10 @@ ReactAgent (智能客服入口 — LangGraph Agent)
   ├── quick_data_insight   → 快速数据分析
   ├── get_data_overview    → 数据概况探查（遍历所有 DuckDB 表）
   ├── get_chart_insights   → 图表知识库检索
-  └── get_external_data    → 外部数据查询
+  ├── get_external_data    → 外部数据查询
+  ├── get_customer_overview_tool / get_customer_stats_tool → 客户概况/统计
+  ├── fill_report_context_for_report → 注入个性化报告上下文（中间件联动）
+  └── get_current_month / get_weather / get_user_location / get_user_id → 辅助上下文工具
 
        │ (run_full_analysis 内部)
        ▼
@@ -193,7 +196,8 @@ agent/
 │       └── middleware.py     # LangGraph 中间件
 ├── analysis/
 │   ├── trend_analysis.py     # 趋势分析算法
-│   └── product_analysis.py   # 产品分析算法
+│   ├── product_analysis.py   # 产品分析算法
+│   └── anomaly_detection.py  # 异常检测算法（IQR + Z-score，Risk/Trend 调用）
 ├── visualization/
 │   └── charts.py             # Plotly 图表生成器
 ├── rag/
@@ -222,11 +226,18 @@ agent/
 ├── templates/                # Jinja2 报告模板
 ├── reports/                  # 生成的报告和图表（运行时，已 gitignore）
 ├── data/                     # 数据文件（含知识库源文件）
+├── tests/                    # 测试套件（13 个文件，LLM 调用全 mock，离线可跑）
+├── .env.example             # 环境变量模板（可 cp 为 .env 后填写）
 ├── .env                      # 环境变量（DASHSCOPE_API_KEY、模型名，已 gitignore）
 ├── requirements.txt          # 依赖清单
-├── app.py                    # Streamlit 界面入口
-└── README.md                 # 本文件
+└── app.py                    # Streamlit 界面入口
 ```
+
+**仓库根目录**还包含：
+- `README.md` — 本文件
+- `CLAUDE.md` — 项目开发指引（给 AI 助手的上下文说明）
+- `images/` — 界面运行效果截图（`show_image1~3.png`）
+- `docs/` — 设计文档与实施计划（`superpowers/` 子目录）
 
 ---
 
@@ -254,7 +265,13 @@ pip install -r requirements.txt
 
 ### 3. 配置 API Key
 
-在 `agent/` 目录下创建 `.env`（**不会提交到 Git**）：
+仓库已附 `agent/.env.example` 模板，复制后填写即可：
+
+```bash
+cp agent/.env.example agent/.env
+```
+
+`.env`（**不会提交到 Git**）关键字段：
 
 ```dotenv
 # DashScope API Key（通义千问 + 向量 + rerank 共用）
