@@ -2133,6 +2133,60 @@ async def kb_list_files(request: Request):
     return JSONResponse({"files": files, "count": len(files)})
 
 
+@app.get("/api/files")
+async def list_all_files(request: Request):
+    """统一文件列表（需求②）：文本类（Chroma 知识库）+ 表格类（DuckDB 数据集）。"""
+    user_id = await _get_user_id(request)
+    if user_id == "anonymous":
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    files = []
+    # ── 文本类（PDF/Word/TXT/MD，进 Chroma）──
+    data_dir = _kb_data_dir()
+    allowed = _kb_allowed_types()
+    try:
+        from utils.file_handler import get_file_md5_hex
+    except ModuleNotFoundError:
+        from agent.utils.file_handler import get_file_md5_hex
+    try:
+        vs = _get_vector_store()
+        ingested_md5 = vs._load_md5_store()
+    except Exception as e:
+        logger.warning(f"加载向量库 md5 失败: {e}")
+        ingested_md5 = set()
+    if os.path.isdir(data_dir):
+        for fname in sorted(os.listdir(data_dir)):
+            fpath = os.path.join(data_dir, fname)
+            if not os.path.isfile(fpath):
+                continue
+            ext = os.path.splitext(fname)[1].lower().lstrip(".")
+            if ext not in allowed:
+                continue
+            md5 = get_file_md5_hex(fpath) or ""
+            status = "已完成" if (md5 in ingested_md5 if md5 else False) else "处理中"
+            files.append({
+                "name": fname, "type": "text",
+                "size": os.path.getsize(fpath),
+                "upload_time": "", "status": status, "source": "chroma",
+            })
+    # ── 表格类（CSV/Excel，进 DuckDB）──
+    try:
+        from database.datasources_db import datasources_db
+    except ModuleNotFoundError:
+        from agent.database.datasources_db import datasources_db
+    try:
+        for d in datasources_db.list_datasets(owner_user_id=user_id):
+            files.append({
+                "name": d.get("name"), "type": "table",
+                "size": d.get("row_count"),
+                "upload_time": d.get("created_at", ""),
+                "status": "已完成", "source": "duckdb",
+                "table_name": d.get("table_name"),
+            })
+    except Exception as e:
+        logger.warning(f"列数据集失败: {e}")
+    return JSONResponse({"files": files, "count": len(files)})
+
+
 @app.post("/api/knowledge/upload")
 async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
     """上传文件到 data/ 并增量入库。"""
