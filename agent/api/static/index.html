@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Data Analyst - 登录</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+       height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-card { background: #fff; border-radius: 16px; padding: 40px; width: 380px;
+              box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.login-card h1 { font-size: 22px; color: #1a1a2e; margin-bottom: 4px; }
+.login-card .sub { color: #718096; font-size: 13px; margin-bottom: 24px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 13px; font-weight: 600; color: #4a5568;
+                    margin-bottom: 6px; }
+.form-group input { width: 100%; padding: 10px 14px; border: 2px solid #e2e8f0;
+                    border-radius: 8px; font-size: 14px; outline: none; transition: border-color .2s; }
+.form-group input:focus { border-color: #e94560; }
+.btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 15px;
+       font-weight: 600; cursor: pointer; transition: background .2s; margin-top: 8px; }
+.btn-primary { background: #e94560; color: #fff; }
+.btn-primary:hover { background: #c23152; }
+.btn-ghost { background: transparent; color: #e94560; font-size: 13px; margin-top: 4px; }
+.error-msg { background: #fed7d7; color: #c53030; padding: 10px; border-radius: 8px;
+             font-size: 13px; margin-bottom: 12px; display: none; }
+.success-msg { background: #c6f6d5; color: #2f855a; padding: 10px; border-radius: 8px;
+               font-size: 13px; margin-bottom: 12px; display: none; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <h1>🤖 AI Data Analyst</h1>
+  <p class="sub">登录以使用数据分析服务</p>
+  <div class="error-msg" id="errMsg"></div>
+  <div class="success-msg" id="sucMsg"></div>
+  <form id="loginForm" onsubmit="handleLogin(event)">
+    <div class="form-group">
+      <label>账号</label>
+      <input type="text" id="account" placeholder="请输入账号" required autofocus>
+    </div>
+    <div class="form-group">
+      <label>密码</label>
+      <input type="password" id="password" placeholder="请输入密码" required>
+    </div>
+    <button type="submit" class="btn btn-primary" id="submitBtn">登 录</button>
+  </form>
+  <form id="regForm" style="display:none" onsubmit="handleRegister(event)">
+    <div class="form-group">
+      <label>账号</label>
+      <input type="text" id="regAccount" placeholder="请输入账号（至少2位）" required>
+    </div>
+    <div class="form-group">
+      <label>密码</label>
+      <input type="password" id="regPassword" placeholder="请输入密码（至少3位）" required>
+    </div>
+    <div class="form-group">
+      <label>确认密码</label>
+      <input type="password" id="regPassword2" placeholder="请再次输入密码" required>
+    </div>
+    <button type="submit" class="btn btn-primary" id="regSubmitBtn">注 册</button>
+  </form>
+  <button class="btn btn-ghost" id="toggleBtn" onclick="toggleMode()">没有账号？点击注册</button>
+</div>
+<script>
+let isLogin = true;
+function toggleMode() {
+  isLogin = !isLogin;
+  document.getElementById('loginForm').style.display = isLogin ? 'block' : 'none';
+  document.getElementById('regForm').style.display = isLogin ? 'none' : 'block';
+  document.getElementById('toggleBtn').textContent = isLogin ? '没有账号？点击注册' : '已有账号？点击登录';
+  document.getElementById('submitBtn').textContent = isLogin ? '登 录' : '注 册';
+  hideMsgs();
+}
+function hideMsgs() {
+  document.getElementById('errMsg').style.display = 'none';
+  document.getElementById('sucMsg').style.display = 'none';
+}
+async function handleLogin(e) {
+  e.preventDefault(); hideMsgs();
+  const account = document.getElementById('account').value.trim();
+  const password = document.getElementById('password').value;
+  if (!account || !password) return showErr('请输入账号和密码');
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; btn.textContent = '登录中...';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({account, password})
+    });
+    const d = await _safeJson(r);
+    if (d.success) {
+      sessionStorage.setItem('token', d.token);
+      sessionStorage.setItem('account', d.account);
+      window.location.href = '/app';
+    } else showErr(d.error || '登录失败');
+  } catch(e) { showErr('网络错误: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = '登 录'; }
+}
+async function handleRegister(e) {
+  e.preventDefault(); hideMsgs();
+  const account = document.getElementById('regAccount').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const password2 = document.getElementById('regPassword2').value;
+  if (!account || !password) return showErr('请输入账号和密码');
+  if (password !== password2) return showErr('两次密码输入不一致');
+  const btn = document.getElementById('regSubmitBtn');
+  btn.disabled = true; btn.textContent = '注册中...';
+  try {
+    const r = await fetch('/api/register', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({account, password})
+    });
+    const d = await _safeJson(r);
+    if (d.success) {
+      document.getElementById('sucMsg').textContent = '注册成功！已自动登录...';
+      document.getElementById('sucMsg').style.display = 'block';
+      sessionStorage.setItem('token', d.token);
+      sessionStorage.setItem('account', d.account);
+      setTimeout(() => { window.location.href = '/app'; }, 800);
+    } else showErr(d.error || '注册失败');
+  } catch(e) { showErr('网络错误: ' + e.message); }
+  finally { btn.disabled = false; btn.textContent = '注 册'; }
+}
+async function _safeJson(r) {
+  if (!r.ok) {
+    try { const e = await r.json(); return e; }
+    catch(_) { throw new Error('服务器错误 (HTTP ' + r.status + ')'); }
+  }
+  return await r.json();
+}
+function showErr(msg) {
+  const el = document.getElementById('errMsg');
+  el.textContent = msg; el.style.display = 'block';
+}
+</script>
+</body>
+</html>
