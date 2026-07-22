@@ -42,7 +42,6 @@
 
   /* === Status (used sparingly; never invented metrics) === */
   --color-ok:           var(--color-accent-2);  /* "200 OK" / pass chip */
-  --color-warn:         oklch(75% 0.15 75);     /* amber — reserved, do not flood */
   --color-error:        oklch(68% 0.19 22);     /* coral-red — auth error base */
   --color-error-ink:    oklch(78% 0.16 22);     /* readable coral-red text on dark error surface */
   --color-error-surface: oklch(68% 0.19 22 / 0.12);  /* auth error fill */
@@ -94,7 +93,6 @@
   --radius-md:   6px;    /* buttons, inputs — Cobalt default */
   --radius-lg:   8px;    /* cards */
   --radius-xl:   10px;   /* code hero card */
-  --radius-pill: 999px;  /* reserved — NOT used on CTAs (anti-slop); status chips only */
 
   /* === Motion — composed and sparse; transform/opacity only === */
   --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);

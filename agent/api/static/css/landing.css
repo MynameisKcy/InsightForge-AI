@@ -111,7 +111,7 @@ body {
    hum-07 DNA carry adapted to sci-tech — the grid IS the background discipline). ── */
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);  /* lede LEFT, code demo RIGHT — asymmetric Workbench */
   gap: var(--space-xl);
   max-width: var(--page-max);
   margin: 0 auto;
@@ -395,7 +395,7 @@ body {
 
 /* ── Responsive — single-column collapse on mobile (gate 52) ── */
 @media (max-width: 48rem) {
-  .hero { padding: var(--space-xl) var(--page-gutter) var(--space-lg); }
+  .hero { padding: var(--space-xl) var(--page-gutter) var(--space-lg); grid-template-columns: minmax(0, 1fr); }  /* collapse to single stacked column */
   .features-grid { grid-template-columns: 1fr; }   /* gate 52 — collapse to one column */
   .nav-bar { padding: var(--space-2xs) var(--page-gutter); }
   .nav-brand { font-size: var(--text-md); }
