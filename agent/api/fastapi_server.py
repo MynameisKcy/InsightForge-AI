@@ -106,7 +106,7 @@ app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _long_term_memory = LongTermMemory()
 
 # ── 鉴权依赖 + 静态资源目录 ──
-from api.auth import require_auth, get_current_user  # noqa: E402
+from api.auth import require_auth, get_current_user, invalidate_token, extract_token  # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -205,6 +205,7 @@ async def api_logout(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if token:
         user_db.logout(token)
+        invalidate_token(token)
     return JSONResponse(content={"success": True})
 
 
@@ -832,6 +833,8 @@ async def api_update_profile(request: Request, user=Depends(require_auth)):
     if len(nickname) > 30:
         nickname = nickname[:30]
     user_db.update_profile(user_id, nickname=nickname)
+    # 失效短缓存，使后续 /api/me 立即读到新昵称
+    invalidate_token(extract_token(request))
     return JSONResponse(content={"ok": True, "nickname": nickname})
 
 
@@ -867,6 +870,8 @@ async def api_change_password(request: Request, user=Depends(require_auth)):
     )
     if not result.get("success"):
         return JSONResponse(result, status_code=400)
+    # 改密成功后失效短缓存，强制后续请求重新查库
+    invalidate_token(extract_token(request))
     return JSONResponse(result)
 
 
