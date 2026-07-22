@@ -409,9 +409,13 @@ async function streamChat(text, bubble) {
   }
 
   if (response.status === 401) {
+    // authedFetch 内部已清 token 并（在主应用上）跳转回落地页，且去重——只触发一次。
+    // 这里只负责给用户一次可见提示，不再重复 setTimeout 跳转，避免多次通知。
     clearTimeout(idleTimer);
-    showToast('登录已失效，请重新登录', 'error', 3000);
-    setTimeout(() => { window.location.href = '/'; }, 1200);
+    if (!window._authExpiredNotified) {
+      window._authExpiredNotified = true;
+      showToast('登录已失效，请重新登录', 'error', 3000);
+    }
     throw new Error('未登录，请重新登录');
   }
   if (!response.ok) {
