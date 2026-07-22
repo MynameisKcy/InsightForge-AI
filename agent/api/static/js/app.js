@@ -344,7 +344,7 @@ async function sendMessage() {
   } catch (err) {
     // 用户主动停止或超时：streamChat 内部已处理气泡，不在此覆写
     if (!userStopped) {
-      bubble.innerHTML = `<span style="color:#c53030">请求失败: ${err.message}</span>`;
+      bubble.innerHTML = `<span style="color:var(--color-error)">请求失败: ${err.message}</span>`;
     }
   } finally {
     isProcessing = false;
@@ -444,7 +444,7 @@ async function streamChat(text, bubble) {
     if (data === '[DONE]') return false;
 
     if (data.startsWith('[ERROR]')) {
-      bubble.innerHTML = `<span style="color:#c53030">${escapeHtml(data.slice(7))}</span>`;
+      bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(data.slice(7))}</span>`;
       if (statusEl) statusEl.style.display = 'none';
       return true;
     }
@@ -543,11 +543,11 @@ async function streamChat(text, bubble) {
       if (statusEl) statusEl.style.display = 'none';
       // 用户主动停止：保留已生成内容，不打"超时"红字
       if (userStopped) {
-        if (!fullText.trim()) bubble.innerHTML = '<span style="color:var(--sb-text-muted)">已停止生成。</span>';
+        if (!fullText.trim()) bubble.innerHTML = '<span style="color:var(--color-ink-3)">已停止生成。</span>';
         return;
       }
       // 真·超时：无内容才提示
-      if (!fullText.trim()) bubble.innerHTML = '<span style="color:#c53030">请求超时，请重试。</span>';
+      if (!fullText.trim()) bubble.innerHTML = '<span style="color:var(--color-error)">请求超时，请重试。</span>';
       return;
     }
     throw err;
@@ -747,12 +747,12 @@ function fmtSize(bytes) {
 async function loadKbFiles() {
   try {
     const r = await Auth.authedFetch('/api/knowledge/files', {headers: authHeaders()});
-    if (!r.ok) { document.getElementById('kbFileList').innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
+    if (!r.ok) { document.getElementById('kbFileList').innerHTML = '<div class="kb-file" style="color:var(--color-ink-3);justify-content:center;">加载失败</div>'; return; }
     const data = await r.json();
     const files = data.files || [];
     const list = document.getElementById('kbFileList');
     if (files.length === 0) {
-      list.innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">暂无知识库文件</div>';
+      list.innerHTML = '<div class="kb-file" style="color:var(--color-ink-3);justify-content:center;">暂无知识库文件</div>';
     } else {
       list.innerHTML = files.map(f => {
         const badge = f.ingested
@@ -844,13 +844,13 @@ function dsIcon(type) {
 async function loadDatasets() {
   try {
     const r = await Auth.authedFetch('/api/datasets', {headers: authHeaders()});
-    if (!r.ok) { document.getElementById('dsList').innerHTML = '<div class="ds-item" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
+    if (!r.ok) { document.getElementById('dsList').innerHTML = '<div class="ds-item" style="color:var(--color-ink-3);justify-content:center;">加载失败</div>'; return; }
     const data = await r.json();
     const datasets = data.datasets || [];
     document.getElementById('dsCount').textContent = datasets.length + ' 个';
     const list = document.getElementById('dsList');
     if (datasets.length === 0) {
-      list.innerHTML = '<div class="ds-item" style="color:#718096;justify-content:center;">暂无数据集</div>';
+      list.innerHTML = '<div class="ds-item" style="color:var(--color-ink-3);justify-content:center;">暂无数据集</div>';
     } else {
       list.innerHTML = datasets.map(d => {
         const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
@@ -1058,7 +1058,7 @@ async function loadAllFiles() {
     var r = await Auth.authedFetch('/api/files', {headers: authHeaders()});
     if (!r.ok) {
       document.getElementById('allFileList').innerHTML =
-        '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>';
+        '<div class="kb-file" style="color:var(--color-ink-3);justify-content:center;">加载失败</div>';
       return;
     }
     var data = await r.json();
@@ -1066,7 +1066,7 @@ async function loadAllFiles() {
     document.getElementById('filesCount').textContent = files.length;
     var list = document.getElementById('allFileList');
     if (files.length === 0) {
-      list.innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">暂无文件</div>';
+      list.innerHTML = '<div class="kb-file" style="color:var(--color-ink-3);justify-content:center;">暂无文件</div>';
       return;
     }
     list.innerHTML = files.map(function(f) {
@@ -1074,15 +1074,15 @@ async function loadAllFiles() {
       var badge = f.status === '已完成'
         ? '<span class="kb-badge in">完成</span>'
         : (f.status === '失败'
-            ? '<span class="kb-badge" style="background:#e94560;color:#fff;">失败</span>'
+            ? '<span class="kb-badge" style="background:var(--color-error-surface);color:var(--color-paper);">失败</span>'
             : '<span class="kb-badge out">处理中</span>');
       var sizeStr = f.size ? fmtSize(f.size) : '';
       var delFn = f.type === 'table'
         ? "deleteFile('" + escapeHtml(f.name) + "','table')"
         : "deleteFile('" + escapeHtml(f.name) + "','text')";
       var tail = f.type === 'table'
-        ? (f.table_name ? '<span style="font-size:10px;color:var(--sb-text-3);">表:' + escapeHtml(f.table_name) + '</span>' : '')
-        : (sizeStr ? '<span style="font-size:10px;color:var(--sb-text-3);">' + sizeStr + '</span>' : '');
+        ? (f.table_name ? '<span style="font-size:10px;color:var(--color-ink-3);">表:' + escapeHtml(f.table_name) + '</span>' : '')
+        : (sizeStr ? '<span style="font-size:10px;color:var(--color-ink-3);">' + sizeStr + '</span>' : '');
       return '<div class="kb-file" title="' + escapeHtml(f.name) + '">' +
         '<span style="flex-shrink:0;">' + icon + '</span>' +
         '<span class="kb-name">' + escapeHtml(f.name) + '</span>' +
