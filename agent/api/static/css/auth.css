@@ -1,0 +1,29 @@
+/* auth.css — 登录/注册弹窗基础样式。
+   复用旧登录卡配色（#1a1a2e→#0f3460 渐变背景、白色卡片），
+   Task 9（Hallmark 重塑）将整体重写为科技风。 */
+
+.hidden { display: none !important; }
+
+/* 弹窗遮罩 — 半透明背景 + 居中卡片 */
+#auth-modal.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .6);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+#auth-modal .auth-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 40px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+  color: #1a1a2e;
+}
