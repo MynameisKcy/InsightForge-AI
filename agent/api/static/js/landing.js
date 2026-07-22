@@ -73,6 +73,9 @@
 
   if (btnLogin) btnLogin.addEventListener('click', function () { openModal('login'); });
   if (btnStart) btnStart.addEventListener('click', function () { openModal('register'); });
+  // Hero 区「立即开始」按钮 — 同样打开注册弹窗
+  const heroStart = document.getElementById('hero-start');
+  if (heroStart) heroStart.addEventListener('click', function () { openModal('register'); });
   if (toggleEl) toggleEl.addEventListener('click', function (e) {
     e.preventDefault();
     const next = modeInput.dataset.mode === 'login' ? 'register' : 'login';
