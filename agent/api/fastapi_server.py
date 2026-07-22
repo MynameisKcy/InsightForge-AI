@@ -8,6 +8,7 @@ import json
 import os
 import re as re_module
 import sys
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -27,14 +28,60 @@ def _split_sentences(text: str) -> list[str]:
     parts = re_module.split(r'(?<=[。！？.!?\n])\s*', text)
     return [p for p in parts if p.strip()]
 
+
+async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: float = 15):
+    """把同步生成器放进后台线程执行，主协程带心跳消费。
+
+    问题：ReactAgent.execute_stream 在 run_full_analysis 等长工具执行期间，
+    同步迭代器会阻塞，async generate() 数分钟不 yield 任何字节，
+    前端 idle 超时 abort。此包装用线程跑同步迭代，把每个 chunk 经
+    loop.call_soon_threadsafe 推入 asyncio.Queue；主协程 wait_for 队列，
+    interval 秒内无新数据则 yield 一个心跳保活。
+
+    yield (is_heartbeat, value)：心跳 value 是已格式化的完整 SSE 行，直接 yield；
+    真实 chunk 的 value 是原始 chunk 文本，交由调用方处理。
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    # 线程异常载体
+    error_box: list = []
+
+    def _producer():
+        try:
+            for chunk in sync_gen_factory():
+                loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))
+        except Exception as e:  # 线程内异常推回主协程
+            error_box.append(e)
+            logger.error(f"_stream_with_heartbeat producer error: {e}\n{traceback.format_exc()}")
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+
+    t = threading.Thread(target=_producer, daemon=True)
+    t.start()
+    try:
+        while True:
+            try:
+                kind, value = await asyncio.wait_for(queue.get(), timeout=interval)
+            except asyncio.TimeoutError:
+                yield (True, heartbeat)  # 心跳保活
+                continue
+            if kind == "done":
+                break
+            yield (False, value)
+    finally:
+        # 线程异常在主协程抛出，触发上层 except → [ERROR]
+        if error_box:
+            raise error_box[0]
+
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from fastapi import FastAPI, Request, Header, UploadFile, File
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, Request, Header, UploadFile, File, Depends
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from utils.logger_handler import logger
@@ -57,6 +104,11 @@ except ModuleNotFoundError:
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _long_term_memory = LongTermMemory()
+
+# ── 鉴权依赖 + 静态资源目录 ──
+from api.auth import require_auth, get_current_user  # noqa: E402
+
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # ── 延迟初始化 Agent ──
 _react_agent = None
@@ -322,13 +374,22 @@ body { font-family: var(--font-sans);
 .btn-new-session:hover { background: var(--accent-hover); }
 .session-list { flex: none; overflow-y: auto; padding: var(--sp-2) 0; }
 .session-item { padding: var(--sp-3) var(--sp-4); cursor: pointer; transition: background var(--t-fast);
-                border-left: 3px solid transparent; }
+                border-left: 3px solid transparent; position: relative; }
 .session-item:hover { background: var(--sb-bg-elev); }
 .session-item.active { background: var(--sb-bg-elev); border-left-color: var(--accent); }
+.session-item .s-main { min-width: 0; }
 .session-item .s-title { color: var(--sb-text); font-size: 13px; font-weight: 500;
                          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                          margin-bottom: var(--sp-1); }
 .session-item .s-time { color: var(--sb-text-3); font-size: 11px; }
+.session-item .s-actions { position: absolute; right: var(--sp-2); top: 50%; transform: translateY(-50%);
+                           display: none; gap: 2px; }
+.session-item:hover .s-actions, .session-item.active .s-actions { display: flex; }
+.s-act { width: 24px; height: 24px; border: none; border-radius: var(--r-sm); background: var(--sb-bg-3);
+         color: var(--sb-text-2); cursor: pointer; font-size: 13px; line-height: 1; }
+.s-act:hover { background: var(--accent); color: #fff; }
+.s-rename-input { width: 100%; font-size: 13px; padding: 2px 4px; border: 1px solid var(--accent);
+                  border-radius: 4px; background: var(--surface); color: var(--text); }
 .sidebar-footer { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--sb-border); }
 .btn-logout { width: 100%; padding: var(--sp-2); background: transparent; color: var(--sb-text-2);
               border: 1px solid var(--text-2); border-radius: var(--r-sm); font-size: 13px;
@@ -396,6 +457,34 @@ body { font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
 }
 .message.user .msg-meta { justify-content: flex-end; }
+/* ── 消息复制/编辑按钮（悬停显示）── */
+.msg-actions {
+  display: flex; gap: var(--sp-2); margin-top: var(--sp-1);
+  opacity: 0; transition: opacity var(--t-fast);
+}
+.message:hover .msg-actions { opacity: 1; }
+.message.user .msg-actions { justify-content: flex-end; }
+.msg-action-btn {
+  font-size: 11px; padding: 2px var(--sp-2);
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: var(--r-s);
+  cursor: pointer; transition: all var(--t-fast);
+}
+.msg-action-btn:hover { color: var(--accent); border-color: var(--accent); }
+.edit-area {
+  width: 100%; min-height: 60px; padding: var(--sp-2) var(--sp-3);
+  border: 2px solid var(--accent); border-radius: var(--r-m);
+  background: var(--bg); color: var(--text); font-size: 14px;
+  font-family: inherit; resize: vertical; box-sizing: border-box;
+}
+.edit-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); justify-content: flex-end; }
+.edit-send, .edit-cancel {
+  padding: var(--sp-1) var(--sp-4); border-radius: var(--r-s);
+  border: none; cursor: pointer; font-size: 13px;
+}
+.edit-send { background: var(--accent); color: var(--surface); }
+.edit-send:hover { background: var(--accent-hover); }
+.edit-cancel { background: var(--border); color: var(--text); }
 .input-area { padding: var(--sp-4) var(--sp-6); background: var(--surface);
               border-top: 1px solid var(--border);
               box-shadow: 0 -2px 12px rgba(0,0,0,.04); }
@@ -411,6 +500,8 @@ body { font-family: var(--font-sans);
                     cursor: pointer; transition: background var(--t-fast); }
 .input-row button:hover { background: var(--accent-hover); }
 .input-row button:disabled { opacity: .6; cursor: not-allowed; }
+.input-row button.stop-mode { background: #e94560; }
+.input-row button.stop-mode:hover { background: #c81d3b; }
 .typing-indicator { display: flex; gap: var(--sp-1); padding: var(--sp-2) 0; }
 .typing-indicator span { width: 8px; height: 8px; background: var(--sb-text-2); border-radius: 50%;
                          animation: bounce 1.2s infinite; }
@@ -632,6 +723,13 @@ body { font-family: var(--font-sans);
   z-index: 200;
 }
 .modal-overlay.show { display: flex; }
+.user-info { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.user-info:hover { color: var(--accent); }
+.user-info .avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.user-info .uname { font-size: 12px; font-weight: 600; max-width: 140px; overflow: hidden;
+                   text-overflow: ellipsis; white-space: nowrap; }
+.avatar-lg { width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
+             background: var(--sb-bg-3); }
 .modal-card {
   background: var(--surface); border-radius: var(--r-lg);
   padding: var(--sp-5); max-width: 360px; width: 90%;
@@ -673,7 +771,7 @@ body { font-family: var(--font-sans);
 <div class="sidebar">
   <div class="sidebar-header">
     <h1><span class="logo-emoji">🤖</span> AI Data Analyst</h1>
-    <div class="user-info" id="userDisplay"></div>
+    <div class="user-info" id="userDisplay" onclick="openProfileModal()" title="个人信息设置"></div>
     <button class="btn-new-session" onclick="newSession()"><span>+ 新会话</span></button>
   </div>
   <div class="sidebar-scroll">
@@ -687,10 +785,10 @@ body { font-family: var(--font-sans);
   <!-- ── 数据集管理 ── -->
   <div class="ds-section">
     <div class="ds-header" onclick="toggleSection('ds')">
-      <h2><span class="section-chevron" id="chevronDs">▼</span> 📁 数据集</h2>
+      <h2><span class="section-chevron collapsed" id="chevronDs">▼</span> 📁 数据集</h2>
       <span class="ds-count" id="dsCount">-</span>
     </div>
-    <div class="section-body" id="sectionBodyDs">
+    <div class="section-body collapsed" id="sectionBodyDs">
     <div class="ds-body" id="dsList">
       <div class="ds-item" style="color:var(--sb-text-muted);justify-content:center;">加载中...</div>
     </div>
@@ -703,10 +801,10 @@ body { font-family: var(--font-sans);
   <!-- ── 知识库管理（方案C） ── -->
   <div class="kb-section">
     <div class="kb-header" onclick="toggleSection('kb')">
-      <h2><span class="section-chevron" id="chevronKb">▼</span> 📚 知识库</h2>
+      <h2><span class="section-chevron collapsed" id="chevronKb">▼</span> 📚 知识库</h2>
       <span class="kb-stats" id="kbStats">-</span>
     </div>
-    <div class="section-body" id="sectionBodyKb">
+    <div class="section-body collapsed" id="sectionBodyKb">
     <div class="kb-body" id="kbFileList">
       <div class="kb-file" style="color:var(--sb-text-muted);justify-content:center;">加载中...</div>
     </div>
@@ -738,6 +836,10 @@ body { font-family: var(--font-sans);
           <div class="set-field">
             <label>模型名称（如 qwen-max）</label>
             <input type="text" id="setChatModel" placeholder="qwen-max">
+          </div>
+          <div class="set-field">
+            <label>请求地址 base_url（留空=默认千问官方；填则接入 OpenAI 兼容端点，不限千问）</label>
+            <input type="text" id="setBaseUrl" placeholder="留空使用千问官方">
           </div>
         </div>
         <div class="set-group">
@@ -819,6 +921,8 @@ body { font-family: var(--font-sans);
 
 <script>
 let isProcessing = false;
+let currentController = null;   // 当前 SSE 请求的 AbortController，供停止按钮中止
+let userStopped = false;       // 区分"用户主动停止" vs "真超时"
 let authToken = sessionStorage.getItem('token') || '';
 let accountName = sessionStorage.getItem('account') || '';
 let currentSessionId = '';
@@ -826,6 +930,112 @@ let currentSessionId = '';
 if (!authToken) { window.location.href = '/'; }
 
 document.getElementById('userDisplay').textContent = '👤 ' + accountName;
+// 加载个人信息（昵称/头像），优先显示昵称，回退到账号
+loadProfile();
+
+async function loadProfile() {
+  try {
+    var r = await fetch('/api/profile', {headers: authHeaders()});
+    if (!r.ok) return;
+    var d = await r.json();
+    var display = document.getElementById('userDisplay');
+    var name = d.nickname || accountName || '未登录';
+    if (d.avatar_url) {
+      display.innerHTML = '<img class="avatar" src="' + d.avatar_url + '" alt="avatar"><span class="uname">' +
+                          escapeHtml(name) + '</span>';
+    } else {
+      display.innerHTML = '👤 ' + escapeHtml(name);
+    }
+  } catch(e) { /* 忽略，保持账号显示 */ }
+}
+
+// ── 个人信息弹窗（昵称 / 头像 / 密码） ──
+function openProfileModal() {
+  var ov = document.getElementById('profileOverlay');
+  ov.classList.add('show');
+  // 填充当前值
+  fetch('/api/profile', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(d){
+    if (!d) return;
+    document.getElementById('pfNickname').value = d.nickname || '';
+    document.getElementById('pfAccount').value = d.account || '';
+    var img = document.getElementById('pfAvatar');
+    if (d.avatar_url) { img.src = d.avatar_url; img.style.display = ''; }
+    else { img.style.display = 'none'; }
+  });
+  // 清空密码字段
+  document.getElementById('pfOldPwd').value = '';
+  document.getElementById('pfNewPwd').value = '';
+  document.getElementById('pfNewPwd2').value = '';
+  document.getElementById('pfAvatarHint').textContent = '支持 png/jpg/gif/webp，≤5MB';
+  if (!ov._avatarBound) {
+    document.getElementById('pfAvatarInput').addEventListener('change', uploadAvatar);
+    ov._avatarBound = true;
+  }
+}
+
+function closeProfileModal() {
+  document.getElementById('profileOverlay').classList.remove('show');
+}
+
+async function uploadAvatar() {
+  var input = document.getElementById('pfAvatarInput');
+  if (!input.files || !input.files[0]) return;
+  var fd = new FormData();
+  fd.append('file', input.files[0]);
+  var hint = document.getElementById('pfAvatarHint');
+  hint.textContent = '上传中...';
+  try {
+    var r = await fetch('/api/avatar', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd
+    });
+    var d = await r.json();
+    if (d.ok) {
+      var img = document.getElementById('pfAvatar');
+      img.src = d.avatar_url; img.style.display = '';
+      hint.textContent = '头像已更新';
+      await loadProfile();
+    } else {
+      hint.textContent = '上传失败：' + (d.error || '未知错误');
+    }
+  } catch(e) { hint.textContent = '上传失败: ' + e.message; }
+}
+
+async function saveProfile() {
+  var nickname = document.getElementById('pfNickname').value.trim();
+  var newPwd = document.getElementById('pfNewPwd').value;
+  var newPwd2 = document.getElementById('pfNewPwd2').value;
+  var ok = true;
+  // 1. 昵称
+  try {
+    await fetch('/api/profile', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
+      body: JSON.stringify({nickname: nickname})
+    });
+    await loadProfile();
+  } catch(e) { showToast('昵称保存失败', 'error'); ok = false; }
+  // 2. 密码（仅在填写了新密码时才改）
+  if (newPwd) {
+    if (newPwd.length < 8) { showToast('新密码至少 8 位', 'error'); return; }
+    if (newPwd !== newPwd2) { showToast('两次新密码不一致', 'error'); return; }
+    try {
+      var r = await fetch('/api/password', {
+        method: 'POST',
+        headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
+        body: JSON.stringify({
+          old_password: document.getElementById('pfOldPwd').value,
+          new_password: newPwd
+        })
+      });
+      var d = await r.json();
+      if (!d.success) { showToast('改密失败：' + (d.error || '未知错误'), 'error'); ok = false; }
+      else { showToast('密码已更新', 'success'); }
+    } catch(e) { showToast('改密失败: ' + e, 'error'); ok = false; }
+  }
+  if (ok) { showToast('已保存', 'success'); closeProfileModal(); }
+}
 
 // ── 可折叠侧边栏分区 ──
 function toggleSection(name) {
@@ -840,6 +1050,13 @@ function toggleSection(name) {
   if (name === 'set' && !body.classList.contains('collapsed')) {
     loadSettings();
   }
+}
+// 强制展开某分区（suffix 如 'Ds'/'Files'），上传后让用户立刻看到结果
+function _expandSection(suffix) {
+  var body = document.getElementById('sectionBody' + suffix);
+  var chevron = document.getElementById('chevron' + suffix);
+  if (body) body.classList.remove('collapsed');
+  if (chevron) chevron.classList.remove('collapsed');
 }
 
 // ── 移动端抽屉 ──
@@ -878,11 +1095,81 @@ function renderSessionList(sessions) {
     const date = new Date(s.updated_at || s.created_at);
     const timeStr = date.toLocaleDateString('zh-CN') + ' ' +
                     date.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
-    return `<div class="session-item${active}" data-sid="${s.session_id}" onclick="switchSession('${s.session_id}')">
-      <div class="s-title">${escapeHtml(s.title || '未命名会话')}</div>
-      <div class="s-time">${timeStr}</div>
+    const sid = s.session_id;
+    const title = escapeHtml(s.title || '未命名会话');
+    return `<div class="session-item${active}" data-sid="${sid}">
+      <div class="s-main" onclick="switchSession('${sid}')">
+        <div class="s-title" data-sid="${sid}">${title}</div>
+        <div class="s-time">${timeStr}</div>
+      </div>
+      <div class="s-actions">
+        <button class="s-act" title="重命名" onclick="renameSession('${sid}', event)">✎</button>
+        <button class="s-act" title="删除" onclick="deleteSession('${sid}', event)">🗑</button>
+      </div>
     </div>`;
   }).join('');
+}
+
+async function deleteSession(sid, ev) {
+  if (ev) { ev.stopPropagation(); }
+  if (!confirm('确定删除该会话？删除后不可恢复。')) return;
+  try {
+    const r = await fetch('/api/sessions/' + sid, {
+      method: 'DELETE',
+      headers: {'Authorization': 'Bearer ' + authToken}
+    });
+    if (r.ok) {
+      if (sid === currentSessionId) {
+        currentSessionId = '';
+        document.getElementById('chatContainer').innerHTML =
+          '<div class="welcome-msg"><p>开始新的对话吧</p></div>';
+      }
+      await loadSessions();
+    } else {
+      alert('删除失败');
+    }
+  } catch(e) { alert('删除失败: ' + e.message); }
+}
+
+function renameSession(sid, ev) {
+  if (ev) { ev.stopPropagation(); }
+  const item = document.querySelector(`.session-item[data-sid="${sid}"]`);
+  if (!item) return;
+  const titleEl = item.querySelector('.s-title');
+  if (!titleEl || titleEl.querySelector('input')) return;
+  const oldTitle = titleEl.textContent.trim();
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = oldTitle;
+  input.className = 's-rename-input';
+  input.maxLength = 60;
+  titleEl.textContent = '';
+  titleEl.appendChild(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = async () => {
+    if (done) return; done = true;
+    const newTitle = input.value.trim() || oldTitle;
+    titleEl.textContent = newTitle;
+    if (newTitle && newTitle !== oldTitle) {
+      try {
+        await fetch('/api/sessions/' + sid, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken},
+          body: JSON.stringify({title: newTitle})
+        });
+        await loadSessions();
+      } catch(e) { /* 忽略，标题本地已更新 */ }
+    }
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { done = true; titleEl.textContent = oldTitle; }
+    e.stopPropagation();
+  });
+  input.addEventListener('click', (e) => e.stopPropagation());
 }
 
 // ── 切换到指定会话 ──
@@ -952,14 +1239,15 @@ function authHeaders() {
 }
 
 async function sendMessage() {
-  if (isProcessing) return;
+  if (isProcessing) { showToast('请等待当前回复完成', 'info', 2000); return; }
   const input = document.getElementById('userInput');
   const text = input.value.trim();
   if (!text) return;
 
   isProcessing = true;
+  userStopped = false;
   input.value = '';
-  document.getElementById('sendBtn').disabled = true;
+  setSendButtonState(true);   // 切换为"停止"按钮
 
   // 移除欢迎消息
   const welcome = document.querySelector('.welcome-msg');
@@ -975,11 +1263,39 @@ async function sendMessage() {
   try {
     await streamChat(text, bubble);
   } catch (err) {
-    bubble.innerHTML = `<span style="color:#c53030">请求失败: ${err.message}</span>`;
+    // 用户主动停止或超时：streamChat 内部已处理气泡，不在此覆写
+    if (!userStopped) {
+      bubble.innerHTML = `<span style="color:#c53030">请求失败: ${err.message}</span>`;
+    }
   } finally {
     isProcessing = false;
-    document.getElementById('sendBtn').disabled = false;
+    currentController = null;
+    setSendButtonState(false);  // 切回"发送"按钮
     document.getElementById('userInput').focus();
+  }
+}
+
+// 发送/停止按钮同位置切换
+function setSendButtonState(processing) {
+  const btn = document.getElementById('sendBtn');
+  if (!btn) return;
+  if (processing) {
+    btn.textContent = '⏹ 停止';
+    btn.classList.add('stop-mode');
+    btn.onclick = stopGeneration;
+  } else {
+    btn.textContent = '发送';
+    btn.classList.remove('stop-mode');
+    btn.onclick = sendMessage;
+    btn.disabled = false;
+  }
+}
+
+// 用户主动停止当前生成（保留已生成内容）
+function stopGeneration() {
+  userStopped = true;
+  if (currentController) {
+    try { currentController.abort(); } catch(e) {}
   }
 }
 
@@ -987,13 +1303,42 @@ async function streamChat(text, bubble) {
   const body = { query: text };
   if (currentSessionId) body.session_id = currentSessionId;
 
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(body),
-  });
+  // ── 超时兜底：避免后端长时间不回包时 isProcessing/sendBtn 永久卡死 ──
+  const controller = new AbortController();
+  let idleTimer;
+  const resetIdle = () => {
+    clearTimeout(idleTimer);
+    // 收到任意数据即证明流活着，重置计时；300s 内无新数据则中止
+    // （分析+绘图等多步 LLM 流程可能数分钟，配合后端心跳保活）
+    idleTimer = setTimeout(() => controller.abort(), 300000);
+  };
+  resetIdle();
+  currentController = controller;   // 暴露给停止按钮中止
 
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  let response;
+  try {
+    response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(idleTimer);
+    if (err.name === 'AbortError') throw new Error('请求超时，请重试');
+    throw err;
+  }
+
+  if (response.status === 401) {
+    clearTimeout(idleTimer);
+    showToast('登录已失效，请重新登录', 'error', 3000);
+    setTimeout(() => { window.location.href = '/'; }, 1200);
+    throw new Error('未登录，请重新登录');
+  }
+  if (!response.ok) {
+    clearTimeout(idleTimer);
+    throw new Error(`HTTP ${response.status}`);
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1011,88 +1356,124 @@ async function streamChat(text, bubble) {
     }
   }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split('\\n');
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6);
+  // ── 单行 SSE 事件处理（抽成闭包，供跨 chunk 缓冲复用）──
+  // 返回 true 表示遇到 [ERROR]，应终止整条流
+  function processLine(line) {
+    if (!line.startsWith('data: ')) return false;
+    const data = line.slice(6);
 
-      if (data === '[DONE]') continue;
+    if (data === '[DONE]') return false;
 
-      if (data.startsWith('[ERROR]')) {
-        bubble.innerHTML = `<span style="color:#c53030">${escapeHtml(data.slice(7))}</span>`;
-        if (statusEl) statusEl.style.display = 'none';
-        return;
+    if (data.startsWith('[ERROR]')) {
+      bubble.innerHTML = `<span style="color:#c53030">${escapeHtml(data.slice(7))}</span>`;
+      if (statusEl) statusEl.style.display = 'none';
+      return true;
+    }
+
+    if (data.startsWith('[THINKING]')) {
+      const status = data.slice(10);
+      if (statusEl) {
+        statusEl.style.display = 'flex';
+        statusEl.querySelector('.status-text').textContent = escapeHtml(status);
       }
+      scrollToBottom();
+      return false;
+    }
 
-      if (data.startsWith('[THINKING]')) {
-        const status = data.slice(10);
-        if (statusEl) {
-          statusEl.style.display = 'flex';
-          statusEl.querySelector('.status-text').textContent = escapeHtml(status);
+    if (data.startsWith('[SESSION]')) {
+      currentSessionId = data.slice(9);
+      updateActiveSession();
+      return false;
+    }
+
+    if (data === '[SESSIONS_RELOAD]') {
+      loadSessions();
+      return false;
+    }
+
+    if (data.startsWith('[CHART:')) {
+      const chartUrl = data.slice(7, -1).trim();
+      // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
+      if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
+        const iframe = document.createElement('iframe');
+        iframe.src = chartUrl;
+        iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
+        const wrapper = document.createElement('div');
+        if (!wrapper.dataset.created) {
+          wrapper.dataset.created = '1';
+          wrapper.appendChild(iframe);
+          bubble.appendChild(wrapper);
         }
-        scrollToBottom();
-        continue;
       }
+      return false;
+    }
 
-      if (data.startsWith('[SESSION]')) {
-        currentSessionId = data.slice(9);
-        updateActiveSession();
-        continue;
-      }
+    if (data.startsWith('[CONTEXT]')) return false;
 
-      if (data === '[SESSIONS_RELOAD]') {
-        loadSessions();
-        continue;
-      }
-
-      if (data.startsWith('[CHART:')) {
-        const chartUrl = data.slice(7, -1).trim();
-        // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
-        if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
-          const iframe = document.createElement('iframe');
-          iframe.src = chartUrl;
-          iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
-          const wrapper = document.createElement('div');
-          if (!wrapper.dataset.created) {
-            wrapper.dataset.created = '1';
-            wrapper.appendChild(iframe);
-            bubble.appendChild(wrapper);
-          }
-        }
-        continue;
-      }
-
-      if (data.startsWith('[CONTEXT]')) continue;
-
-      if (data.startsWith('[AUDIT:')) {
-        fullText += '\\n> 📋 ' + data.slice(7, -1).trim() + '\\n';
-        // 首次收到实际内容时，关闭思考和转圈
-        if (thinking) {
-          thinking = false;
-          if (statusEl) statusEl.style.display = 'none';
-          bubble.innerHTML = '';
-        }
-        bubble.innerHTML = renderMarkdown(fullText);
-        scrollToBottom();
-        continue;
-      }
-
-      // 正常内容：流式追加
+    if (data.startsWith('[AUDIT:')) {
+      fullText += '\\n> 📋 ' + data.slice(7, -1).trim() + '\\n';
+      // 首次收到实际内容时，关闭思考和转圈
       if (thinking) {
-        // 首次收到实际内容：关闭思考状态和转圈
         thinking = false;
         if (statusEl) statusEl.style.display = 'none';
-        bubble.innerHTML = ''; // 清除 typing indicator
+        bubble.innerHTML = '';
       }
-      if (fullText.length > 0) fullText += '\\n';
-      fullText += data;
       bubble.innerHTML = renderMarkdown(fullText);
+      _syncRaw(bubble, fullText);
       scrollToBottom();
+      return false;
     }
+
+    // 正常内容：流式追加
+    if (thinking) {
+      // 首次收到实际内容：关闭思考状态和转圈
+      thinking = false;
+      if (statusEl) statusEl.style.display = 'none';
+      bubble.innerHTML = ''; // 清除 typing indicator
+    }
+    if (fullText.length > 0) fullText += '\\n';
+    fullText += data;
+    bubble.innerHTML = renderMarkdown(fullText);
+    _syncRaw(bubble, fullText);
+    scrollToBottom();
+    return false;
+  }
+
+  // ── 跨 chunk 行缓冲：一条 SSE 事件可能被网络切成多个 chunk， ──
+  // ── 末尾不完整行留到 buffer，等下个 chunk 拼接后再处理     ──
+  let buffer = '';
+  let aborted = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffer) processLine(buffer);
+        break;
+      }
+      resetIdle(); // 收到数据，重置空闲超时
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\\n');
+      buffer = parts.pop(); // 末尾不完整行留待下次
+      for (const line of parts) {
+        if (processLine(line)) { aborted = true; break; } // [ERROR] 终止流
+      }
+      if (aborted) break;
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      if (statusEl) statusEl.style.display = 'none';
+      // 用户主动停止：保留已生成内容，不打"超时"红字
+      if (userStopped) {
+        if (!fullText.trim()) bubble.innerHTML = '<span style="color:var(--sb-text-muted)">已停止生成。</span>';
+        return;
+      }
+      // 真·超时：无内容才提示
+      if (!fullText.trim()) bubble.innerHTML = '<span style="color:#c53030">请求超时，请重试。</span>';
+      return;
+    }
+    throw err;
+  } finally {
+    clearTimeout(idleTimer);
   }
 
   // 处理完成后的状态
@@ -1104,20 +1485,97 @@ async function streamChat(text, bubble) {
   }
 }
 
+let _msgSeq = 0;   // 消息自增 id
 function appendMessage(role, text) {
   var container = document.getElementById('chatContainer');
   var div = document.createElement('div');
   div.className = 'message ' + role;
+  div.id = 'msg-' + (++_msgSeq);
+  div.dataset.raw = text || '';
   var statusDiv = role === 'assistant'
     ? '<div class="chat-status" style="display:none"><span class="spinner"></span><span class="status-text"></span></div>'
     : '';
   var now = new Date();
   var ts = now.toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+  // 编辑按钮仅 user 消息显示
+  var editBtn = role === 'user'
+    ? '<button class="msg-action-btn" onclick="editMessage(this)" title="编辑并重新发送">✎ 编辑</button>'
+    : '';
+  var actions = '<div class="msg-actions">'
+    + '<button class="msg-action-btn" onclick="copyMessage(this)" title="复制">⧉ 复制</button>'
+    + editBtn
+    + '</div>';
   div.innerHTML = '<div class="avatar">' + (role === 'user' ? '👤' : '🤖') + '</div>'
     + '<div class="bubble-wrap"><div class="bubble">' + escapeHtml(text) + '</div>'
+    + actions
     + '<div class="msg-meta">' + ts + '</div></div>' + statusDiv;
   container.appendChild(div);
   return div;
+}
+
+// 同步 assistant 流式内容到 dataset.raw，供复制按钮取最新文本
+function _syncRaw(bubble, text) {
+  var m = bubble.closest('.message');
+  if (m) m.dataset.raw = text;
+}
+
+// 复制消息原文
+function copyMessage(btn) {
+  var msg = btn.closest('.message');
+  var raw = msg ? (msg.dataset.raw || '') : '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(raw).then(function() {
+      showToast('已复制', 'success', 1500);
+    }).catch(function() { _fallbackCopy(raw); });
+  } else {
+    _fallbackCopy(raw);
+  }
+}
+function _fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); showToast('已复制', 'success', 1500); }
+  catch(e) { showToast('复制失败', 'error', 2000); }
+  document.body.removeChild(ta);
+}
+
+// 编辑用户消息并重新发送：删除该消息及之后所有消息（含未完成回复），用新文本重走一轮
+function editMessage(btn) {
+  var msg = btn.closest('.message');
+  if (!msg) return;
+  var bubble = msg.querySelector('.bubble');
+  var raw = msg.dataset.raw || '';
+  // 若正在生成，先停止（保留已生成内容，随后整段会被删除）
+  if (isProcessing) stopGeneration();
+  bubble.innerHTML = '<textarea class="edit-area"></textarea>'
+    + '<div class="edit-actions"><button class="edit-send" onclick="submitEdit(this)">发送</button>'
+    + '<button class="edit-cancel" onclick="cancelEdit(this)">取消</button></div>';
+  var ta = bubble.querySelector('.edit-area');
+  ta.value = raw;
+  ta.focus();
+  ta.setSelectionRange(raw.length, raw.length);
+}
+function submitEdit(btn) {
+  var msg = btn.closest('.message');
+  var ta = msg.querySelector('.edit-area');
+  var newText = (ta.value || '').trim();
+  if (!newText) { showToast('内容不能为空', 'error', 2000); return; }
+  var container = document.getElementById('chatContainer');
+  // 删除该消息及之后所有消息（含那条未完成/已停止的 assistant 回复）
+  while (container.lastElementChild) {
+    if (container.lastElementChild.id === msg.id) break;
+    container.lastElementChild.remove();
+  }
+  if (msg) msg.remove();
+  // 延迟重发，让上一次 streamChat 的 finally 先复位 isProcessing/按钮
+  document.getElementById('userInput').value = newText;
+  setTimeout(function() { sendMessage(); }, 120);
+}
+function cancelEdit(btn) {
+  var msg = btn.closest('.message');
+  var bubble = msg.querySelector('.bubble');
+  // 还原原文（user 消息原文是纯文本，renderMarkdown 对纯文本安全）
+  bubble.innerHTML = renderMarkdown(msg.dataset.raw || '');
 }
 
 function renderMarkdown(text) {
@@ -1267,7 +1725,7 @@ document.getElementById('kbFileInput').addEventListener('change', async (e) => {
 });
 
 async function deleteKbFile(filename) {
-  if (!(await showConfirm('确认删除知识库文件及其分片？\n' + filename))) return;
+  if (!(await showConfirm('确认删除知识库文件及其分片？\\n' + filename))) return;
   try {
     const r = await fetch('/api/knowledge/files/' + encodeURIComponent(filename), {
       method: 'DELETE', headers: authHeaders()
@@ -1366,12 +1824,14 @@ document.getElementById('dsFileInput').addEventListener('change', async (e) => {
       showToast('上传失败: ' + (data.error || '未知错误'), 'error', 4000);
     }
     loadDatasets();
+    loadAllFiles();          // CSV 入 DuckDB，文件管理列表也需同步
+    _expandSection('Ds');    // 上传后自动展开数据集区块，避免折叠看不到
   } catch(err) { showToast('上传失败: ' + err.message, 'error', 4000); }
   e.target.value = '';
 });
 
 async function deleteDs(name) {
-  if (!(await showConfirm('确认删除数据集「' + name + '」？\n将同时删除 DuckDB 表和本地文件。'))) return;
+  if (!(await showConfirm('确认删除数据集「' + name + '」？\\n将同时删除 DuckDB 表和本地文件。'))) return;
   try {
     const r = await fetch('/api/datasets/' + encodeURIComponent(name), {
       method: 'DELETE', headers: authHeaders()
@@ -1441,6 +1901,7 @@ async function loadSettings() {
     document.getElementById('setApiKey').value = s.llm_api_key || '';
     document.getElementById('setApiKey').type = 'password';
     document.getElementById('setChatModel').value = s.llm_model_name || '';
+    document.getElementById('setBaseUrl').value = s.llm_base_url || '';
     document.getElementById('setEmbedModel').value = s.embedding_model_name || '';
     document.getElementById('setVdbHost').value = s.vector_db_host || '';
     document.getElementById('setVdbPort').value = s.vector_db_port || '';
@@ -1470,11 +1931,14 @@ function openSettingsPanel() {
   var chevron = document.getElementById('chevronSet');
   if (body) body.classList.remove('collapsed');
   if (chevron) chevron.classList.remove('collapsed');
+  // 与 toggleSection('set') 展开行为一致：加载掩码配置，避免面板空白
+  loadSettings();
 }
 async function saveSettings() {
   var payload = {
     llm_api_key: document.getElementById('setApiKey').value,
     llm_model_name: document.getElementById('setChatModel').value,
+    llm_base_url: document.getElementById('setBaseUrl').value,
     embedding_model_name: document.getElementById('setEmbedModel').value,
     vector_db_host: document.getElementById('setVdbHost').value,
     vector_db_port: document.getElementById('setVdbPort').value,
@@ -1619,6 +2083,8 @@ document.getElementById('allFileInput').addEventListener('change', async functio
     showToast(f.file + ' 上传失败：' + msg, 'error', 5000);
   });
   loadAllFiles();
+  loadDatasets();           // CSV 类经路由入 DuckDB，数据集列表也需同步
+  _expandSection('Files');  // 上传后自动展开文件管理区块
   // 若有处理中项，轮询直到全部完成或超时
   _pollFilesStatus(60000);
   e.target.value = '';
@@ -1630,13 +2096,14 @@ function _pollFilesStatus(timeoutMs) {
     fetch('/api/files', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(data) {
       var pending = (data.files || []).some(function(f){return f.status === '处理中';});
       loadAllFiles();
+      loadDatasets();       // 轮询期间数据集可能就绪，同步刷新
       if (pending) setTimeout(tick, 2000);
     }).catch(function(){ /* ignore */ });
   }
   setTimeout(tick, 1500);
 }
 async function deleteFile(name, type) {
-  if (!(await showConfirm('确认删除「' + name + '」？\n' + (type === 'table' ? '将同时删除 DuckDB 表和本地文件' : '将从向量库移除对应分片')))) return;
+  if (!(await showConfirm('确认删除「' + name + '」？\\n' + (type === 'table' ? '将同时删除 DuckDB 表和本地文件' : '将从向量库移除对应分片')))) return;
   var url = type === 'table'
     ? '/api/datasets/' + encodeURIComponent(name)
     : '/api/knowledge/files/' + encodeURIComponent(name);
@@ -1655,6 +2122,7 @@ async function deleteFile(name, type) {
 loadSessions();
 loadKbFiles();
 loadSettingsStatus();
+loadAllFiles();
 document.getElementById('userInput').focus();
 </script>
 <div class="toast-container" id="toastContainer"></div>
@@ -1664,6 +2132,43 @@ document.getElementById('userInput').focus();
     <div class="modal-actions">
       <button class="modal-btn cancel" onclick="resolveModal(false)">取消</button>
       <button class="modal-btn ok" onclick="resolveModal(true)">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 个人信息弹窗 ── -->
+<div class="modal-overlay" id="profileOverlay" onclick="if(event.target===this)closeProfileModal()">
+  <div class="modal-card" style="max-width:420px;">
+    <div class="modal-title" style="font-size:16px;font-weight:600;margin-bottom:12px;">个人信息</div>
+    <div class="profile-avatar-row" style="display:flex;align-items:center;gap:12px;">
+      <img id="pfAvatar" class="avatar-lg" src="" alt="" style="display:none;width:56px;height:56px;border-radius:50%;object-fit:cover;">
+      <div class="avatar-upload">
+        <input type="file" id="pfAvatarInput" accept=".png,.jpg,.jpeg,.gif,.webp" style="display:none">
+        <button class="kb-btn" onclick="document.getElementById('pfAvatarInput').click()">更换头像</button>
+        <div id="pfAvatarHint" style="font-size:11px;color:var(--sb-text-3);margin-top:4px;">支持 png/jpg/gif/webp，≤5MB</div>
+      </div>
+    </div>
+    <div class="set-field" style="margin-top:12px;">
+      <label>昵称（侧边栏优先显示昵称，账号仅用于登录）</label>
+      <input type="text" id="pfNickname" maxlength="30" placeholder="设置昵称">
+    </div>
+    <div class="set-field" style="margin-top:8px;">
+      <label>账号（登录用，不可改）</label>
+      <input type="text" id="pfAccount" readonly style="opacity:.7">
+    </div>
+    <hr style="border:none;border-top:1px solid var(--sb-border);margin:14px 0;">
+    <div class="set-field"><label>修改密码</label>
+      <input type="password" id="pfOldPwd" placeholder="旧密码" autocomplete="off">
+    </div>
+    <div class="set-field" style="margin-top:6px;">
+      <input type="password" id="pfNewPwd" placeholder="新密码（至少 8 位）" autocomplete="off">
+    </div>
+    <div class="set-field" style="margin-top:6px;">
+      <input type="password" id="pfNewPwd2" placeholder="确认新密码" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeProfileModal()">关闭</button>
+      <button class="modal-btn ok" onclick="saveProfile()">保存</button>
     </div>
   </div>
 </div>
@@ -1726,20 +2231,38 @@ async def api_logout(request: Request):
     return JSONResponse(content={"success": True})
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/api/me")
+async def api_me(user=Depends(require_auth)):
+    """返回当前登录用户信息。未登录 401。"""
+    return JSONResponse({
+        "user_id": user["user_id"],
+        "account": user["account"],
+        "nickname": user.get("nickname"),
+        "avatar_path": user.get("avatar_path"),
+    })
+
+
+@app.get("/")
 async def index():
-    """返回登录页面。"""
-    return HTMLResponse(content=LOGIN_PAGE)
+    """返回欢迎落地页。"""
+    return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
 
 
-@app.get("/app", response_class=HTMLResponse)
-async def app_page():
-    """返回主应用页面。"""
-    return HTMLResponse(content=HTML_TEMPLATE)
+@app.get("/app")
+async def app_page(request: Request):
+    """主应用：未登录重定向到落地页。"""
+    if not get_current_user(request):
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(os.path.join(_STATIC_DIR, "app.html"))
+
+
+# ── 静态资源（落地页/应用页前端文件） ──
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 @app.post("/api/chat")
-async def api_chat(request: Request):
+async def api_chat(request: Request, user=Depends(require_auth)):
     """统一智能客服：流式 SSE 响应（带会话管理、记忆管理、自动调度分析 Agent）。"""
     body = await request.json()
     query = body.get("query", "").strip()
@@ -1747,9 +2270,7 @@ async def api_chat(request: Request):
     if not query:
         return JSONResponse({"error": "query is required"}, status_code=400)
 
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     memory = get_session(user_id)
 
     # ── 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复） ──
@@ -1786,8 +2307,16 @@ async def api_chat(request: Request):
             if new_session:
                 yield f"data: [SESSIONS_RELOAD]\n\n"
 
-            for chunk in agent.execute_stream(query, history=mem_context,
-                                              user_id=user_id, session_id=session_id):
+            async for is_heartbeat, chunk in _stream_with_heartbeat(
+                lambda: agent.execute_stream(query, history=mem_context,
+                                             user_id=user_id, session_id=session_id),
+                heartbeat="data: [THINKING]正在分析...\n\n",
+                interval=15,
+            ):
+                if is_heartbeat:
+                    # 心跳保活：直接透传，让前端 resetIdle + 显示思考状态
+                    yield chunk
+                    continue
                 if not chunk:
                     continue
                 stripped = chunk.strip()
@@ -1843,16 +2372,14 @@ async def api_chat(request: Request):
 
 
 @app.post("/api/analysis")
-async def api_analysis(request: Request):
+async def api_analysis(request: Request, user=Depends(require_auth)):
     """数据分析：同步返回 JSON（带记忆管理）。"""
     body = await request.json()
     query = body.get("query", "").strip()
     if not query:
         return JSONResponse({"error": "query is required"}, status_code=400)
 
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     memory = get_session(user_id)
     memory.add_user_message(query)
 
@@ -1879,34 +2406,28 @@ async def api_analysis(request: Request):
 
 
 @app.get("/api/conversation/history")
-async def api_conversation_history(request: Request, limit: int = 20):
+async def api_conversation_history(request: Request, limit: int = 20, user=Depends(require_auth)):
     """获取用户历史会话记录（长期记忆）。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
 
 @app.get("/api/sessions")
-async def api_list_sessions(request: Request):
+async def api_list_sessions(request: Request, user=Depends(require_auth)):
     """获取用户的所有会话列表（按最近活跃排序）。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     sessions = _long_term_memory.get_user_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
 @app.get("/api/sessions/{session_id}")
-async def api_get_session(request: Request, session_id: str):
+async def api_get_session(request: Request, session_id: str, user=Depends(require_auth)):
     """获取指定会话的完整对话历史。
 
     IDOR 防护：校验该会话归属当前用户，拒绝读取他人会话。
     """
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     # 归属校验：会话不存在或不属于当前用户一律 404（避免枚举）
     owner = _long_term_memory.get_session_owner(session_id)
     if owner is None or owner != user_id:
@@ -1918,6 +2439,43 @@ async def api_get_session(request: Request, session_id: str):
         "conversation": conversation,
         "count": len(conversation),
     })
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_session(request: Request, session_id: str, user=Depends(require_auth)):
+    """删除指定会话及其全部对话历史。
+
+    IDOR 防护：校验归属，拒绝删除他人会话。
+    """
+    user_id = user["user_id"]
+    owner = _long_term_memory.get_session_owner(session_id)
+    if owner is None or owner != user_id:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+    _long_term_memory.delete_session(session_id)
+    return JSONResponse(content={"ok": True, "session_id": session_id})
+
+
+@app.patch("/api/sessions/{session_id}")
+async def api_rename_session(request: Request, session_id: str, user=Depends(require_auth)):
+    """重命名会话标题。
+
+    IDOR 防护：校验归属。body: {"title": "新标题"}
+    """
+    user_id = user["user_id"]
+    owner = _long_term_memory.get_session_owner(session_id)
+    if owner is None or owner != user_id:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+    title = (body.get("title") or "").strip()
+    if not title:
+        return JSONResponse({"ok": False, "error": "标题不能为空"}, status_code=400)
+    if len(title) > 60:
+        title = title[:60]
+    _long_term_memory.update_session_title(session_id, title)
+    return JSONResponse(content={"ok": True, "session_id": session_id, "title": title})
 
 
 @app.get("/api/health")
@@ -1939,11 +2497,9 @@ _MAX_DATASET_SIZE = 100 * 1024 * 1024  # 100MB
 
 
 @app.get("/api/datasets")
-async def list_datasets(request: Request):
+async def list_datasets(request: Request, user=Depends(require_auth)):
     """列出所有可用数据集。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     try:
         from database.datasources_db import datasources_db
     except ModuleNotFoundError:
@@ -1953,11 +2509,9 @@ async def list_datasets(request: Request):
 
 
 @app.post("/api/datasets/upload")
-async def upload_dataset(request: Request, file: UploadFile = File(...)):
+async def upload_dataset(request: Request, file: UploadFile = File(...), user=Depends(require_auth)):
     """上传 CSV/Excel 文件，解析并加载到 DuckDB。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
 
     fname = os.path.basename(file.filename or "")
     ext = os.path.splitext(fname)[1].lower().lstrip(".")
@@ -2032,7 +2586,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
         # 写入元数据（带 owner_user_id 实现多用户隔离）
         source_type = "csv" if ext == "csv" else "excel"
-        datasources_db.add_dataset(
+        meta_result = datasources_db.add_dataset(
             name=table_name,
             source_type=source_type,
             file_path=fpath,
@@ -2041,6 +2595,16 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
             row_count=load_result["row_count"],
             owner_user_id=user_id,
         )
+        # 元数据写入失败（如 UNIQUE 冲突）：删除文件并明确报错，避免"上传报成功但侧边栏查不到"
+        if not meta_result.get("success"):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+            return JSONResponse(
+                {"success": False, "error": f"元数据写入失败: {meta_result.get('error', '未知错误')}"},
+                status_code=400,
+            )
 
         return JSONResponse({
             "success": True,
@@ -2048,7 +2612,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
             "source_type": source_type,
             "row_count": load_result["row_count"],
             "columns": [c[0] for c in cols],
-            "sample": sample_data,
+            "sample": _json_safe(sample_data),
         })
 
     except Exception as e:
@@ -2059,11 +2623,9 @@ async def upload_dataset(request: Request, file: UploadFile = File(...)):
 
 
 @app.delete("/api/datasets/{name}")
-async def delete_dataset(request: Request, name: str):
+async def delete_dataset(request: Request, name: str, user=Depends(require_auth)):
     """删除数据集（卸载 DuckDB 表 + 删除文件 + 删除元数据）。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     if "/" in name or "\\" in name or name in ("", ".", ".."):
         return JSONResponse({"error": "非法数据集名"}, status_code=400)
 
@@ -2106,11 +2668,9 @@ async def delete_dataset(request: Request, name: str):
 
 
 @app.get("/api/datasets/{name}/schema")
-async def get_dataset_schema(request: Request, name: str):
+async def get_dataset_schema(request: Request, name: str, user=Depends(require_auth)):
     """获取数据集的详细 schema。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
 
     try:
         from database.datasources_db import datasources_db
@@ -2148,7 +2708,7 @@ async def get_dataset_schema(request: Request, name: str):
                  "count": s[6], "null_count": s[7]}
                 for s in stats
             ],
-            "sample": sample_df.to_dict(orient="records"),
+            "sample": _json_safe(sample_df.to_dict(orient="records")),
         })
     except Exception as e:
         # DuckDB 中表可能尚未加载，返回元数据中的 schema_json
@@ -2164,11 +2724,9 @@ async def get_dataset_schema(request: Request, name: str):
 
 
 @app.post("/api/datasources/reload")
-async def reload_datasources(request: Request):
+async def reload_datasources(request: Request, user=Depends(require_auth)):
     """热加载 datasources.yml 配置的数据库连接。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
 
     try:
         from database.duckdb_manager import init_duckdb
@@ -2215,20 +2773,16 @@ except ModuleNotFoundError:
 
 
 @app.get("/api/settings/status")
-async def get_settings_status(request: Request):
+async def get_settings_status(request: Request, user=Depends(require_auth)):
     """返回当前用户是否已配置。前端登录后据此决定是否弹提示。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"configured": False, "authed": False})
+    user_id = user["user_id"]
     return {"configured": user_settings_db.has(user_id), "authed": True}
 
 
 @app.get("/api/settings")
-async def get_settings(request: Request):
+async def get_settings(request: Request, user=Depends(require_auth)):
     """返回当前用户配置（API Key 掩码）。未登录 401，未配置返回 null。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"configured": False, "settings": None}, status_code=401)
+    user_id = user["user_id"]
     data = user_settings_db.get_masked(user_id)
     if data is None:
         return {"configured": False, "settings": None}
@@ -2236,16 +2790,14 @@ async def get_settings(request: Request):
 
 
 @app.post("/api/settings")
-async def save_settings(request: Request):
+async def save_settings(request: Request, user=Depends(require_auth)):
     """保存用户配置并触发热重载。前端回传掩码值时不覆盖已存明文 key。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"ok": False, "error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
-    allowed = {"llm_api_key", "llm_model_name", "embedding_model_name",
+    allowed = {"llm_api_key", "llm_model_name", "embedding_model_name", "llm_base_url",
                "vector_db_host", "vector_db_port", "vector_db_collection",
                "vector_db_tenant", "local_db_conn"}
     cleaned = {k: v for k, v in body.items() if k in allowed}
@@ -2264,12 +2816,87 @@ async def save_settings(request: Request):
         return JSONResponse({"ok": False, "error": f"保存失败: {e}"}, status_code=500)
 
 
+# ── 用户个人信息（昵称 / 头像 / 密码） ──
+
+def _avatar_web_url(avatar_path: str | None) -> str:
+    """把 users.avatar_path（相对 agent/ 的 data/avatars/xxx.ext）转成 Web URL。"""
+    if not avatar_path:
+        return ""
+    # 取 data/avatars/ 之后的相对片段
+    norm = avatar_path.replace("\\", "/")
+    marker = "data/avatars/"
+    idx = norm.find(marker)
+    rel = norm[idx + len(marker):] if idx >= 0 else os.path.basename(norm)
+    return f"/avatars/{rel}"
+
+
+@app.get("/api/profile")
+async def api_get_profile(request: Request, user=Depends(require_auth)):
+    """返回当前用户个人信息：account、昵称、头像 URL。"""
+    user_id = user["user_id"]
+    user_info = user_db.get_user(user_id) or {}
+    return JSONResponse(content={
+        "user_id": user_id,
+        "account": user_info.get("account", ""),
+        "nickname": user_info.get("nickname") or "",
+        "avatar_url": _avatar_web_url(user_info.get("avatar_path")),
+    })
+
+
+@app.post("/api/profile")
+async def api_update_profile(request: Request, user=Depends(require_auth)):
+    """更新昵称。body: {"nickname": "..."}"""
+    user_id = user["user_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+    nickname = (body.get("nickname") or "").strip()
+    if len(nickname) > 30:
+        nickname = nickname[:30]
+    user_db.update_profile(user_id, nickname=nickname)
+    return JSONResponse(content={"ok": True, "nickname": nickname})
+
+
+@app.post("/api/avatar")
+async def api_upload_avatar(request: Request, file: UploadFile = File(...), user=Depends(require_auth)):
+    """上传/更新头像。限定图片类型与 5MB。"""
+    user_id = user["user_id"]
+    allowed_ext = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in allowed_ext:
+        return JSONResponse({"ok": False, "error": "仅支持 png/jpg/jpeg/gif/webp"}, status_code=400)
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        return JSONResponse({"ok": False, "error": "头像不能超过 5MB"}, status_code=400)
+    fname = f"{user_id}{ext}"
+    save_path = os.path.join(_avatars_dir, fname)
+    with open(save_path, "wb") as f:
+        f.write(data)
+    user_db.update_profile(user_id, avatar_path=f"data/avatars/{fname}")
+    return JSONResponse(content={"ok": True, "avatar_url": f"/avatars/{fname}"})
+
+
+@app.post("/api/password")
+async def api_change_password(request: Request, user=Depends(require_auth)):
+    """修改密码。body: {"old_password": "...", "new_password": "..."}"""
+    user_id = user["user_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+    result = user_db.change_password(
+        user_id, body.get("old_password", ""), body.get("new_password", "")
+    )
+    if not result.get("success"):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
 @app.get("/api/knowledge/files")
-async def kb_list_files(request: Request):
+async def kb_list_files(request: Request, user=Depends(require_auth)):
     """列出 data/ 下知识库文件，含大小/类型/md5/是否已入库。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     data_dir = _kb_data_dir()
     allowed = _kb_allowed_types()
     try:
@@ -2301,11 +2928,9 @@ async def kb_list_files(request: Request):
 
 
 @app.get("/api/files")
-async def list_all_files(request: Request):
+async def list_all_files(request: Request, user=Depends(require_auth)):
     """统一文件列表（需求②）：文本类（Chroma 知识库）+ 表格类（DuckDB 数据集）。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     files = []
     # ── 文本类（PDF/Word/TXT/MD，进 Chroma）──
     data_dir = _kb_data_dir()
@@ -2355,11 +2980,9 @@ async def list_all_files(request: Request):
 
 
 @app.post("/api/knowledge/upload")
-async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
+async def kb_upload(request: Request, files: list[UploadFile] = File(...), user=Depends(require_auth)):
     """上传文件到 data/ 并增量入库。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     data_dir = _kb_data_dir()
     allowed = _kb_allowed_types()
     os.makedirs(data_dir, exist_ok=True)
@@ -2403,11 +3026,9 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...)):
 
 
 @app.delete("/api/knowledge/files/{filename}")
-async def kb_delete_file(request: Request, filename: str):
+async def kb_delete_file(request: Request, filename: str, user=Depends(require_auth)):
     """删除 data/ 下指定文件，并从向量库移除其分片。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     # 防路径穿越
     if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
         return JSONResponse({"error": "非法文件名"}, status_code=400)
@@ -2426,11 +3047,9 @@ async def kb_delete_file(request: Request, filename: str):
 
 
 @app.post("/api/knowledge/reindex")
-async def kb_reindex(request: Request):
+async def kb_reindex(request: Request, user=Depends(require_auth)):
     """清空向量库并全量重建索引（二次确认通过 confirm=true 才执行）。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     if not body.get("confirm"):
         return JSONResponse({"error": "需传 confirm=true 以确认全量重建"}, status_code=400)
@@ -2444,11 +3063,9 @@ async def kb_reindex(request: Request):
 
 
 @app.get("/api/knowledge/stats")
-async def kb_stats(request: Request):
+async def kb_stats(request: Request, user=Depends(require_auth)):
     """返回知识库统计信息。"""
-    user_id = await _get_user_id(request)
-    if user_id == "anonymous":
-        return JSONResponse({"error": "未登录"}, status_code=401)
+    user_id = user["user_id"]
     try:
         vs = _get_vector_store()
         return JSONResponse(vs.get_stats())
@@ -2460,6 +3077,11 @@ async def kb_stats(request: Request):
 _reports_dir = get_abs_path("reports")
 if os.path.exists(_reports_dir):
     app.mount("/reports", StaticFiles(directory=_reports_dir), name="reports")
+
+# ── 静态文件（用户头像） ──
+_avatars_dir = get_abs_path("data/avatars")
+os.makedirs(_avatars_dir, exist_ok=True)
+app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
 
 
 def _sanitize_result(result: dict) -> dict:
@@ -2475,6 +3097,26 @@ def _sanitize_result(result: dict) -> dict:
         else:
             sanitized[key] = value
     return sanitized
+
+
+def _json_safe(obj):
+    """递归把 NaN/Infinity 转成 None（JSON null）。
+
+    DuckDB 数值列含空单元格时，pandas to_dict 会产出 float('nan')，
+    FastAPI JSONResponse（allow_nan=False）序列化会抛
+    "Out of range float values are not JSON compliant"。此处统一清洗。
+    """
+    import math
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
 
 
 def _sanitize_dict(d: dict) -> dict:

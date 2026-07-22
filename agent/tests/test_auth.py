@@ -54,3 +54,27 @@ def test_require_auth_rejects_bad_token():
 def test_get_current_user_none_when_no_token():
     from api.auth import get_current_user
     assert get_current_user(_make_request(None)) is None
+
+
+def test_api_me_requires_auth():
+    from fastapi.testclient import TestClient
+    from api.fastapi_server import app
+    client = TestClient(app)
+    # 未登录 401
+    r = client.get("/api/me")
+    assert r.status_code == 401
+    # 登录后返回用户
+    _register("metest")
+    tok = _login("metest")["token"]
+    r = client.get("/api/me", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    assert r.json()["account"] == "metest"
+
+
+def test_app_redirects_when_unauthenticated():
+    from fastapi.testclient import TestClient
+    from api.fastapi_server import app
+    client = TestClient(app)
+    r = client.get("/app", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    assert r.headers["location"] == "/"
