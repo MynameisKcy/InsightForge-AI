@@ -2,8 +2,8 @@
 let isProcessing = false;
 let currentController = null;   // 当前 SSE 请求的 AbortController，供停止按钮中止
 let userStopped = false;       // 区分"用户主动停止" vs "真超时"
-let authToken = sessionStorage.getItem('token') || '';
-let accountName = sessionStorage.getItem('account') || '';
+let authToken = Auth.getToken();
+let accountName = '';
 let currentSessionId = '';
 
 if (!authToken) { window.location.href = '/'; }
@@ -14,7 +14,7 @@ loadProfile();
 
 async function loadProfile() {
   try {
-    var r = await fetch('/api/profile', {headers: authHeaders()});
+    var r = await Auth.authedFetch('/api/profile', {headers: authHeaders()});
     if (!r.ok) return;
     var d = await r.json();
     var display = document.getElementById('userDisplay');
@@ -33,7 +33,7 @@ function openProfileModal() {
   var ov = document.getElementById('profileOverlay');
   ov.classList.add('show');
   // 填充当前值
-  fetch('/api/profile', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(d){
+  Auth.authedFetch('/api/profile', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(d){
     if (!d) return;
     document.getElementById('pfNickname').value = d.nickname || '';
     document.getElementById('pfAccount').value = d.account || '';
@@ -64,7 +64,7 @@ async function uploadAvatar() {
   var hint = document.getElementById('pfAvatarHint');
   hint.textContent = '上传中...';
   try {
-    var r = await fetch('/api/avatar', {
+    var r = await Auth.authedFetch('/api/avatar', {
       method: 'POST',
       headers: authHeaders(),
       body: fd
@@ -88,7 +88,7 @@ async function saveProfile() {
   var ok = true;
   // 1. 昵称
   try {
-    await fetch('/api/profile', {
+    await Auth.authedFetch('/api/profile', {
       method: 'POST',
       headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
       body: JSON.stringify({nickname: nickname})
@@ -100,7 +100,7 @@ async function saveProfile() {
     if (newPwd.length < 8) { showToast('新密码至少 8 位', 'error'); return; }
     if (newPwd !== newPwd2) { showToast('两次新密码不一致', 'error'); return; }
     try {
-      var r = await fetch('/api/password', {
+      var r = await Auth.authedFetch('/api/password', {
         method: 'POST',
         headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
         body: JSON.stringify({
@@ -153,7 +153,7 @@ function closeSidebar() {
 // ── 加载侧边栏会话列表 ──
 async function loadSessions() {
   try {
-    const r = await fetch('/api/sessions', {
+    const r = await Auth.authedFetch('/api/sessions', {
       headers: {'Authorization': 'Bearer ' + authToken}
     });
     if (r.ok) {
@@ -193,7 +193,7 @@ async function deleteSession(sid, ev) {
   if (ev) { ev.stopPropagation(); }
   if (!confirm('确定删除该会话？删除后不可恢复。')) return;
   try {
-    const r = await fetch('/api/sessions/' + sid, {
+    const r = await Auth.authedFetch('/api/sessions/' + sid, {
       method: 'DELETE',
       headers: {'Authorization': 'Bearer ' + authToken}
     });
@@ -233,7 +233,7 @@ function renameSession(sid, ev) {
     titleEl.textContent = newTitle;
     if (newTitle && newTitle !== oldTitle) {
       try {
-        await fetch('/api/sessions/' + sid, {
+        await Auth.authedFetch('/api/sessions/' + sid, {
           method: 'PATCH',
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken},
           body: JSON.stringify({title: newTitle})
@@ -261,7 +261,7 @@ async function switchSession(sessionId) {
   container.innerHTML = '<div class="typing-indicator" style="justify-content:center;padding:40px"><span></span><span></span><span></span></div>';
 
   try {
-    const r = await fetch('/api/sessions/' + sessionId, {
+    const r = await Auth.authedFetch('/api/sessions/' + sessionId, {
       headers: {'Authorization': 'Bearer ' + authToken}
     });
     if (r.ok) {
@@ -304,11 +304,11 @@ function newSession() {
 }
 
 function logout() {
-  fetch('/api/logout', {
+  Auth.authedFetch('/api/logout', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken}
   });
-  sessionStorage.removeItem('token');
+  Auth.clearToken();
   sessionStorage.removeItem('account');
   window.location.href = '/';
 }
@@ -396,7 +396,7 @@ async function streamChat(text, bubble) {
 
   let response;
   try {
-    response = await fetch('/api/chat', {
+    response = await Auth.authedFetch('/api/chat', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
@@ -746,7 +746,7 @@ function fmtSize(bytes) {
 
 async function loadKbFiles() {
   try {
-    const r = await fetch('/api/knowledge/files', {headers: authHeaders()});
+    const r = await Auth.authedFetch('/api/knowledge/files', {headers: authHeaders()});
     if (!r.ok) { document.getElementById('kbFileList').innerHTML = '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
     const data = await r.json();
     const files = data.files || [];
@@ -774,7 +774,7 @@ async function loadKbFiles() {
 
 async function loadKbStats() {
   try {
-    const r = await fetch('/api/knowledge/stats', {headers: authHeaders()});
+    const r = await Auth.authedFetch('/api/knowledge/stats', {headers: authHeaders()});
     if (r.ok) {
       const s = await r.json();
       document.getElementById('kbStats').textContent =
@@ -790,7 +790,7 @@ document.getElementById('kbFileInput').addEventListener('change', async (e) => {
   const fd = new FormData();
   for (const f of files) fd.append('files', f);
   try {
-    const r = await fetch('/api/knowledge/upload', {
+    const r = await Auth.authedFetch('/api/knowledge/upload', {
       method: 'POST',
       headers: {'Authorization': 'Bearer ' + authToken},
       body: fd
@@ -806,7 +806,7 @@ document.getElementById('kbFileInput').addEventListener('change', async (e) => {
 async function deleteKbFile(filename) {
   if (!(await showConfirm('确认删除知识库文件及其分片？\\n' + filename))) return;
   try {
-    const r = await fetch('/api/knowledge/files/' + encodeURIComponent(filename), {
+    const r = await Auth.authedFetch('/api/knowledge/files/' + encodeURIComponent(filename), {
       method: 'DELETE', headers: authHeaders()
     });
     const data = await r.json();
@@ -820,7 +820,7 @@ async function deleteKbFile(filename) {
 async function kbReindex() {
   if (!(await showConfirm('全量重建将清空当前向量库并重新入库所有文件，耗时较长。确认继续？'))) return;
   try {
-    const r = await fetch('/api/knowledge/reindex', {
+    const r = await Auth.authedFetch('/api/knowledge/reindex', {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({confirm: true})
     });
@@ -843,7 +843,7 @@ function dsIcon(type) {
 
 async function loadDatasets() {
   try {
-    const r = await fetch('/api/datasets', {headers: authHeaders()});
+    const r = await Auth.authedFetch('/api/datasets', {headers: authHeaders()});
     if (!r.ok) { document.getElementById('dsList').innerHTML = '<div class="ds-item" style="color:#718096;justify-content:center;">加载失败</div>'; return; }
     const data = await r.json();
     const datasets = data.datasets || [];
@@ -873,7 +873,7 @@ async function toggleDsDetail(name) {
   if (el.classList.contains('show')) { el.classList.remove('show'); return; }
   el.classList.add('show');
   try {
-    const r = await fetch('/api/datasets/' + encodeURIComponent(name) + '/schema', {headers: authHeaders()});
+    const r = await Auth.authedFetch('/api/datasets/' + encodeURIComponent(name) + '/schema', {headers: authHeaders()});
     if (r.ok) {
       const d = await r.json();
       const cols = (d.columns || []).map(c => `<tr><td>${escapeHtml(c.name)}</td><td>${escapeHtml(c.type)}</td></tr>`).join('');
@@ -891,7 +891,7 @@ document.getElementById('dsFileInput').addEventListener('change', async (e) => {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const r = await fetch('/api/datasets/upload', {
+    const r = await Auth.authedFetch('/api/datasets/upload', {
       method: 'POST',
       headers: {'Authorization': 'Bearer ' + authToken},
       body: fd
@@ -912,7 +912,7 @@ document.getElementById('dsFileInput').addEventListener('change', async (e) => {
 async function deleteDs(name) {
   if (!(await showConfirm('确认删除数据集「' + name + '」？\\n将同时删除 DuckDB 表和本地文件。'))) return;
   try {
-    const r = await fetch('/api/datasets/' + encodeURIComponent(name), {
+    const r = await Auth.authedFetch('/api/datasets/' + encodeURIComponent(name), {
       method: 'DELETE', headers: authHeaders()
     });
     const data = await r.json();
@@ -956,7 +956,7 @@ var _setKeyEditing = false;
 async function loadSettingsStatus() {
   // 登录后查是否已配置；未配置则弹提示横幅 + 侧边栏红点
   try {
-    var r = await fetch('/api/settings/status', {headers: authHeaders()});
+    var r = await Auth.authedFetch('/api/settings/status', {headers: authHeaders()});
     var d = await r.json();
     var banner = document.getElementById('settingsBanner');
     var dot = document.getElementById('settingsDot');
@@ -972,7 +972,7 @@ async function loadSettingsStatus() {
 async function loadSettings() {
   // 拉取掩码配置填表
   try {
-    var r = await fetch('/api/settings', {headers: authHeaders()});
+    var r = await Auth.authedFetch('/api/settings', {headers: authHeaders()});
     if (r.status === 401) return;
     var d = await r.json();
     if (!d.configured) return;
@@ -1026,7 +1026,7 @@ async function saveSettings() {
   };
   // 若未进入编辑模式且 key 含掩码标记，则不发送明文 key 字段（后端会保留旧值）
   try {
-    var r = await fetch('/api/settings', {
+    var r = await Auth.authedFetch('/api/settings', {
       method: 'POST',
       headers: Object.assign({'Content-Type':'application/json'}, authHeaders()),
       body: JSON.stringify(payload)
@@ -1055,7 +1055,7 @@ function toggleFilesSection() {
 }
 async function loadAllFiles() {
   try {
-    var r = await fetch('/api/files', {headers: authHeaders()});
+    var r = await Auth.authedFetch('/api/files', {headers: authHeaders()});
     if (!r.ok) {
       document.getElementById('allFileList').innerHTML =
         '<div class="kb-file" style="color:#718096;justify-content:center;">加载失败</div>';
@@ -1172,7 +1172,7 @@ function _pollFilesStatus(timeoutMs) {
   var start = Date.now();
   function tick() {
     if (Date.now() - start > timeoutMs) return;
-    fetch('/api/files', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(data) {
+    Auth.authedFetch('/api/files', {headers: authHeaders()}).then(function(r){return r.json();}).then(function(data) {
       var pending = (data.files || []).some(function(f){return f.status === '处理中';});
       loadAllFiles();
       loadDatasets();       // 轮询期间数据集可能就绪，同步刷新
@@ -1187,7 +1187,7 @@ async function deleteFile(name, type) {
     ? '/api/datasets/' + encodeURIComponent(name)
     : '/api/knowledge/files/' + encodeURIComponent(name);
   try {
-    var r = await fetch(url, {method: 'DELETE', headers: authHeaders()});
+    var r = await Auth.authedFetch(url, {method: 'DELETE', headers: authHeaders()});
     var data = await r.json();
     if (data.success !== undefined && !data.success) {
       showToast(data.error || '删除失败', 'error', 4000); return;
