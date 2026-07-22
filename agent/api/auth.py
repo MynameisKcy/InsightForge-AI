@@ -37,6 +37,12 @@ def validate_token_cached(token: str | None) -> dict | None:
     return user
 
 
+def invalidate_token(token: str | None) -> None:
+    """Evict a token from the LRU cache (call on logout / revocation)."""
+    if token:
+        _token_cache.pop(token, None)
+
+
 def require_auth(request: Request) -> dict:
     """FastAPI 依赖：业务路由强制鉴权，失败 401。返回用户 dict。"""
     token = extract_token(request)

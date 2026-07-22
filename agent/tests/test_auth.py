@@ -1,7 +1,15 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import time as _time
+import secrets as _secrets
+
 import database.user_db as user_db_mod
+
+
+def _uniq_account(label: str = "u") -> str:
+    """每次生成唯一账号，避免跨测试运行的用户名冲突/密码残留。"""
+    return f"{label}_{_secrets.token_hex(4)}_{int(_time.time()) % 100000}"
 
 
 def _register(name: str = "authtest"):
@@ -78,3 +86,78 @@ def test_app_redirects_when_unauthenticated():
     r = client.get("/app", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/"
+
+
+def test_update_profile_changes_nickname():
+    """POST /api/profile 改昵称后，GET /api/me 立即返回新昵称。"""
+    from fastapi.testclient import TestClient
+    from api.fastapi_server import app
+    client = TestClient(app)
+    acct = _uniq_account("prof")
+    _register(acct)
+    tok = _login(acct)["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    r = client.post("/api/profile", json={"nickname": "新昵称"}, headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("ok") is True
+    assert body.get("nickname") == "新昵称"
+    # GET /api/me 应立即反映新昵称
+    me = client.get("/api/me", headers=h).json()
+    assert me.get("nickname") == "新昵称"
+
+
+def test_change_password_wrong_old():
+    """旧密码错误时 /api/password 返回失败且文案含“旧密码错误”。"""
+    from fastapi.testclient import TestClient
+    from api.fastapi_server import app
+    client = TestClient(app)
+    acct = _uniq_account("pwd")
+    _register(acct)
+    tok = _login(acct)["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    r = client.post(
+        "/api/password",
+        json={"old_password": "wrong", "new_password": "NewPass1234!"},
+        headers=h,
+    )
+    assert r.status_code == 400
+    assert "旧密码错误" in r.json().get("error", "")
+
+
+def test_change_password_success_then_login_with_new():
+    """改密成功后，用新密码可登录、旧密码不可登录。"""
+    acct = _uniq_account("pwok")
+    _register(acct)
+    user_id = _login(acct)["user_id"]
+    res = user_db_mod.user_db.change_password(
+        user_id, "Test1234!", "NewPass1234!"
+    )
+    assert res.get("success") is True
+    # 新密码登录成功
+    new_login = user_db_mod.user_db.login(acct, "NewPass1234!")
+    assert new_login.get("success") is True
+    # 旧密码登录失败
+    old_login = user_db_mod.user_db.login(acct, "Test1234!")
+    assert old_login.get("success") is not True
+
+
+def test_logout_invalidates_cache():
+    """登出后立即从短缓存逐出该 token，validate_token_cached 返回 None。"""
+    from api.auth import validate_token_cached
+    from fastapi.testclient import TestClient
+    from api.fastapi_server import app
+    client = TestClient(app)
+    acct = _uniq_account("logout")
+    _register(acct)
+    tok = _login(acct)["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    # 先访问 /api/me，使 token 进入短缓存
+    assert client.get("/api/me", headers=h).status_code == 200
+    assert validate_token_cached(tok) is not None  # 缓存已命中
+    # 登出
+    r = client.post("/api/logout", headers=h)
+    assert r.status_code == 200
+    assert r.json().get("success") is True
+    # 缓存应被逐出：validate_token_cached 不再返回旧 user
+    assert validate_token_cached(tok) is None
