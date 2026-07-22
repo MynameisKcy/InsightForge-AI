@@ -25,10 +25,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .nav-btn-start:hover { background: #c23152; }
 .nav-btn-workbench { background: #e94560; color: #fff; }
 .nav-btn-workbench:hover { background: #c23152; }
-/* ── 落地页占位内容（Task 6 填充 Hero/features） ── */
-.landing-hero { max-width: 820px; margin: 80px auto; padding: 0 40px; text-align: center; }
-.landing-hero h1 { font-size: 44px; margin-bottom: 16px; line-height: 1.2; }
-.landing-hero p { font-size: 18px; color: rgba(255,255,255,.78); margin-bottom: 28px; }
+/* ── 落地页 Hero + 功能特性（Task 6 填充内容，沿用旧配色） ── */
+.landing-hero { max-width: 820px; margin: 72px auto 48px; padding: 0 40px; text-align: center; }
+.landing-hero h1 { font-size: 48px; margin-bottom: 16px; line-height: 1.2;
+                    background: linear-gradient(135deg, #fff 0%, #c9d6ff 100%);
+                    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                    background-clip: text; }
+.landing-hero .subtitle { font-size: 18px; color: rgba(255,255,255,.78);
+                          margin-bottom: 32px; line-height: 1.6; }
+.hero-cta { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+.hero-cta .btn { width: auto; padding: 13px 32px; font-size: 15px; margin-top: 0; }
+.btn-ghost { background: transparent; color: #fff; border: 1.5px solid rgba(255,255,255,.4); }
+.btn-ghost:hover { border-color: #fff; background: rgba(255,255,255,.08); }
+/* ── 功能特性卡片 ── */
+.features-section { max-width: 1080px; margin: 40px auto 80px; padding: 0 40px; }
+.features-section h2 { font-size: 30px; text-align: center; margin-bottom: 12px; }
+.features-section .section-sub { text-align: center; color: rgba(255,255,255,.65);
+                                  font-size: 15px; margin-bottom: 40px; }
+.features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                 gap: 24px; }
+.feature-card { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12);
+                border-radius: 14px; padding: 28px 24px; transition: transform .2s, border-color .2s; }
+.feature-card:hover { transform: translateY(-4px); border-color: rgba(233,69,96,.5); }
+.feature-card .icon { font-size: 28px; margin-bottom: 14px; }
+.feature-card h3 { font-size: 18px; margin-bottom: 10px; color: #fff; }
+.feature-card p { font-size: 14px; color: rgba(255,255,255,.72); line-height: 1.6; }
+/* ── Footer ── */
+.site-footer { border-top: 1px solid rgba(255,255,255,.1); padding: 28px 40px;
+               text-align: center; color: rgba(255,255,255,.5); font-size: 13px; }
+.site-footer a { color: rgba(255,255,255,.7); text-decoration: none; }
 
 /* ── 弹窗（复用旧登录卡配色，Task 9 重塑） ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55);
@@ -68,8 +93,39 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 </nav>
 
 <section class="landing-hero">
-  <h1>用自然语言，驱动数据分析</h1>
-  <p>多智能体协同 · SQL 查询 · 趋势/产品/风险分析 · 可视化 · 多格式报告</p>
+  <h1>InsightForge AI</h1>
+  <p class="subtitle">多智能体协同数据分析平台 — 自然语言驱动 SQL 查询、趋势/产品/风险分析、图表生成与多格式报告</p>
+  <div class="hero-cta">
+    <button class="btn btn-primary" id="hero-start">立即开始</button>
+    <a class="btn btn-ghost" href="#features">查看示例</a>
+  </div>
+</section>
+
+<section class="features-section" id="features">
+  <h2>核心能力</h2>
+  <p class="section-sub">从自然语言到多格式报告，一站式协同分析</p>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="icon">💬</div>
+      <h3>自然语言驱动</h3>
+      <p>Smart Assistant 智能客服模式，ReAct Agent 配 13 个工具，对话式流式响应。</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🔗</div>
+      <h3>多智能体分析流水线</h3>
+      <p>PlannerAgent 编排：SQL → 趋势/产品/风险分析 → 可视化 → 报告 → 导出，步骤依赖自动调度。</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🗄️</div>
+      <h3>多源数据管理</h3>
+      <p>上传 CSV/Excel 或预配置 MySQL/PostgreSQL，DuckDB 统一查询，支持跨表 JOIN。</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📊</div>
+      <h3>多格式报告导出</h3>
+      <p>自动生成图表与文本报告，一键导出。</p>
+    </div>
+  </div>
 </section>
 
 <!-- 登录/注册弹窗 -->
@@ -101,6 +157,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <a class="auth-toggle" id="auth-toggle">没有账号？点击注册</a>
   </div>
 </div>
+
+<footer class="site-footer">
+  © 2026 InsightForge AI · 多智能体协同数据分析平台 · 基于 LangChain + LangGraph 构建
+</footer>
 
 </body>
 </html>
