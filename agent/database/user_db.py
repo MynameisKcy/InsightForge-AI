@@ -68,6 +68,14 @@ class UserDB:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_type: str):
+        """幂等加列：列已存在时 SQLite 抛 OperationalError，忽略即可。"""
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
     def _init_tables(self):
         with self._get_conn() as conn:
             conn.execute("""
@@ -79,6 +87,8 @@ class UserDB:
                     last_login TEXT
                 )
             """)
+            # 幂等迁移：为旧表补齐 nickname 列（头像功能已移除）
+            self._ensure_column(conn, "users", "nickname", "TEXT")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,7 +199,7 @@ class UserDB:
 
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT u.id, u.account, s.expires_at, s.session_token
+                """SELECT u.id, u.account, u.nickname, s.expires_at, s.session_token
                    FROM sessions s JOIN users u ON s.user_id = u.id
                    WHERE s.session_token = ?""",
                 (token,),
@@ -208,7 +218,8 @@ class UserDB:
                 conn.commit()
                 return None
 
-            return {"user_id": row["id"], "account": row["account"]}
+            return {"user_id": row["id"], "account": row["account"],
+                    "nickname": row["nickname"]}
 
     def logout(self, token: str):
         """登出，删除 session。"""
@@ -220,10 +231,47 @@ class UserDB:
         """获取用户信息。"""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT id, account, created_at, last_login FROM users WHERE id = ?",
+                "SELECT id, account, nickname, created_at, last_login FROM users WHERE id = ?",
                 (user_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def update_profile(self, user_id: str, nickname: str | None = None) -> bool:
+        """更新用户昵称。仅更新非 None 的字段。"""
+        sets, params = [], []
+        if nickname is not None:
+            sets.append("nickname = ?")
+            params.append(nickname)
+        if not sets:
+            return False
+        params.append(user_id)
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def change_password(self, user_id: str, old_password: str, new_password: str) -> dict:
+        """修改密码：校验旧密码后写入新哈希。"""
+        if not new_password or len(new_password) < 8:
+            return {"success": False, "error": "新密码长度至少 8 位"}
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT password_hash FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if not row:
+                return {"success": False, "error": "用户不存在"}
+            if not _verify_password(old_password, row["password_hash"]):
+                return {"success": False, "error": "旧密码错误"}
+            new_hash = _hash_password(new_password)
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (new_hash, user_id),
+            )
+            conn.commit()
+        logger.info(f"User {user_id} changed password")
+        return {"success": True}
 
     def get_session_history(self, user_id: str, limit: int = 50) -> list[dict]:
         """获取用户历史 session 记录。"""

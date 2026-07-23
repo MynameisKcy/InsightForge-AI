@@ -23,9 +23,6 @@ pip install -r requirements.txt
 # Run FastAPI server (recommended, port 8502)
 conda activate AnalysisAgent && cd agent && python -m api.fastapi_server
 
-# Run Streamlit UI (port 8501)
-conda activate AnalysisAgent && cd agent && streamlit run app.py
-
 # Run existing tests
 conda activate AnalysisAgent && cd agent && python -m pytest tests/ -v
 # or: python -m unittest discover tests -v

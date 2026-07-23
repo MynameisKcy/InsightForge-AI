@@ -32,9 +32,9 @@ except ModuleNotFoundError:
 
 
 class ReactAgent:
-    def __init__(self):
+    def __init__(self, user_id=None):
         self.agent = create_agent(
-            model=get_chat_model(),
+            model=get_chat_model(user_id),
             system_prompt=load_system_prompts(),
             tools=[rag_sumarize, get_weather, get_user_id, get_user_location,
                    get_current_month, get_external_data, fill_report_context_for_report,
@@ -45,14 +45,20 @@ class ReactAgent:
         )
 
     def execute_stream(self, query: str, history: list[dict] | None = None,
-                       user_id: str = "default", session_id: str = ""):
+                       user_id: str = "default", session_id: str = "",
+                       progress_emitter=None):
         # 构建完整上下文：历史消息 + 当前问题
         # 设置请求级 user_id，供下游 @tool 工具（run_full_analysis 等）读取，实现多用户隔离
+        # progress_emitter：绑定到 contextvar，供 PlannerAgent.run 在 run_full_analysis
+        # 执行期间把步骤事件直接推入 SSE 队列（绕过被阻塞的流式 yield）。
         from utils.request_context import set_request_context, reset_request_context
+        from utils.progress_emitter import set_progress_emitter, reset_progress_emitter
         ctx_token = set_request_context(user_id=user_id, session_id=session_id)
+        pe_token = set_progress_emitter(progress_emitter)
         try:
             yield from self._execute_stream_inner(query, history)
         finally:
+            reset_progress_emitter(pe_token)
             reset_request_context(ctx_token)
 
     def _execute_stream_inner(self, query: str, history: list[dict] | None = None):

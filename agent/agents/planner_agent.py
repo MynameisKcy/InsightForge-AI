@@ -30,6 +30,11 @@ try:
 except ModuleNotFoundError:
     from agent.database.data_resolver import DataResolver
 
+try:
+    from utils.progress_emitter import get_progress_emitter
+except ModuleNotFoundError:
+    from agent.utils.progress_emitter import get_progress_emitter
+
 
 class RequestContext:
     """单次分析请求的上下文，按 user_id 隔离数据层，替代旧的实例属性。
@@ -91,13 +96,24 @@ PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器�
 """
 
 
+AGENT_LABELS = {
+    "sql_query": "SQL 查询",
+    "trend_analysis": "趋势分析",
+    "product_analysis": "产品分析",
+    "risk_analysis": "风险分析",
+    "visualization": "图表生成",
+    "report": "生成报告",
+    "export": "导出报告",
+}
+
+
 class PlannerAgent(BaseAgent):
     """任务规划与编排 Agent：整个系统的入口和协调器。"""
 
     name = "planner_agent"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, user_id=None):
+        super().__init__(user_id)   # self.model = 该用户的 LLM（按 user_id 缓存）
         self.sql_agent = SQLAgent()
         self.trend_agent = TrendAgent()
         self.product_agent = ProductAgent()
@@ -105,6 +121,12 @@ class PlannerAgent(BaseAgent):
         self.viz_agent = VisualizationAgent()
         self.report_agent = ReportAgent()
         self.export_agent = ExportAgent()
+        # 子 Agent 默认按「默认配置」构建模型；这里统一指向本用户的模型，
+        # 实现整条流水线按 user_id 隔离 LLM 配置（避免改每个子 Agent 的构造签名）。
+        _model = self.model
+        for _ag in (self.sql_agent, self.trend_agent, self.product_agent,
+                    self.risk_agent, self.viz_agent, self.report_agent, self.export_agent):
+            _ag.model = _model
         # 不再保存请求级状态（_current_csv_path/_current_dataset_name/_last_loaded_csv），
         # 改为每次请求用 RequestContext 局部变量下传，避免多用户并发竞态。
 
@@ -154,6 +176,16 @@ class PlannerAgent(BaseAgent):
             logger.info(f"Planner using dataset: {dataset_name} ({csv_path}) for user={user_id}")
         return ctx
 
+    @staticmethod
+    def _emit_progress(event_type: str, data: dict | None = None) -> None:
+        """向当前请求的进度通道发射事件（无通道时 no-op，如同步 /api/analysis 路径）。"""
+        try:
+            emitter = get_progress_emitter()
+            if emitter is not None:
+                emitter.emit(event_type, data)
+        except Exception:
+            pass
+
     def run(self, input_data: dict) -> dict:
         """
         input_data = {
@@ -184,6 +216,20 @@ class PlannerAgent(BaseAgent):
 
         logger.info(f"Planner created plan with {len(plan)} steps: {[s['agent'] for s in plan]}")
 
+        # 进度：把完整计划下发给前端，供步骤清单渲染（无 emitter 时 no-op）
+        self._emit_progress("plan", {
+            "title": title,
+            "steps": [
+                {
+                    "step": s.get("step"),
+                    "agent": s.get("agent", ""),
+                    "label": AGENT_LABELS.get(s.get("agent", ""), s.get("agent", "")),
+                    "task": s.get("task", query),
+                }
+                for s in plan
+            ],
+        })
+
         # 2. 按计划执行
         results = {}
         errors = []
@@ -207,12 +253,15 @@ class PlannerAgent(BaseAgent):
             step_key = f"step_{step.get('step')}"
             logger.info(f"Executing step {step.get('step')}: {agent_name} - {task}")
 
+            self._emit_progress("step_start", {"step": step.get("step")})
+            step_ok = False
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
                     step_result = handler(task, results, ctx)
                     results[step_key] = step_result
                     results[f"{agent_name}_result"] = step_result
+                    step_ok = True
                 else:
                     errors.append(f"Unknown agent: {agent_name}")
                     results[step_key] = None
@@ -221,6 +270,12 @@ class PlannerAgent(BaseAgent):
                 logger.error(traceback.format_exc())
                 errors.append(f"Step {step.get('step')} failed: {e}")
                 results[step_key] = None
+            # 仅成功才标记完成；失败（异常或未知 agent）标记 error，
+            # 避免 UI 把失败步骤误显示为 ✓（前端 step-progress step_error 分支）
+            if step_ok:
+                self._emit_progress("step_done", {"step": step.get("step")})
+            else:
+                self._emit_progress("step_error", {"step": step.get("step")})
 
         # 3. 汇总结果
         return {
