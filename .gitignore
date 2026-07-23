@@ -27,3 +27,6 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
+
+# 默认数据集 (2.1M, 停止版本跟踪, 磁盘保留; 全新 clone 需手动放回)
+agent/data/train.csv
