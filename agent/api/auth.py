@@ -13,10 +13,27 @@ _token_cache: dict[str, tuple[dict, float]] = {}
 
 
 def extract_token(request: Request) -> str | None:
-    """从 Authorization: Bearer <token> 提取 token。"""
+    """提取会话 token：优先 Authorization: Bearer <token>，无头时回退 token cookie。
+
+    关键：浏览器的页面级导航（直接访问 /app、点击 <a href="/app">、
+    window.location.href='/app'）不会携带 Authorization 头 —— 该头只在
+    fetch/XHR 中由前端手动添加，token 又存于 localStorage，导航时同样读不到。
+    若页面路由（GET /app）仅凭 Authorization 头鉴权，已登录用户导航过来也会
+    被判为未登录而 302 回落地页，与 fetch 调用的 /api/me（带头，返回 200）
+    形成 /app → / → /api/me → /app 的重定向死循环。
+    因此这里回退到 cookie，使服务端能在导航场景下正确识别会话。
+    """
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
-        return auth[7:].strip()
+        tok = auth[7:].strip()
+        if tok:
+            return tok
+    # 回退：页面导航场景从 cookie 读取（mock request 可能无 cookies 属性）
+    cookies = getattr(request, "cookies", None)
+    if cookies:
+        tok = cookies.get("token")
+        if tok:
+            return tok
     return None
 
 

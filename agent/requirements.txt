@@ -9,17 +9,17 @@ langchain-community==0.4.2
 langchain-chroma==1.1.0
 langchain-text-splitters==1.1.2
 langgraph==1.2.9
+langchain-openai  # 用户自定义 base_url 接入 OpenAI 兼容端点（不只限千问）
 
 # ── LLM / 向量 / 分词（DashScope 通义千问 + ChromaDB + jieba）──
 dashscope==1.26.3
 chromadb==1.5.9
 jieba==0.42.1
 
-# ── Web 服务（FastAPI SSE 流式 + Streamlit + 文件上传）──
+# ── Web 服务（FastAPI SSE 流式 + 文件上传）──
 fastapi==0.139.2
 uvicorn==0.51.0
 python-multipart==0.0.32
-streamlit==1.59.2
 websockets==15.0.1
 
 # ── 数据处理 / 数据库 ──

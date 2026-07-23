@@ -31,6 +31,9 @@ except ImportError:
 
 CHART_OUTPUT_DIR = "reports/charts"
 
+# Cobalt 系配色，与 app sci-tech 主题一致：主色 cobalt，辅以 cyan/violet/green/amber/rose
+PALETTE = ["#3b82f6", "#22d3ee", "#a78bfa", "#34d399", "#fbbf24", "#fb7185"]
+
 
 def _ensure_output_dir() -> str:
     """确保图表输出目录存在。"""
@@ -67,6 +70,70 @@ class ChartGenerator:
         return False
 
     @staticmethod
+    def _series_stats(series):
+        """数值列统计：min/max/max_abs/has_neg/is_int_like。非数值或空返回 None。"""
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if s.empty:
+            return None
+        vmin, vmax = float(s.min()), float(s.max())
+        return {
+            "min": vmin, "max": vmax,
+            "max_abs": float(max(abs(vmin), abs(vmax))),
+            "has_neg": vmin < 0,
+            "is_int_like": bool((s == s.astype(int)).all()),
+        }
+
+    @staticmethod
+    def _tick_format(max_abs):
+        """按量级选 Plotly 刻度格式：>=1000 用 SI(k/M/G)，否则千分位/小数。"""
+        if max_abs >= 1000:
+            return ".2~s"   # 1.2M / 12k / 3.4G
+        if max_abs >= 1:
+            return ",.0f"   # 1,234
+        return ",.2f"
+
+    @staticmethod
+    def _y_range(series, start_zero=False):
+        """y 轴范围，带 5% padding；start_zero（柱状图、全非负）时下限为 0。"""
+        st = ChartGenerator._series_stats(series)
+        if st is None:
+            return None
+        lo, hi = st["min"], st["max"]
+        if start_zero and not st["has_neg"]:
+            lo = 0
+        if lo == hi:
+            return [lo - 1, hi + 1]
+        pad = (hi - lo) * 0.05
+        return [lo - pad, hi + pad]
+
+    @staticmethod
+    def _style_numeric_axis(fig, axis, series, start_zero=False):
+        """给数值轴设置刻度格式与范围。axis: 'x' 或 'y'。"""
+        st = ChartGenerator._series_stats(series)
+        if st is None:
+            return
+        kw = {"tickformat": ChartGenerator._tick_format(st["max_abs"])}
+        rng = ChartGenerator._y_range(series, start_zero=start_zero)
+        if rng is not None:
+            kw["range"] = rng
+        if axis == "y":
+            fig.update_yaxes(**kw)
+        else:
+            fig.update_xaxes(**kw)
+
+    @staticmethod
+    def _x_should_be_category(df, col):
+        """x 列是否应作为分类轴（月型 / 非数值 / 低基数数值），避免科学计数法与乱序。"""
+        if col not in df.columns:
+            return False
+        if ChartGenerator._is_month_like(df, col):
+            return True
+        s = df[col]
+        if not pd.api.types.is_numeric_dtype(s):
+            return True
+        return 0 < s.nunique(dropna=True) <= 24
+
+    @staticmethod
     def line_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str = "趋势图",
                    x_label: str = "", y_label: str = "") -> str:
         """生成时间序列折线图（趋势图）。返回保存路径。"""
@@ -76,27 +143,25 @@ class ChartGenerator:
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
         work_df = df.copy()
         month_like = ChartGenerator._is_month_like(work_df, x_col)
+        use_x = "_x_display" if month_like else x_col
         if month_like:
             work_df["_x_display"] = work_df[x_col].astype(int).astype(str)
-            fig = px.line(work_df, x="_x_display", y=y_col, title=title, markers=True,
-                          labels={"_x_display": x_label or x_col, y_col: y_label or y_col})
-        else:
-            fig = px.line(work_df, x=x_col, y=y_col, title=title, markers=True,
-                          labels={x_col: x_label or x_col, y_col: y_label or y_col})
-
-        fig.update_layout(
-            template="plotly_white",
-            hovermode="x unified",
-            height=500,
-        )
-        # 如果是 month-like 的 x 轴，确保 tick 不旋转，格式化标签
-        if month_like:
-            fig.update_xaxes(type="category", tickformat=",")
+        fig = px.line(work_df, x=use_x, y=y_col, title=title, markers=True,
+                      labels={use_x: x_label or x_col, y_col: y_label or y_col})
+        fig.update_traces(line_color=PALETTE[0])
+        fig.update_layout(template="plotly_white", hovermode="x unified",
+                          height=500, colorway=PALETTE)
+        # 分类轴（月型/低基数/文本）避免科学计数法与乱序
+        if ChartGenerator._x_should_be_category(work_df, x_col):
+            fig.update_xaxes(type="category")
+        # y 轴：按数据量级格式化刻度 + 带留白的范围
+        ChartGenerator._style_numeric_axis(fig, "y", work_df[y_col], start_zero=False)
         return _save_chart(fig, f"trend_{_safe_name(title)}")
 
     @staticmethod
     def bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str = "柱状图",
-                  top_n: int = 10, horizontal: bool = False) -> str:
+                  top_n: int = 10, horizontal: bool = False,
+                  x_label: str = "", y_label: str = "") -> str:
         """生成柱状图（TOP 排名分析）。返回保存路径。"""
         if not _plotly_available:
             return _placeholder("bar_chart", title)
@@ -112,35 +177,50 @@ class ChartGenerator:
         else:
             use_x = x_col
 
+        labels = {y_col: y_label or y_col}
+        if horizontal:
+            labels[x_col] = x_label or x_col
+        else:
+            labels[use_x] = x_label or x_col
         if horizontal:
             fig = px.bar(data, y=x_col, x=y_col, title=title, orientation="h",
-                         text=y_col)
+                         text=y_col, labels=labels)
         else:
-            fig = px.bar(data, x=use_x, y=y_col, title=title, text=y_col)
-        fig.update_traces(texttemplate="%{text:.2s}", textposition="outside")
-        fig.update_layout(template="plotly_white", height=500)
-        if month_like:
-            fig.update_xaxes(type="category", tickformat=",")
+            fig = px.bar(data, x=use_x, y=y_col, title=title, text=y_col, labels=labels)
+        fig.update_traces(texttemplate="%{text:.2s}", textposition="outside",
+                          marker_color=PALETTE[0])
+        fig.update_layout(template="plotly_white", height=500, colorway=PALETTE)
+        if not horizontal:
+            if month_like or ChartGenerator._x_should_be_category(data, x_col):
+                fig.update_xaxes(type="category")
+            # 柱状图 y 轴从 0 起（全非负时），刻度按量级格式化
+            ChartGenerator._style_numeric_axis(fig, "y", data[y_col], start_zero=True)
+        else:
+            ChartGenerator._style_numeric_axis(fig, "x", data[y_col], start_zero=True)
         return _save_chart(fig, f"bar_{_safe_name(title)}")
 
     @staticmethod
     def pie_chart(df: pd.DataFrame, names_col: str, values_col: str,
-                  title: str = "占比图") -> str:
+                  title: str = "占比图", **kwargs) -> str:
         """生成饼图（类别占比分析）。返回保存路径。"""
         if not _plotly_available:
             return _placeholder("pie_chart", title)
 
-        fig = px.pie(df, names=names_col, values=values_col, title=title)
+        fig = px.pie(df, names=names_col, values=values_col, title=title,
+                     color_discrete_sequence=PALETTE)
         fig.update_traces(textposition="inside", textinfo="percent+label")
         fig.update_layout(template="plotly_white", height=500)
         return _save_chart(fig, f"pie_{_safe_name(title)}")
 
     @staticmethod
-    def heatmap(df: pd.DataFrame, title: str = "热力图") -> str:
+    def heatmap(df: pd.DataFrame, title: str = "热力图", **kwargs) -> str:
         """生成热力图（区域-月份矩阵）。需要 pivot 格式数据。"""
         if not _plotly_available:
             return _placeholder("heatmap", title)
 
+        n_rows = len(df.index) if hasattr(df, "index") else 1
+        n_cols = len(df.columns) if hasattr(df, "columns") else 1
+        height = max(400, min(700, 60 * max(n_rows, n_cols)))
         fig = px.imshow(
             df.values if hasattr(df, "values") else df,
             x=df.columns.tolist(),
@@ -149,23 +229,27 @@ class ChartGenerator:
             color_continuous_scale="RdBu_r",
             aspect="auto",
         )
-        fig.update_layout(template="plotly_white", height=500)
+        fig.update_layout(template="plotly_white", height=height)
         return _save_chart(fig, f"heatmap_{_safe_name(title)}")
 
     @staticmethod
     def scatter_chart(df: pd.DataFrame, x_col: str, y_col: str,
-                      color_col: str | None = None, title: str = "散点图") -> str:
+                      color_col: str | None = None, title: str = "散点图",
+                      x_label: str = "", y_label: str = "") -> str:
         """生成散点图（利润关系分析）。"""
         if not _plotly_available:
             return _placeholder("scatter", title)
 
+        labels = {x_col: x_label or x_col, y_col: y_label or y_col}
         if color_col and color_col in df.columns:
             fig = px.scatter(df, x=x_col, y=y_col, color=color_col, title=title,
-                             hover_data=df.columns.tolist())
+                             hover_data=df.columns.tolist(), labels=labels)
         else:
             fig = px.scatter(df, x=x_col, y=y_col, title=title,
-                             hover_data=df.columns.tolist())
-        fig.update_layout(template="plotly_white", height=500)
+                             hover_data=df.columns.tolist(), labels=labels)
+        fig.update_layout(template="plotly_white", height=500, colorway=PALETTE)
+        ChartGenerator._style_numeric_axis(fig, "x", df[x_col], start_zero=False)
+        ChartGenerator._style_numeric_axis(fig, "y", df[y_col], start_zero=False)
         return _save_chart(fig, f"scatter_{_safe_name(title)}")
 
     @staticmethod

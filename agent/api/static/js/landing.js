@@ -20,9 +20,9 @@
   const btnStart = document.getElementById('btn-start');
   const btnWorkbench = document.getElementById('btn-workbench');
 
-  const LOGIN_TEXT = { title: '🤖 登录', sub: '登录以使用数据分析服务',
+  const LOGIN_TEXT = { title: '登录', sub: '登录以使用数据分析服务',
                        submit: '登 录', toggle: '没有账号？点击注册' };
-  const REGISTER_TEXT = { title: '🤖 注册', sub: '创建账号以使用数据分析服务',
+  const REGISTER_TEXT = { title: '注册', sub: '创建账号以使用数据分析服务',
                           submit: '注 册', toggle: '已有账号？点击登录' };
 
   function setMode(mode) {
@@ -31,7 +31,7 @@
     password2Group.style.display = isLogin ? 'none' : 'block';
     password2El.required = !isLogin;
     const t = isLogin ? LOGIN_TEXT : REGISTER_TEXT;
-    titleEl.textContent = t.title;
+    titleEl.innerHTML = (window.Icons ? window.Icons.bot : '🤖') + '<span>' + t.title + '</span>';
     subEl.textContent = t.sub;
     submitBtn.textContent = t.submit;
     toggleEl.textContent = t.toggle;
@@ -98,6 +98,9 @@
 
     const url = mode === 'login' ? '/api/login' : '/api/register';
     const body = { account: account, password: password };
+    // 登录时把「记住我」传给后端，使会话 cookie 生命周期与前端存储一致：
+    // 勾选 → 持久 cookie（24h）；不勾选 → 会话 cookie（关闭浏览器即失效）。
+    if (mode === 'login') body.remember = rememberEl.checked;
     if (mode === 'register') body.password2 = password2El.value;
 
     submitBtn.disabled = true;
