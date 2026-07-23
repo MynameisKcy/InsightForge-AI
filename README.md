@@ -502,3 +502,41 @@ python -m pytest tests/ -v
 ---
 
 *本项目由 InsightForge AI 多智能体协作数据分析系统驱动。文档基于源码核验，如与代码不一致以代码为准。*
+
+
+---
+
+## 版本更新记录
+
+### v0.2（2026-07-23）
+
+> 相对 v0.1 的主要更新。结论基于源码与提交记录核验。
+
+**界面与交互**
+- 欢迎页重塑：hero + 功能卡片 + 登录/注册模态框（remember-me），统一 sci-tech 科技风设计语言。
+- 主工作台 sci-tech 主题重塑（信息架构保留）；移除用户头像功能；新增 SVG 图标库 `agent/api/static/js/icons.js`。
+- 前端从 `fastapi_server.py` 内联 HTML 抽离至 `agent/api/static/`（静态化 + no-cache 中间件 + 版本号破缓存）。
+
+**鉴权**
+- 全站 `require_auth` 依赖 + TTL 令牌 LRU 缓存；cookie + token 登录态。
+- 登出 / 改密 / 改昵称即清进程内令牌缓存；修复 landing 页 401 重定向循环。
+- 用户档案 / 改密端点；`bcrypt` 密码哈希（兼容旧 SHA-256 惰性升级）。
+
+**能力增强**
+- 跨线程步骤进度：`ProgressEmitter` + 前端 `[STEP]` / `[KEEPALIVE]` 步骤清单。
+- 图表与可视化：`visualization_agent` + `charts` 混合样式增强。
+- 配置热重载：`reload_model_config(user_id)` 失效缓存并丢弃 Agent 实例。
+- 统一文件管理面板：上传进度、解析状态轮询、大文件提示（50MB 预估 / 100MB 上限）。
+- `DocumentReportAgent`：文本文件摘要 / 要点 / 问答报告。
+
+**Bug 修复**
+- 知识库“已入库但读不到”：根因为 `md5.text` 与 chroma 实际状态偏离（如 chroma_db 被删而 md5 残留），文件永久卡死。修复后以 chroma 实际分片为“可读”真相，`_ingest_if_needed` 在偏离时自愈重灌，列表 `ingested` 状态不再仅凭 md5。
+
+**工程**
+- 测试套件扩充至 101 passed（新增知识库自愈、鉴权、配置优先级、工厂等用例）。
+- 移除废弃 `app.py` / SDD 文档；新增 `scripts/repo_cleanup.sh`。
+- `.gitignore` 补齐知识库上传文件（pdf/docx）。
+
+### v0.1
+
+初始可用版本：多智能体协作数据分析平台（智能客服 + 数据分析双模式）、NL->SQL 只读沙箱、多用户隔离、RAG 两阶段检索、DuckDB 多源、多格式报告导出。
