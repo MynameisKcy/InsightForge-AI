@@ -104,6 +104,26 @@ class VectorStoreService:
             store.discard(md5_for_check)
             self._save_md5_store(store)
 
+    # ── chroma 实际状态查询：md5 仅作去重提示，chroma 才是“可读”的真相 ──
+    # 修复 md5 存储与 chroma 偏离（md5 在、chroma 空）导致“显示已入库但读不到”的 bug。
+    def chroma_sources(self) -> set:
+        """返回 Chroma 中实际存在分片的 source 路径集合（一次 get 调用）。
+        列表/状态展示据此判定是否“已入库”，而非仅凭 md5 存储。"""
+        try:
+            metas = self.vector_store.get().get("metadatas") or []
+            return {m.get("source") for m in metas if m and m.get("source")}
+        except Exception as e:
+            logger.error(f"读取 chroma sources 失败: {e}")
+            return set()
+
+    def _source_has_chunks(self, source: str) -> bool:
+        """chroma 中是否存在该来源的分片。"""
+        try:
+            data = self.vector_store.get(where={"source": source})
+            return bool(data and data.get("ids"))
+        except Exception:
+            return False
+
     def get_retriver(self):
         return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
 
@@ -126,13 +146,11 @@ class VectorStoreService:
             if not md5_hex:
                 logger.warning(f"跳过无效文件:{path}")
                 continue
-            if self._check_md5(md5_hex):
-                logger.info(f"加载知识库:{path}已存在知识库")
-                available_count += 1
-                continue
-            n = self._ingest_file(path, md5_hex)
+            n, skipped = self._ingest_if_needed(path, md5_hex)
             if n > 0:
                 loaded_count += 1
+                available_count += 1
+            elif skipped:
                 available_count += 1
 
         return loaded_count, available_count
@@ -164,21 +182,42 @@ class VectorStoreService:
             logger.error(f"{path}加载失败:{str(e)}", exc_info=True)
             return 0
 
+    def _ingest_if_needed(self, path: str, md5_hex: str | None = None):
+        """按需入库：md5 命中 且 chroma 确有该来源分片 才跳过；否则重新入库。
+
+        修复 md5 存储与 chroma 实际状态偏离的 bug（md5 在、chroma 空）：
+        偏离时不再无脑 skip，而是清掉该来源残留分片后重灌，保证 已入库=可读。
+        内容变更（同文件名不同内容，md5 变）同样走清残+重灌，避免重复分片。
+        返回 (loaded_chunks, skipped) - skipped=True 表示已存在且可读、跳过。
+        """
+        if md5_hex is None:
+            md5_hex = get_file_md5_hex(path)
+        if not md5_hex:
+            return 0, False
+        # 真正已入库（md5 命中 且 chroma 确有分片）才跳过
+        if self._check_md5(md5_hex) and self._source_has_chunks(path):
+            logger.info(f"运行时入库：{path} 已存在且可读，跳过")
+            return 0, True
+        # md5 在但 chroma 缺失（偏离）/ 内容变更：先清该来源残留分片，避免重复
+        if self._source_has_chunks(path):
+            try:
+                self.vector_store.delete(where={"source": path})
+            except Exception as e:
+                logger.warning(f"清理旧分片失败 {path}: {e}")
+        n = self._ingest_file(path, md5_hex)
+        # 入库失败但 md5 残留（历史脏数据）：清掉误导性的 md5，避免假已入库
+        if n == 0 and self._check_md5(md5_hex) and not self._source_has_chunks(path):
+            self._remove_md5(md5_hex)
+        return n, False
+
     def load_single_document(self, path: str):
         """运行时增量入库单个文件（知识库管理接口用）。
-        返回 (loaded_chunks, skipped) — skipped=True 表示已存在跳过。
-        """
+        返回 (loaded_chunks, skipped) - skipped=True 表示已存在且可读、跳过。
+        md5 与 chroma 偏离时会自愈重灌。"""
         if not os.path.exists(path):
             logger.error(f"文件不存在: {path}")
             return 0, False
-        md5_hex = get_file_md5_hex(path)
-        if not md5_hex:
-            return 0, False
-        if self._check_md5(md5_hex):
-            logger.info(f"运行时入库：{path} 已存在，跳过")
-            return 0, True
-        n = self._ingest_file(path, md5_hex)
-        return n, False
+        return self._ingest_if_needed(path)
 
     def delete_by_source(self, source: str) -> int:
         """按来源文件路径删除所有相关分片，并移除 md5 记录。返回删除的估计数量。"""

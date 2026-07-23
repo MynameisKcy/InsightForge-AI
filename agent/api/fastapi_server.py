@@ -955,6 +955,9 @@ async def kb_list_files(request: Request, user=Depends(require_auth)):
 
     vs = _get_vector_store()
     ingested_md5 = vs._load_md5_store()
+    # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
+    chroma_sources = vs.chroma_sources()
+    chroma_basenames = {os.path.basename(s) for s in chroma_sources}
     files = []
     if os.path.isdir(data_dir):
         for fname in sorted(os.listdir(data_dir)):
@@ -971,7 +974,7 @@ async def kb_list_files(request: Request, user=Depends(require_auth)):
                 "size": size,
                 "type": ext,
                 "md5": md5,
-                "ingested": md5 in ingested_md5 if md5 else False,
+                "ingested": (fpath in chroma_sources) or (fname in chroma_basenames),
             })
     return JSONResponse({"files": files, "count": len(files)})
 
@@ -991,9 +994,14 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
     try:
         vs = _get_vector_store()
         ingested_md5 = vs._load_md5_store()
+        # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
+        chroma_sources = vs.chroma_sources()
+        chroma_basenames = {os.path.basename(s) for s in chroma_sources}
     except Exception as e:
         logger.warning(f"加载向量库 md5 失败: {e}")
         ingested_md5 = set()
+        chroma_sources = set()
+        chroma_basenames = set()
     if os.path.isdir(data_dir):
         for fname in sorted(os.listdir(data_dir)):
             fpath = os.path.join(data_dir, fname)
@@ -1003,7 +1011,8 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
             if ext not in allowed:
                 continue
             md5 = get_file_md5_hex(fpath) or ""
-            status = "已完成" if (md5 in ingested_md5 if md5 else False) else "处理中"
+            ingested = (fpath in chroma_sources) or (fname in chroma_basenames)
+            status = "已完成" if ingested else "处理中"
             files.append({
                 "name": fname, "type": "text",
                 "size": os.path.getsize(fpath),
