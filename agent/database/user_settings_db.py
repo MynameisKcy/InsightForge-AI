@@ -64,6 +64,11 @@ def _init_db():
         local_db_conn TEXT,
         updated_at TEXT
     )""")
+    # 幂等迁移：补齐 llm_base_url 列（旧表无此列）
+    try:
+        conn.execute("ALTER TABLE user_settings ADD COLUMN llm_base_url TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -109,6 +114,7 @@ class UserSettingsDB:
             "llm_api_key": api_key,
             "llm_model_name": row["llm_model_name"],
             "embedding_model_name": row["embedding_model_name"],
+            "llm_base_url": row["llm_base_url"],
             "vector_db_host": row["vector_db_host"],
             "vector_db_port": row["vector_db_port"],
             "vector_db_collection": row["vector_db_collection"],
@@ -133,13 +139,14 @@ class UserSettingsDB:
         conn = self._connect()
         conn.execute("""INSERT INTO user_settings
             (user_id, llm_api_key_enc, llm_model_name, embedding_model_name,
-             vector_db_host, vector_db_port, vector_db_collection,
+             llm_base_url, vector_db_host, vector_db_port, vector_db_collection,
              vector_db_tenant, local_db_conn, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET
               llm_api_key_enc=excluded.llm_api_key_enc,
               llm_model_name=excluded.llm_model_name,
               embedding_model_name=excluded.embedding_model_name,
+              llm_base_url=excluded.llm_base_url,
               vector_db_host=excluded.vector_db_host,
               vector_db_port=excluded.vector_db_port,
               vector_db_collection=excluded.vector_db_collection,
@@ -147,7 +154,8 @@ class UserSettingsDB:
               local_db_conn=excluded.local_db_conn,
               updated_at=excluded.updated_at""",
             (user_id, enc, settings.get("llm_model_name"),
-             settings.get("embedding_model_name"), settings.get("vector_db_host"),
+             settings.get("embedding_model_name"), settings.get("llm_base_url"),
+             settings.get("vector_db_host"),
              settings.get("vector_db_port"), settings.get("vector_db_collection"),
              settings.get("vector_db_tenant"), settings.get("local_db_conn"), now))
         conn.commit()

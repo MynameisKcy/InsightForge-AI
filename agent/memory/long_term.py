@@ -152,6 +152,19 @@ class LongTermMemory:
             )
             conn.commit()
 
+    def delete_session(self, session_id: str):
+        """删除指定会话：清理其全部对话历史与会话记录。"""
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM conversation_history WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.execute(
+                "DELETE FROM chat_sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.commit()
+
     def touch_session(self, session_id: str):
         """更新会话的 updated_at 时间戳。"""
         with self._get_conn() as conn:
@@ -194,7 +207,7 @@ class LongTermMemory:
                 """SELECT id, user_id, session_id, role, content, turn_index, created_at
                    FROM conversation_history
                    WHERE session_id = ?
-                   ORDER BY turn_index ASC, role ASC""",
+                   ORDER BY id ASC""",
                 (session_id,),
             ).fetchall()
             return [dict(r) for r in rows]

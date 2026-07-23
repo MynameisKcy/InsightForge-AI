@@ -26,7 +26,7 @@ except ModuleNotFoundError:
 
 CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分析结果，决定应该生成哪些图表。
 
-## 数据
+## 数据概况
 {data_json}
 
 ## 任务描述
@@ -42,11 +42,16 @@ CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分�
 ## 要求
 输出 JSON 格式的图表列表：
 [
-  {{"chart_type": "line", "title": "月度销售趋势", "x_col": "Month", "y_col": "total_revenue", "reason": "展示销售趋势"}},
+  {{"chart_type": "line", "title": "月度销售趋势", "x_col": "Month", "y_col": "total_revenue", "x_label": "月份", "y_label": "总营收(元)", "reason": "展示销售趋势"}},
   ...
 ]
 
-最多生成 4 张最重要的图表。每张图表指定 chart_type, title, x_col, y_col（或 names_col/values_col）。
+最多生成 4 张最重要的图表。每张图表指定：
+- chart_type, title
+- x_col, y_col（或 names_col/values_col）：必须用上面"数据概况"里出现的实际列名
+- x_label, y_label：人类可读的中文轴标签，依列语义命名（如 total_revenue -> "总营收(元)"、Month -> "月份"、product_name -> "产品"）
+- reason
+轴的范围与刻度格式由系统按数据自动处理，你只需给出语义化标签。
 只输出 JSON 数组，不要有其他文字。
 """
 
@@ -157,6 +162,8 @@ class VisualizationAgent(BaseAgent):
         """根据规格生成单张图表。"""
         chart_type = spec.get("chart_type", "bar")
         title = spec.get("title", "图表")
+        x_label = spec.get("x_label", "")
+        y_label = spec.get("y_label", "")
 
         # 如果有 extra_data 中的专用数据（如趋势摘要），优先使用
         if chart_type == "line" and "trend_summary" in extra_data:
@@ -166,7 +173,8 @@ class VisualizationAgent(BaseAgent):
                 df_chart = pd.DataFrame(monthly)
                 y_col = self._resolve_column(df_chart, spec.get("y_col", ""), prefer="number")
                 x_col = self._resolve_column(df_chart, spec.get("x_col", ""), prefer="object")
-                return ChartGenerator.line_chart(df_chart, x_col=x_col, y_col=y_col, title=title)
+                return ChartGenerator.line_chart(df_chart, x_col=x_col, y_col=y_col, title=title,
+                                                 x_label=x_label, y_label=y_label)
 
         if chart_type == "bar" and "product_summary" in extra_data:
             top = extra_data.get("product_summary", {}).get("top_products", [])
@@ -174,7 +182,8 @@ class VisualizationAgent(BaseAgent):
                 df_chart = pd.DataFrame(top)
                 x_col = self._resolve_column(df_chart, spec.get("x_col", ""), prefer="object")
                 y_col = self._resolve_column(df_chart, spec.get("y_col", ""), prefer="number")
-                return ChartGenerator.bar_chart(df_chart, x_col=x_col, y_col=y_col, title=title)
+                return ChartGenerator.bar_chart(df_chart, x_col=x_col, y_col=y_col, title=title,
+                                                x_label=x_label, y_label=y_label)
 
         if chart_type == "pie" and "product_summary" in extra_data:
             cat = extra_data.get("product_summary", {}).get("category_summary", [])
@@ -186,7 +195,7 @@ class VisualizationAgent(BaseAgent):
                     df_chart, names_col=names_col, values_col=values_col, title=title,
                 )
 
-        # 通用情况：清理并验证 spec 中的列名
+        # 通用情况：清理并验证 spec 中的列名，语义化标签原样透传
         validated = {}
         for k, v in spec.items():
             if k in ("chart_type", "title", "reason"):
@@ -195,21 +204,17 @@ class VisualizationAgent(BaseAgent):
                 validated[k] = self._resolve_column(df, v, prefer="object")
             elif k in ("y_col", "values_col"):
                 validated[k] = self._resolve_column(df, v, prefer="number")
+            elif k in ("x_label", "y_label"):
+                validated[k] = v
             else:
                 validated[k] = v
         return ChartGenerator.auto_chart(df, chart_type, title=title, **validated)
 
     def _decide_charts(self, df: pd.DataFrame, task: str, extra_data: dict) -> list[dict]:
-        """使用 LLM 决定生成哪些图表。"""
-        # 取数据摘要而非完整数据
-        summary = {
-            "columns": df.columns.tolist(),
-            "dtypes": {c: str(df[c].dtype) for c in df.columns},
-            "sample": df.head(3).to_dict(orient="records"),
-            "shape": df.shape,
-        }
+        """使用 LLM 决定生成哪些图表。喂入含统计量的数据概况，便于 LLM 选列与命名轴标签。"""
+        summary = self._data_summary(df)
         prompt = CHART_DECISION_PROMPT.format(
-            data_json=json.dumps(summary, ensure_ascii=False, indent=2),
+            data_json=json.dumps(summary, ensure_ascii=False, indent=2, default=str),
             task=task,
         )
         messages = [{"role": "user", "content": prompt}]
@@ -227,6 +232,32 @@ class VisualizationAgent(BaseAgent):
             if isinstance(result, dict) and "raw" not in result:
                 return [result]
             return []
+
+    def _data_summary(self, df: pd.DataFrame) -> dict:
+        """构建喂给 LLM 的数据概况：列/dtype + 数值列统计 + 类别列高频值。"""
+        cols_info = []
+        for c in df.columns:
+            info = {"col": c, "dtype": str(df[c].dtype)}
+            if pd.api.types.is_numeric_dtype(df[c]):
+                s = df[c].dropna()
+                if not s.empty:
+                    info.update({
+                        "min": float(s.min()),
+                        "max": float(s.max()),
+                        "mean": round(float(s.mean()), 2),
+                        "nunique": int(s.nunique()),
+                    })
+            else:
+                nunique = int(df[c].nunique(dropna=True))
+                info["nunique"] = nunique
+                if nunique <= 12:
+                    info["top_values"] = [str(x) for x in df[c].dropna().value_counts().head(8).index.tolist()]
+            cols_info.append(info)
+        return {
+            "columns": cols_info,
+            "sample": df.head(3).to_dict(orient="records"),
+            "shape": list(df.shape),
+        }
 
     def _summarize_data(self, df: pd.DataFrame, spec: dict) -> str:
         """生成数据摘要文本，用于存入知识库。"""

@@ -87,9 +87,8 @@ class UserDB:
                     last_login TEXT
                 )
             """)
-            # 幂等迁移：为旧表补齐 nickname / avatar_path 列
+            # 幂等迁移：为旧表补齐 nickname 列（头像功能已移除）
             self._ensure_column(conn, "users", "nickname", "TEXT")
-            self._ensure_column(conn, "users", "avatar_path", "TEXT")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,7 +199,7 @@ class UserDB:
 
         with self._get_conn() as conn:
             row = conn.execute(
-                """SELECT u.id, u.account, u.nickname, u.avatar_path, s.expires_at, s.session_token
+                """SELECT u.id, u.account, u.nickname, s.expires_at, s.session_token
                    FROM sessions s JOIN users u ON s.user_id = u.id
                    WHERE s.session_token = ?""",
                 (token,),
@@ -220,7 +219,7 @@ class UserDB:
                 return None
 
             return {"user_id": row["id"], "account": row["account"],
-                    "nickname": row["nickname"], "avatar_path": row["avatar_path"]}
+                    "nickname": row["nickname"]}
 
     def logout(self, token: str):
         """登出，删除 session。"""
@@ -232,21 +231,17 @@ class UserDB:
         """获取用户信息。"""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT id, account, nickname, avatar_path, created_at, last_login FROM users WHERE id = ?",
+                "SELECT id, account, nickname, created_at, last_login FROM users WHERE id = ?",
                 (user_id,),
             ).fetchone()
             return dict(row) if row else None
 
-    def update_profile(self, user_id: str, nickname: str | None = None,
-                       avatar_path: str | None = None) -> bool:
-        """更新用户昵称/头像路径。仅更新非 None 的字段。"""
+    def update_profile(self, user_id: str, nickname: str | None = None) -> bool:
+        """更新用户昵称。仅更新非 None 的字段。"""
         sets, params = [], []
         if nickname is not None:
             sets.append("nickname = ?")
             params.append(nickname)
-        if avatar_path is not None:
-            sets.append("avatar_path = ?")
-            params.append(avatar_path)
         if not sets:
             return False
         params.append(user_id)

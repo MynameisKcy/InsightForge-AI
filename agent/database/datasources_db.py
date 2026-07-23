@@ -45,10 +45,12 @@ class DatasourcesDB:
 
     def _init_tables(self):
         with self._get_conn() as conn:
+            # 新建表（若不存在）：name 不加列级 UNIQUE，改为 (owner_user_id, name) 联合唯一，
+            # 这样不同用户可同名数据集（多用户隔离），同用户内仍防重。
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS datasets (
                     id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
                     source_type TEXT NOT NULL,
                     file_path TEXT NOT NULL,
                     table_name TEXT NOT NULL,
@@ -67,6 +69,65 @@ class DatasourcesDB:
                     "ALTER TABLE datasets ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''"
                 )
                 logger.info("DatasourcesDB: migrated datasets table — added owner_user_id column")
+
+            # 迁移：旧表 name 带列级 UNIQUE 时，与多用户隔离冲突（跨用户同名触发 IntegrityError）。
+            # SQLite 无法直接 DROP 列约束，需重建表去掉它（保留数据，联合唯一由下方
+            # CREATE UNIQUE INDEX idx_datasets_owner_name 提供）。
+            # 检测：查 origin='u'（表定义派生）的唯一约束，若存在「仅 name 单列」的则为旧表。
+            # fresh 表无 'u' 约束、已迁移表只有 'c' 命名索引 -> 均不重建，避免每次启动空跑。
+            needs_rebuild = False
+            try:
+                for ir in conn.execute("PRAGMA index_list('datasets')").fetchall():
+                    if ir["origin"] == "u":  # u = 表定义派生的唯一约束
+                        cols = [c["name"] for c in conn.execute(
+                            "PRAGMA index_info('{}')".format(ir["name"])
+                        ).fetchall()]
+                        if cols == ["name"]:  # 单列 name 唯一 = 旧列级 UNIQUE
+                            needs_rebuild = True
+                            break
+            except Exception:
+                needs_rebuild = True
+
+            if needs_rebuild:
+                try:
+                    conn.executescript("""
+                        BEGIN;
+                        CREATE TABLE datasets_new (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            source_type TEXT NOT NULL,
+                            file_path TEXT NOT NULL,
+                            table_name TEXT NOT NULL,
+                            schema_json TEXT NOT NULL DEFAULT '[]',
+                            row_count INTEGER NOT NULL DEFAULT 0,
+                            description TEXT NOT NULL DEFAULT '',
+                            owner_user_id TEXT NOT NULL DEFAULT '',
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        );
+                        INSERT OR IGNORE INTO datasets_new
+                            (id, name, source_type, file_path, table_name, schema_json,
+                             row_count, description, owner_user_id, created_at, updated_at)
+                        SELECT id, name, source_type, file_path, table_name, schema_json,
+                               row_count, description, owner_user_id, created_at, updated_at
+                        FROM datasets;
+                        DROP TABLE datasets;
+                        ALTER TABLE datasets_new RENAME TO datasets;
+                        COMMIT;
+                    """)
+                    logger.info("DatasourcesDB: rebuilt datasets table — removed column-level UNIQUE on name, added UNIQUE(owner_user_id, name)")
+                except Exception as e:
+                    # 回滚并继续（不阻断启动）；联合唯一缺失会退化为"跨用户同名仍可能冲突"，
+                    # 但上传端点 1b 会检查 add_dataset 返回值并提示，不会静默吞错。
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    logger.warning(f"DatasourcesDB: rebuild datasets table failed (non-fatal): {e}")
+
+            conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_datasets_owner_name ON datasets(owner_user_id, name)
+            """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_datasets_name ON datasets(name)
             """)

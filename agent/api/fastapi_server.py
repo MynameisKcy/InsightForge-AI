@@ -29,7 +29,8 @@ def _split_sentences(text: str) -> list[str]:
     return [p for p in parts if p.strip()]
 
 
-async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: float = 15):
+async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: float = 15,
+                                 progress_emitter=None):
     """把同步生成器放进后台线程执行，主协程带心跳消费。
 
     问题：ReactAgent.execute_stream 在 run_full_analysis 等长工具执行期间，
@@ -38,11 +39,13 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
     loop.call_soon_threadsafe 推入 asyncio.Queue；主协程 wait_for 队列，
     interval 秒内无新数据则 yield 一个心跳保活。
 
-    yield (is_heartbeat, value)：心跳 value 是已格式化的完整 SSE 行，直接 yield；
-    真实 chunk 的 value 是原始 chunk 文本，交由调用方处理。
+    yield (kind, value)：kind 为 "heartbeat"（已格式化 SSE 行，直接 yield）、
+    "chunk"（原始 chunk 文本，交调用方处理）、"progress"（步骤事件 dict，转 [STEP] 下发）。
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    if progress_emitter is not None:
+        progress_emitter.bind(loop, queue)   # 让 PlannerAgent 的步骤事件直注同一 queue
     # 线程异常载体
     error_box: list = []
 
@@ -63,13 +66,15 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
             try:
                 kind, value = await asyncio.wait_for(queue.get(), timeout=interval)
             except asyncio.TimeoutError:
-                yield (True, heartbeat)  # 心跳保活
+                yield ("heartbeat", heartbeat)  # 心跳保活
                 continue
             if kind == "done":
                 break
-            yield (False, value)
+            yield (kind, value)   # "chunk" 或 "progress"
     finally:
         # 线程异常在主协程抛出，触发上层 except → [ERROR]
+        if progress_emitter is not None:
+            progress_emitter.close()
         if error_box:
             raise error_box[0]
 
@@ -102,39 +107,110 @@ except ModuleNotFoundError:
     from agent.database.user_db import user_db
     from agent.database.data_resolver import DataResolver
 
+try:
+    from utils.progress_emitter import ProgressEmitter
+except ModuleNotFoundError:
+    from agent.utils.progress_emitter import ProgressEmitter
+
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _long_term_memory = LongTermMemory()
 
+
+# ── 静态资源禁用浏览器强缓存 ──
+# 开发期频繁改 JS/CSS，若浏览器强缓存旧文件，会出现"图标没更新 / 样式没生效"的
+# 假性 bug（实为缓存）。no-cache 表示每次都带 ETag 向服务器验证：文件未变返回 304
+# （省带宽），文件变了返回 200 新内容。仅作用于 /static/，不影响 SSE(/api/chat)。
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
+
 # ── 鉴权依赖 + 静态资源目录 ──
-from api.auth import require_auth, get_current_user, invalidate_token, extract_token  # noqa: E402
+from api.auth import require_auth, get_current_user, invalidate_token, extract_token, validate_token_cached  # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
-# ── 延迟初始化 Agent ──
-_react_agent = None
-_planner_agent = None
+# ── 会话 cookie：让页面级导航（GET /app）也能被服务端鉴权 ──
+# token 服务端有效期 24h（见 database.user_db.login），cookie 生命周期与之对齐。
+_AUTH_COOKIE_NAME = "token"
+_AUTH_COOKIE_MAX_AGE = 24 * 3600
 
 
-def _get_react_agent():
-    global _react_agent
-    if _react_agent is None:
+def _set_auth_cookie(response, token: str, remember: bool = True) -> None:
+    """把会话 token 写入 cookie，使浏览器导航到 /app 时携带、被服务端正确识别。
+
+    httponly：防 XSS 读取 cookie 里的 token；
+    samesite=lax：允许顶级导航（点击链接 / location.href）携带，同时阻断跨站
+                  POST 携带，缓解 CSRF；
+    path=/：全站可用；
+    remember=False：会话 cookie（关闭浏览器即失效），与前端 sessionStorage 语义一致。
+    """
+    response.set_cookie(
+        key=_AUTH_COOKIE_NAME,
+        value=token,
+        max_age=_AUTH_COOKIE_MAX_AGE if remember else None,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+@app.middleware("http")
+async def refresh_auth_cookie(request: Request, call_next):
+    """鉴权兜底：任何携带有效 Bearer token 的请求，若尚未持有 token cookie，
+    则在响应上补种，使随后浏览器页面导航（GET /app、<a href="/app">）能被识别。
+
+    必要性：旧版本只把 token 放在响应体、存于前端 localStorage，从不下发 cookie，
+    导致已登录用户导航 /app 时服务端读不到会话而 302。本中间件保证——无论用户是
+    重新登录（login 已 set-cookie），还是带着旧 localStorage token 直接访问，
+    只要一次带 header 的鉴权请求成功（如落地页 initAuthState 调 /api/me），
+    cookie 即被补齐，/app 导航必然通过，彻底消除重定向循环。
+    """
+    response = await call_next(request)
+    if not request.cookies.get(_AUTH_COOKIE_NAME):
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            tok = auth[7:].strip()
+            if tok and validate_token_cached(tok):
+                _set_auth_cookie(response, tok, remember=True)
+    return response
+
+
+# ── 延迟初始化 Agent（按 user_id 隔离：各用户独立实例，用自己的 LLM 配置） ──
+# 旧设计是进程级单例，导致 per-user LLM 配置要么失效（单例已建）要么泄漏（首次构建用
+# 某用户配置服务所有人）。改为按 user_id 缓存独立实例，配置变更时丢弃对应用户实例。
+_react_agents = {}    # user_id -> ReactAgent
+_planner_agents = {}  # user_id -> PlannerAgent
+
+
+def _get_react_agent(user_id: str):
+    if user_id not in _react_agents:
         try:
             from agent.react_agent import ReactAgent
         except ModuleNotFoundError:
             from react_agent import ReactAgent
-        _react_agent = ReactAgent()
-    return _react_agent
+        _react_agents[user_id] = ReactAgent(user_id=user_id)
+    return _react_agents[user_id]
 
 
-def _get_planner_agent():
-    global _planner_agent
-    if _planner_agent is None:
+def _get_planner_agent(user_id: str):
+    if user_id not in _planner_agents:
         try:
             from agents.planner_agent import PlannerAgent
         except ModuleNotFoundError:
             from agent.agents.planner_agent import PlannerAgent
-        _planner_agent = PlannerAgent()
-    return _planner_agent
+        _planner_agents[user_id] = PlannerAgent(user_id=user_id)
+    return _planner_agents[user_id]
+
+
+def _invalidate_user_agents(user_id: str):
+    """配置保存后调用：丢弃该用户的 Agent 实例，下次请求按新配置重建。
+    配合 factory.reload_model_config(user_id) 一并清模型缓存。"""
+    _react_agents.pop(user_id, None)
+    _planner_agents.pop(user_id, None)
 
 
 # ── 知识库服务（单例） ──
@@ -167,12 +243,15 @@ async def api_register(request: Request):
         try:
             login_result = user_db.login(account, password)
             if login_result.get("success"):
-                return JSONResponse(content={
+                resp = JSONResponse(content={
                     "success": True,
                     "user_id": login_result.get("user_id"),
                     "account": login_result.get("account"),
                     "token": login_result.get("token"),
                 })
+                # 注册后自动登录：同样写入 cookie，保证随后导航到 /app 正常
+                _set_auth_cookie(resp, login_result.get("token"), remember=False)
+                return resp
             else:
                 return JSONResponse(content={
                     "success": True,
@@ -193,9 +272,14 @@ async def api_login(request: Request):
     body = await request.json()
     account = body.get("account", "").strip()
     password = body.get("password", "")
+    remember = bool(body.get("remember", False))
     result = user_db.login(account, password)
     if result.get("success"):
-        return JSONResponse(content=result)
+        resp = JSONResponse(content=result)
+        # 关键修复：写入 token cookie，使随后导航到 /app 能被服务端识别为已登录，
+        # 避免 /app 持续 302 回落地页形成重定向死循环。
+        _set_auth_cookie(resp, result["token"], remember)
+        return resp
     return JSONResponse(content=result, status_code=401)
 
 
@@ -203,10 +287,15 @@ async def api_login(request: Request):
 async def api_logout(request: Request):
     """用户登出。"""
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        token = request.cookies.get(_AUTH_COOKIE_NAME, "")
     if token:
         user_db.logout(token)
         invalidate_token(token)
-    return JSONResponse(content={"success": True})
+    resp = JSONResponse(content={"success": True})
+    # 清除会话 cookie，避免登出后仍能凭 cookie 通过 /app 导航鉴权
+    resp.delete_cookie(_AUTH_COOKIE_NAME, path="/")
+    return resp
 
 
 @app.get("/api/me")
@@ -216,7 +305,6 @@ async def api_me(user=Depends(require_auth)):
         "user_id": user["user_id"],
         "account": user["account"],
         "nickname": user.get("nickname"),
-        "avatar_path": user.get("avatar_path"),
     })
 
 
@@ -268,7 +356,7 @@ async def api_chat(request: Request, user=Depends(require_auth)):
             return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
 
-    agent = _get_react_agent()
+    agent = _get_react_agent(user_id)
 
     async def generate() -> AsyncGenerator[str, None]:
         full_response = ""
@@ -285,16 +373,25 @@ async def api_chat(request: Request, user=Depends(require_auth)):
             if new_session:
                 yield f"data: [SESSIONS_RELOAD]\n\n"
 
-            async for is_heartbeat, chunk in _stream_with_heartbeat(
+            emitter = ProgressEmitter()
+            async for kind, value in _stream_with_heartbeat(
                 lambda: agent.execute_stream(query, history=mem_context,
-                                             user_id=user_id, session_id=session_id),
-                heartbeat="data: [THINKING]正在分析...\n\n",
+                                             user_id=user_id, session_id=session_id,
+                                             progress_emitter=emitter),
+                heartbeat="data: [KEEPALIVE]\n\n",
                 interval=15,
+                progress_emitter=emitter,
             ):
-                if is_heartbeat:
-                    # 心跳保活：直接透传，让前端 resetIdle + 显示思考状态
-                    yield chunk
+                if kind == "heartbeat":
+                    # 纯保活：前端 resetIdle 即可，不再覆盖思考文案
+                    yield value
                     continue
+                if kind == "progress":
+                    # 步骤进度事件：下发 [STEP:json]，前端渲染步骤清单
+                    yield f"data: [STEP:{json.dumps(value, ensure_ascii=False)}]\n\n"
+                    continue
+                # kind == "chunk"
+                chunk = value
                 if not chunk:
                     continue
                 stripped = chunk.strip()
@@ -362,7 +459,7 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
     memory.add_user_message(query)
 
     try:
-        analyst = _get_planner_agent()
+        analyst = _get_planner_agent(user_id)
         result = analyst.run({"query": query, "user_id": user_id})
 
         # 将分析结果摘要存入记忆
@@ -787,25 +884,15 @@ async def save_settings(request: Request, user=Depends(require_auth)):
             cleaned["llm_api_key"] = existing["llm_api_key"]
     try:
         user_settings_db.upsert(user_id, cleaned)
-        reload_model_config(user_id)
+        reload_model_config(user_id)            # 失效该用户模型缓存
+        _invalidate_user_agents(user_id)        # 丢弃该用户 Agent 实例，下次按新配置重建
         return {"ok": True}
     except Exception as e:
         logger.exception("保存配置失败")
         return JSONResponse({"ok": False, "error": f"保存失败: {e}"}, status_code=500)
 
 
-# ── 用户个人信息（昵称 / 头像 / 密码） ──
-
-def _avatar_web_url(avatar_path: str | None) -> str:
-    """把 users.avatar_path（相对 agent/ 的 data/avatars/xxx.ext）转成 Web URL。"""
-    if not avatar_path:
-        return ""
-    # 取 data/avatars/ 之后的相对片段
-    norm = avatar_path.replace("\\", "/")
-    marker = "data/avatars/"
-    idx = norm.find(marker)
-    rel = norm[idx + len(marker):] if idx >= 0 else os.path.basename(norm)
-    return f"/avatars/{rel}"
+# ── 用户个人信息（昵称 / 密码） ──
 
 
 @app.get("/api/profile")
@@ -817,7 +904,6 @@ async def api_get_profile(request: Request, user=Depends(require_auth)):
         "user_id": user_id,
         "account": user_info.get("account", ""),
         "nickname": user_info.get("nickname") or "",
-        "avatar_url": _avatar_web_url(user_info.get("avatar_path")),
     })
 
 
@@ -836,25 +922,6 @@ async def api_update_profile(request: Request, user=Depends(require_auth)):
     # 失效短缓存，使后续 /api/me 立即读到新昵称
     invalidate_token(extract_token(request))
     return JSONResponse(content={"ok": True, "nickname": nickname})
-
-
-@app.post("/api/avatar")
-async def api_upload_avatar(request: Request, file: UploadFile = File(...), user=Depends(require_auth)):
-    """上传/更新头像。限定图片类型与 5MB。"""
-    user_id = user["user_id"]
-    allowed_ext = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in allowed_ext:
-        return JSONResponse({"ok": False, "error": "仅支持 png/jpg/jpeg/gif/webp"}, status_code=400)
-    data = await file.read()
-    if len(data) > 5 * 1024 * 1024:
-        return JSONResponse({"ok": False, "error": "头像不能超过 5MB"}, status_code=400)
-    fname = f"{user_id}{ext}"
-    save_path = os.path.join(_avatars_dir, fname)
-    with open(save_path, "wb") as f:
-        f.write(data)
-    user_db.update_profile(user_id, avatar_path=f"data/avatars/{fname}")
-    return JSONResponse(content={"ok": True, "avatar_url": f"/avatars/{fname}"})
 
 
 @app.post("/api/password")
@@ -1059,12 +1126,6 @@ async def kb_stats(request: Request, user=Depends(require_auth)):
 _reports_dir = get_abs_path("reports")
 if os.path.exists(_reports_dir):
     app.mount("/reports", StaticFiles(directory=_reports_dir), name="reports")
-
-# ── 静态文件（用户头像） ──
-_avatars_dir = get_abs_path("data/avatars")
-os.makedirs(_avatars_dir, exist_ok=True)
-app.mount("/avatars", StaticFiles(directory=_avatars_dir), name="avatars")
-
 
 def _sanitize_result(result: dict) -> dict:
     """确保结果可 JSON 序列化。"""

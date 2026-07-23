@@ -8,7 +8,8 @@ let currentSessionId = '';
 
 if (!authToken) { window.location.href = '/'; }
 
-document.getElementById('userDisplay').textContent = '👤 ' + accountName;
+document.getElementById('userDisplay').innerHTML = (window.Icons ? window.Icons.user : '👤') +
+    '<span class="uname">' + escapeHtml(accountName) + '</span>';
 // 加载个人信息（昵称/头像），优先显示昵称，回退到账号
 loadProfile();
 
@@ -19,12 +20,8 @@ async function loadProfile() {
     var d = await r.json();
     var display = document.getElementById('userDisplay');
     var name = d.nickname || accountName || '未登录';
-    if (d.avatar_url) {
-      display.innerHTML = '<img class="avatar" src="' + d.avatar_url + '" alt="avatar"><span class="uname">' +
-                          escapeHtml(name) + '</span>';
-    } else {
-      display.innerHTML = '👤 ' + escapeHtml(name);
-    }
+    display.innerHTML = (window.Icons ? window.Icons.user : '👤') +
+                        '<span class="uname">' + escapeHtml(name) + '</span>';
   } catch(e) { /* 忽略，保持账号显示 */ }
 }
 
@@ -37,48 +34,15 @@ function openProfileModal() {
     if (!d) return;
     document.getElementById('pfNickname').value = d.nickname || '';
     document.getElementById('pfAccount').value = d.account || '';
-    var img = document.getElementById('pfAvatar');
-    if (d.avatar_url) { img.src = d.avatar_url; img.style.display = ''; }
-    else { img.style.display = 'none'; }
   });
   // 清空密码字段
   document.getElementById('pfOldPwd').value = '';
   document.getElementById('pfNewPwd').value = '';
   document.getElementById('pfNewPwd2').value = '';
-  document.getElementById('pfAvatarHint').textContent = '支持 png/jpg/gif/webp，≤5MB';
-  if (!ov._avatarBound) {
-    document.getElementById('pfAvatarInput').addEventListener('change', uploadAvatar);
-    ov._avatarBound = true;
-  }
 }
 
 function closeProfileModal() {
   document.getElementById('profileOverlay').classList.remove('show');
-}
-
-async function uploadAvatar() {
-  var input = document.getElementById('pfAvatarInput');
-  if (!input.files || !input.files[0]) return;
-  var fd = new FormData();
-  fd.append('file', input.files[0]);
-  var hint = document.getElementById('pfAvatarHint');
-  hint.textContent = '上传中...';
-  try {
-    var r = await Auth.authedFetch('/api/avatar', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: fd
-    });
-    var d = await r.json();
-    if (d.ok) {
-      var img = document.getElementById('pfAvatar');
-      img.src = d.avatar_url; img.style.display = '';
-      hint.textContent = '头像已更新';
-      await loadProfile();
-    } else {
-      hint.textContent = '上传失败：' + (d.error || '未知错误');
-    }
-  } catch(e) { hint.textContent = '上传失败: ' + e.message; }
 }
 
 async function saveProfile() {
@@ -447,6 +411,54 @@ async function streamChat(text, bubble) {
 
     if (data === '[DONE]') return false;
 
+    if (data === '[KEEPALIVE]') return false;   // 心跳保活：仅 resetIdle，不渲染
+
+    if (data.startsWith('[STEP:')) {
+      // 分析步骤进度：在 bubble 内渲染/更新步骤清单，并同步状态行
+      var stepData;
+      try { stepData = JSON.parse(data.slice(6, -1).trim()); } catch (e) { return false; }
+      if (statusEl) statusEl.style.display = 'flex';
+      var prog = bubble.querySelector('.step-progress');
+      if (stepData.type === 'plan') {
+        bubble.innerHTML = '';   // 清除 typing dots，展示步骤清单
+        prog = document.createElement('div');
+        prog.className = 'step-progress';
+        (stepData.steps || []).forEach(function (s) {
+          var row = document.createElement('div');
+          row.className = 'step pending';
+          row.dataset.step = s.step;
+          row.dataset.label = s.label || s.task || ('步骤 ' + s.step);
+          row.innerHTML = '<span class="step-mark">○</span><span class="step-label">' +
+                          escapeHtml(row.dataset.label) + '</span>';
+          prog.appendChild(row);
+        });
+        bubble.appendChild(prog);
+        if (statusEl) statusEl.querySelector('.status-text').textContent =
+          stepData.title || '正在执行分析流程...';
+      } else if (prog) {
+        var srow = prog.querySelector('.step[data-step="' + stepData.step + '"]');
+        if (srow) {
+          if (stepData.type === 'step_start') {
+            srow.className = 'step active';
+            srow.querySelector('.step-mark').innerHTML = '<span class="spinner"></span>';
+            if (statusEl) statusEl.querySelector('.status-text').textContent = srow.dataset.label;
+          } else if (stepData.type === 'step_done') {
+            srow.className = 'step done';
+            srow.querySelector('.step-mark').innerHTML = '✓';
+          } else if (stepData.type === 'step_error') {
+            srow.className = 'step error';
+            srow.querySelector('.step-mark').innerHTML = '✗';
+            if (statusEl) statusEl.querySelector('.status-text').textContent = (srow.dataset.label || '步骤') + ' 失败';
+          }
+        }
+        if (stepData.type === 'status' && statusEl) {
+          statusEl.querySelector('.status-text').textContent = stepData.text || '';
+        }
+      }
+      scrollToBottom();
+      return false;
+    }
+
     if (data.startsWith('[ERROR]')) {
       bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(data.slice(7))}</span>`;
       if (statusEl) statusEl.style.display = 'none';
@@ -494,7 +506,7 @@ async function streamChat(text, bubble) {
     if (data.startsWith('[CONTEXT]')) return false;
 
     if (data.startsWith('[AUDIT:')) {
-      fullText += '\\n> 📋 ' + data.slice(7, -1).trim() + '\\n';
+      fullText += '\n> 📋 ' + data.slice(7, -1).trim() + '\n';
       // 首次收到实际内容时，关闭思考和转圈
       if (thinking) {
         thinking = false;
@@ -514,7 +526,7 @@ async function streamChat(text, bubble) {
       if (statusEl) statusEl.style.display = 'none';
       bubble.innerHTML = ''; // 清除 typing indicator
     }
-    if (fullText.length > 0) fullText += '\\n';
+    if (fullText.length > 0) fullText += '\n';
     fullText += data;
     bubble.innerHTML = renderMarkdown(fullText);
     _syncRaw(bubble, fullText);
@@ -535,7 +547,7 @@ async function streamChat(text, bubble) {
       }
       resetIdle(); // 收到数据，重置空闲超时
       buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\\n');
+      const parts = buffer.split('\n');
       buffer = parts.pop(); // 末尾不完整行留待下次
       for (const line of parts) {
         if (processLine(line)) { aborted = true; break; } // [ERROR] 终止流
@@ -588,7 +600,10 @@ function appendMessage(role, text) {
     + '<button class="msg-action-btn" onclick="copyMessage(this)" title="复制">⧉ 复制</button>'
     + editBtn
     + '</div>';
-  div.innerHTML = '<div class="avatar">' + (role === 'user' ? '👤' : '🤖') + '</div>'
+  var avatarHtml = role === 'user'
+    ? (window.Icons ? window.Icons.user : '👤')
+    : (window.Icons ? window.Icons.bot : '🤖');
+  div.innerHTML = '<div class="avatar">' + avatarHtml + '</div>'
     + '<div class="bubble-wrap"><div class="bubble">' + escapeHtml(text) + '</div>'
     + actions
     + '<div class="msg-meta">' + ts + '</div></div>' + statusDiv;
@@ -672,7 +687,7 @@ function renderMarkdown(text) {
     return '';
   }
   // 代码块（内容已转义，直接包裹）
-  html = html.replace(/```(\\w*)\\n([\\s\\S]*?)```/g, function(_, lang, code) {
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
     return '<pre><button class="copy-btn" onclick="copyCode(this)">复制</button><code>' + code.trim() + '</code></pre>';
   });
   // 标题
@@ -681,35 +696,35 @@ function renderMarkdown(text) {
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
   // 粗体/斜体
-  html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
-  html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   // 行内代码
   html = html.replace(/`(.+?)`/g, '<code>$1</code>');
   // 分隔线
   html = html.replace(/^---+$/gm, '<hr>');
   // 图片（协议白名单，非 http(s)/相对路径则丢弃 src）
-  html = html.replace(/!\\[(.*?)\\]\\((.*?)\\)/g, function(_, alt, url) {
+  html = html.replace(/!\[(.*?)\]\((.*?)\)/g, function(_, alt, url) {
     var u = safeUrl(url); return u ? '<img src="' + u + '" alt="' + alt + '">' : alt;
   });
   // 链接（协议白名单）
-  html = html.replace(/\\[(.*?)\\]\\((.*?)\\)/g, function(_, label, url) {
+  html = html.replace(/\[(.*?)\]\((.*?)\)/g, function(_, label, url) {
     var u = safeUrl(url);
     return u ? '<a href="' + u + '">' + label + '</a>' : label;
   });
   // 无序列表
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\\/li>)/s, '<ul>$1</ul>');
+  html = html.replace(/(<li>[\s\S]*<\/li>)/, '<ul>$1</ul>');
   // 有序列表
-  html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
   // 引用
   html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
   // 段落
-  html = html.replace(/\\n\\n/g, '</p><p>');
+  html = html.replace(/\n\n/g, '</p><p>');
   html = '<p>' + html + '</p>';
-  html = html.replace(/<p><\\/p>/g, '');
+  html = html.replace(/<p><\/p>/g, '');
   html = html.replace(/<p>(<[hHuol])/g, '$1');
-  html = html.replace(/(<\\/[hH]\\d>|<\\/[uo]l>)<\\/p>/g, '$1');
-  html = html.replace(/\\n/g, '<br>');
+  html = html.replace(/(<\/[hH]\d>|<\/[uo]l>)<\/p>/g, '$1');
+  html = html.replace(/\n/g, '<br>');
   return html;
 }
 
@@ -808,7 +823,7 @@ document.getElementById('kbFileInput').addEventListener('change', async (e) => {
 });
 
 async function deleteKbFile(filename) {
-  if (!(await showConfirm('确认删除知识库文件及其分片？\\n' + filename))) return;
+  if (!(await showConfirm('确认删除知识库文件及其分片？\n' + filename))) return;
   try {
     const r = await Auth.authedFetch('/api/knowledge/files/' + encodeURIComponent(filename), {
       method: 'DELETE', headers: authHeaders()
@@ -914,7 +929,7 @@ document.getElementById('dsFileInput').addEventListener('change', async (e) => {
 });
 
 async function deleteDs(name) {
-  if (!(await showConfirm('确认删除数据集「' + name + '」？\\n将同时删除 DuckDB 表和本地文件。'))) return;
+  if (!(await showConfirm('确认删除数据集「' + name + '」？\n将同时删除 DuckDB 表和本地文件。'))) return;
   try {
     const r = await Auth.authedFetch('/api/datasets/' + encodeURIComponent(name), {
       method: 'DELETE', headers: authHeaders()
@@ -1186,7 +1201,7 @@ function _pollFilesStatus(timeoutMs) {
   setTimeout(tick, 1500);
 }
 async function deleteFile(name, type) {
-  if (!(await showConfirm('确认删除「' + name + '」？\\n' + (type === 'table' ? '将同时删除 DuckDB 表和本地文件' : '将从向量库移除对应分片')))) return;
+  if (!(await showConfirm('确认删除「' + name + '」？\n' + (type === 'table' ? '将同时删除 DuckDB 表和本地文件' : '将从向量库移除对应分片')))) return;
   var url = type === 'table'
     ? '/api/datasets/' + encodeURIComponent(name)
     : '/api/knowledge/files/' + encodeURIComponent(name);

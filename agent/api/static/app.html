@@ -2,13 +2,57 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<!-- ── 诊断哨兵：必须最先执行，确保即便 app.js 404 / 语法错误 / 运行时抛错也能向用户上报根因 ── -->
+<script>
+(function () {
+  var seen = false;
+  function fatal(kind, text) {
+    if (seen) return; seen = true;
+    var d = document.createElement('div');
+    d.textContent = '⚠️ [诊断哨兵 · ' + kind + '] ' + text;
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#c0392b;color:#fff;padding:14px 18px;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;white-space:pre-wrap;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+    (document.body || document.documentElement).appendChild(d);
+    console.error('[诊断哨兵]', kind, text);
+  }
+  // 1) 捕获阶段监听：SCRIPT 元素加载失败（404）只在 capture 阶段冒泡到 window
+  window.addEventListener('error', function (e) {
+    var t = e.target || e.srcElement;
+    if (t && t.tagName === 'SCRIPT') {
+      fatal('script-404', '脚本加载失败（很可能 404）：' + (t.src || '') +
+        '。\n请打开 F12 → Network 查看该 URL 的状态码；若部署在反向代理子路径下，把 /static/ 改为 ./static/ 即可修复。');
+      return;
+    }
+    if (e.message) {
+      fatal('runtime', '脚本执行/解析错误：' + e.message +
+        (e.filename ? ' @ ' + String(e.filename).split('/').pop() : '') +
+        (e.lineno ? ':' + e.lineno + (e.colno ? ':' + e.colno : '') : '') +
+        '。\n若是 SyntaxError，运行 node --check agent/api/static/js/app.js 可精确定位。');
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    fatal('promise', '未捕获的 Promise 错误：' + (e.reason && e.reason.message || e.reason));
+  });
+  // 2) DOM 就绪兜底：关键全局是否就位（区分 404 / 语法错误 / 正常加载）
+  window.addEventListener('DOMContentLoaded', function () {
+    setTimeout(function () {
+      if (typeof window.Auth === 'undefined') {
+        fatal('auth-missing', 'auth.js 未加载成功或未定义 window.Auth。请检查 /static/js/auth.js 是否返回 200。');
+      } else if (typeof window.sendMessage !== 'function' || typeof window.newSession !== 'function') {
+        fatal('app-syntax', 'app.js 已请求但关键函数未注册——极可能存在语法错误导致整脚本被丢弃。' +
+          '请在项目根目录运行 node --check agent/api/static/js/app.js，按报错行号修复后刷新。');
+      }
+      // 否则：脚本正常加载且函数就位。若按钮仍无响应，指向 CSS 遮挡 / CSP(代理层) / 浏览器扩展。
+    }, 60);
+  });
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>InsightForge AI · Workbench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/css/tokens.css">
-<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/tokens.css?v=20260723">
+<link rel="stylesheet" href="/static/css/app.css?v=20260723">
 </head>
 <body>
 
@@ -174,8 +218,9 @@
   </div>
 </div>
 
-<script src="/static/js/auth.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/icons.js?v=20260723"></script>
+<script src="/static/js/auth.js?v=20260723"></script>
+<script src="/static/js/app.js?v=20260723"></script>
 <div class="toast-container" id="toastContainer"></div>
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal-card">
@@ -191,14 +236,6 @@
 <div class="modal-overlay" id="profileOverlay" onclick="if(event.target===this)closeProfileModal()">
   <div class="modal-card modal-card--wide">
     <div class="modal-title">个人信息</div>
-    <div class="profile-avatar-row">
-      <img id="pfAvatar" class="avatar-lg" src="" alt="">
-      <div class="avatar-upload">
-        <input type="file" id="pfAvatarInput" accept=".png,.jpg,.jpeg,.gif,.webp">
-        <button class="kb-btn" onclick="document.getElementById('pfAvatarInput').click()">更换头像</button>
-        <div id="pfAvatarHint" class="avatar-hint">支持 png/jpg/gif/webp，≤5MB</div>
-      </div>
-    </div>
     <div class="set-field">
       <label>昵称（侧边栏优先显示昵称，账号仅用于登录）</label>
       <input type="text" id="pfNickname" maxlength="30" placeholder="设置昵称">

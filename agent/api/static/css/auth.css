@@ -53,6 +53,14 @@
   letter-spacing: var(--tracking-tight);
   color: var(--color-ink);
   margin: 0 0 var(--space-2xs);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+#auth-modal .auth-card h2 svg {                  /* 机器人图标 - cobalt 信号 */
+  width: 24px; height: 24px;
+  color: var(--color-accent);
+  flex-shrink: 0;
 }
 #auth-modal .auth-card .sub {                    /* #auth-sub */
   font-size: var(--text-sm);
