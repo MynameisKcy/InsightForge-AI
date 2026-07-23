@@ -86,7 +86,7 @@ def _get_or_create_analyst():
     return _analysis_cache["_analyst_instance"]
 
 
-@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→产品分析→报告），返回文本格式的分析结论。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'找出利润最高的产品'")
+@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→产品分析→可视化图表→报告）。系统会自动生成图表并嵌入对话，无需你自行绘图。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'找出利润最高的产品'、'可视化各月销售额对比'、'画一幅趋势图'")
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:

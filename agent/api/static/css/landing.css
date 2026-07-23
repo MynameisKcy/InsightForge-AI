@@ -1,0 +1,408 @@
+/* landing.css — InsightForge AI welcome page (Workbench macrostructure, sci-tech theme).
+   Consumes tokens from tokens.css. Do not inline raw colour/font values here.
+   Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: custom (sci-tech) */
+
+/* ── Base ── */
+html, body { overflow-x: clip; }                 /* gate 34 — no horizontal scroll, use clip not hidden */
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink-2);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  line-height: var(--lh-body);
+  font-variant-numeric: tabular-nums;           /* gate — numbers align */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--color-accent); color: var(--color-accent-ink); }
+
+/* ── Utility ── */
+.hidden { display: none !important; }           /* landing.js toggles modal via this class */
+
+/* ── Nav — N1b bordered flush bar (Cobalt signature; NOT the AI-default N1a with 4-5 links).
+   This page has exactly 3 destinations (login / start / workbench) so a compact
+   bordered bar is justified and genre-appropriate for modern-minimal. ── */
+.nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--page-gutter);
+  border-bottom: 1px solid var(--color-rule);
+  background: color-mix(in oklch, var(--color-paper) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky-nav);
+}
+.nav-brand {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-ink);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2xs);
+}
+/* The brand dot — one CSS-built character mark per page (hum-07 DNA carry:
+   a small mark anchors one side). Pure CSS, aria-hidden. Cobalt signal. */
+.nav-brand::before {
+  content: "";
+  display: inline-block;
+  width: 8px; height: 8px;
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px var(--color-accent-halo);
+}
+.nav-actions {
+  display: flex;
+  gap: var(--space-2xs);
+  align-items: center;
+}
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--space-md);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-ink-2);
+  cursor: pointer;
+  white-space: nowrap;                          /* gate 49 — clickable text never wraps */
+  transition: background-color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.nav-btn:focus-visible {                         /* gate 26 — instant focus ring, never animates in */
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.nav-btn:active { transform: translateY(1px); }  /* press IS the feedback — Cobalt CTA voice */
+.nav-btn-login {
+  border-color: var(--color-rule-2);
+  color: var(--color-ink);
+}
+.nav-btn-login:hover {
+  border-color: var(--color-accent);
+  color: var(--color-ink);
+}
+.nav-btn-start, .nav-btn-workbench {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  border-color: var(--color-accent);
+}
+.nav-btn-start:hover, .nav-btn-workbench:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* ── Hero — Workbench macrostructure: title LEFT, code-as-hero demo RIGHT.
+   Asymmetric, never centred (gate 6). Blueprint grid background (4% opacity,
+   hum-07 DNA carry adapted to sci-tech — the grid IS the background discipline). ── */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);  /* lede LEFT, code demo RIGHT — asymmetric Workbench */
+  gap: var(--space-xl);
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--page-gutter) var(--space-xl);
+  background:
+    linear-gradient(var(--rule-blueprint) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(90deg, var(--rule-blueprint) 1px, transparent 1px) 0 0 / 48px 48px,
+    radial-gradient(60% 50% at 78% 30%, var(--color-paper-emit) 0%, transparent 65%),
+    var(--color-paper);
+  border-bottom: 1px solid var(--color-rule);
+}
+.hero__lede { min-width: 0; }                     /* gate 51 — display headers wrap inside long words */
+.hero__eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+  margin: 0 0 var(--space-md);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.hero__eyebrow::before {                          /* mono ordinal dot — the one signal tick */
+  content: "";
+  width: 6px; height: 6px;
+  background: var(--color-accent);
+  border-radius: 50%;
+}
+.hero h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-ink);
+  margin: 0 0 var(--space-md);
+  max-width: 16ch;
+  overflow-wrap: anywhere;                        /* gate 51 — long-word wrap */
+  min-width: 0;
+}
+.hero h1 .accent-verb {                           /* verb landmark via colour, NOT italic (gate 38a) */
+  color: var(--color-accent-2);
+  font-style: normal;
+}
+.hero__sub {
+  font-size: var(--text-lg);
+  line-height: var(--lh-snug);
+  color: var(--color-ink-2);
+  max-width: var(--measure);
+  margin: 0 0 var(--space-lg);
+}
+.hero__cta {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;                                   /* gate 39 — input/button share 44px floor */
+  padding: 0 var(--space-lg);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;                            /* gate 49 — never wraps */
+  transition: background-color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              transform var(--dur-fast) var(--ease-out);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  border-color: var(--color-accent);
+}
+.btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }  /* gate 26 — disabled, 3 channels via attr elsewhere */
+.btn-ghost {
+  background: transparent;
+  color: var(--color-ink);
+  border-color: var(--color-rule-2);
+}
+.btn-ghost:hover {
+  border-color: var(--color-accent);
+  color: var(--color-ink);
+}
+
+/* ── Code-as-hero demo — Cobalt's signature move. A dark graphite card with a
+   typographic frame (top rule + filename + bottom rule), NOT fake window chrome
+   (gate 47 — no traffic-light dots, no URL pill). Hairline-bordered, one signal
+   accent on the 200 OK chip. One line types in once, then static. ── */
+.code-card {
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-ink-2);
+  overflow: hidden;
+  min-width: 0;
+}
+.code-card__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2xs) var(--space-md);
+  border-bottom: 1px solid var(--color-rule);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-mono);
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+.code-card__status {
+  color: var(--color-accent-2);
+  font-weight: 500;
+}
+.code-card pre {
+  margin: 0;
+  padding: var(--space-md);
+  overflow-x: auto;
+  white-space: pre;
+}
+.code-card .tok-prompt { color: var(--color-accent); }      /* the > user prompt — the one signal */
+.code-card .tok-key   { color: var(--color-accent-2); }    /* keys / status */
+.code-card .tok-mut   { color: var(--color-ink-3); }       /* punctuation / muted */
+.code-card .tok-str   { color: var(--color-ink); }         /* strings / values */
+/* One-shot type-in on the response line, then static. Reduced-motion: shows final state. */
+.code-card .tok-typeline {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  border-right: 1px solid var(--color-accent-2);
+  width: 0;
+  animation: typeline var(--dur-slow) steps(28, end) 600ms forwards;
+}
+@keyframes typeline {
+  to { width: 28ch; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .code-card .tok-typeline { width: 28ch; animation: none; border-right: 0; }
+}
+
+/* ── Features — Workbench macrostructure: NOT 3-identical-cards row (gate 3).
+   A 2x2 asymmetric grid where each card leads with a CSS-built geometric mark
+   (no emoji — gate 30), hairline-bordered, lit-from-within (hum-07 DNA carry
+   adapted: inner radial at 5% accent, never drop-shadowed on dark). ── */
+.features {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--space-xl) var(--page-gutter) var(--space-2xl);
+}
+.features__head { margin: 0 0 var(--space-lg); max-width: 64ch; }
+.features h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-ink);
+  margin: 0 0 var(--space-2xs);
+}
+.features__sub {
+  font-size: var(--text-md);
+  color: var(--color-ink-3);
+  margin: 0;
+  max-width: var(--measure);
+}
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));   /* gate 50 — minmax(0,1fr) not bare 1fr */
+  gap: 1px;                                            /* hairlines between, not gaps */
+  background: var(--color-rule);                       /* the 1px grid line colour */
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.feature-card {
+  background: var(--color-paper);
+  padding: var(--space-lg) var(--space-lg) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+  position: relative;
+}
+/* Inner-emit wash — lit from within, not drop-shadowed (Lumen/Cobalt hairline-card DNA) */
+.feature-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(80% 60% at 0% 0%, var(--color-paper-emit) 0%, transparent 60%);
+  pointer-events: none;
+}
+.feature-card > * { position: relative; }
+/* CSS-built geometric mark per card — 4 distinct shapes, NO emoji (gate 30) */
+.feature-card .mark {
+  width: 28px; height: 28px;
+  color: var(--color-accent);
+  flex: 0 0 auto;
+}
+.feature-card h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  line-height: var(--lh-snug);
+  color: var(--color-ink);
+  margin: 0;
+  letter-spacing: var(--tracking-tight);
+}
+.feature-card p {
+  font-size: var(--text-sm);
+  line-height: var(--lh-body);
+  color: var(--color-ink-2);
+  margin: 0;
+  max-width: 52ch;
+}
+
+/* ── Footer — Ft5 Statement. One closing display line dominates (hum-07 DNA
+   carry), wordmark + minimal links + copyright beneath in muted small type.
+   NOT Ft3 4-column index (gate 43). ── */
+.site-footer {
+  border-top: 1px solid var(--color-rule);
+  padding: var(--space-xl) var(--page-gutter) var(--space-lg);
+  background: var(--color-paper);
+}
+.site-footer__inner {
+  max-width: var(--page-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.site-footer__statement {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: var(--text-xl);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-ink);
+  max-width: 38ch;
+  margin: 0;
+}
+.site-footer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-mono);
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+.site-footer__meta a {
+  color: var(--color-ink-3);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.site-footer__meta a:hover {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+/* ── Responsive — single-column collapse on mobile (gate 52) ── */
+@media (max-width: 48rem) {
+  .hero { padding: var(--space-xl) var(--page-gutter) var(--space-lg); grid-template-columns: minmax(0, 1fr); }  /* collapse to single stacked column */
+  .features-grid { grid-template-columns: 1fr; }   /* gate 52 — collapse to one column */
+  .nav-bar { padding: var(--space-2xs) var(--page-gutter); }
+  .nav-brand { font-size: var(--text-md); }
+  .nav-btn { height: 32px; padding: 0 var(--space-sm); font-size: var(--text-xs); }
+  .site-footer__statement { font-size: var(--text-lg); }
+}
+@media (max-width: 30rem) {
+  .hero h1 { font-size: var(--text-display-s); }   /* step down for narrow screens */
+  .nav-btn-login { display: none; }                 /* keep the primary CTA visible, drop the secondary */
+}

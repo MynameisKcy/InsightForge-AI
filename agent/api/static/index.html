@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<!-- Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: custom (sci-tech / deep-space Cobalt)
+     · tone: technical · anchor hue: cool blue (250°) · studied-DNA: hum-07 (structural reference only)
+     Design tokens live in css/tokens.css (shared with app.html — Task 10). Page rules in
+     css/landing.css + css/auth.css. landing.js is UNCHANGED — every id it queries is preserved. -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InsightForge AI · 多智能体协同数据分析平台</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="/static/css/tokens.css?v=20260723">
+<link rel="stylesheet" href="/static/css/landing.css?v=20260723">
+<link rel="stylesheet" href="/static/css/auth.css?v=20260723">
+<script src="/static/js/auth.js?v=20260723"></script>
+<script src="/static/js/icons.js?v=20260723"></script>
+<script src="/static/js/landing.js?v=20260723" defer></script>
+</head>
+<body>
+
+<nav class="nav-bar" aria-label="主导航">
+  <a class="nav-brand" href="/">InsightForge&nbsp;AI</a>
+  <div class="nav-actions">
+    <button class="nav-btn nav-btn-login" id="btn-login" type="button">登录</button>
+    <button class="nav-btn nav-btn-start" id="btn-start" type="button">免费开始</button>
+    <a class="nav-btn nav-btn-workbench hidden" id="btn-workbench" href="/app">进入工作台 →</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero__lede">
+    <p class="hero__eyebrow">01 · 多智能体数据分析平台</p>
+    <h1>用自然语言 <span class="accent-verb">驱动</span> 多智能体协同分析。</h1>
+    <p class="hero__sub">
+      LangChain + LangGraph 编排 SQL 查询、趋势 / 产品 / 风险分析、图表生成与多格式报告导出。
+      从一句提问到一份完整报告，一站式协同。
+    </p>
+    <div class="hero__cta">
+      <button class="btn btn-primary" id="hero-start" type="button">立即开始</button>
+      <a class="btn btn-ghost" href="#features">查看能力</a>
+    </div>
+  </div>
+
+  <!-- Code-as-hero demo — Cobalt signature. Typographic frame (top rule + filename +
+       status), NOT fake window chrome. One line types in once, then static. -->
+  <figure class="code-card" aria-label="自然语言到分析报告的请求示例">
+    <figcaption class="code-card__bar">
+      <span>insightforge · /api/chat</span>
+      <span class="code-card__status">200 OK</span>
+    </figcaption>
+<pre><code><span class="tok-mut">&gt;</span> <span class="tok-prompt">分析近一季度各产品线销售额趋势，识别风险并导出报告</span>
+
+<span class="tok-key">SQLAgent</span>      <span class="tok-mut">→</span> <span class="tok-typeline">SELECT product_line, SUM(...) </span><span class="tok-mut">…</span>
+<span class="tok-key">TrendAgent</span>   <span class="tok-mut">→</span> <span class="tok-str">Q3 环比 +12.4%，产品 C 下滑 -6.1%</span>
+<span class="tok-key">RiskAgent</span>    <span class="tok-mut">→</span> <span class="tok-str">产品 C 库存周转偏低，标记关注</span>
+<span class="tok-key">ReportAgent</span>  <span class="tok-mut">→</span> <span class="tok-str">生成图表 + 文本报告 ✓</span>
+<span class="tok-key">ExportAgent</span>  <span class="tok-mut">→</span> <span class="tok-str">report_q3.md  · report_q3.pdf</span></code></pre>
+  </figure>
+</section>
+
+<section class="features" id="features">
+  <header class="features__head">
+    <h2>核心能力</h2>
+    <p class="features__sub">从自然语言到多格式报告，一站式协同分析。</p>
+  </header>
+
+  <!-- 2×2 hairline grid — NOT 3-identical-cards (gate 3). Each card leads with a
+       distinct CSS/SVG geometric mark, no emoji (gate 30). -->
+  <div class="features-grid">
+
+    <article class="feature-card">
+      <!-- mark: chat bubble — pure inline SVG, one signal stroke -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <path d="M4 8h20v11H10l-6 5V8z"/>
+        <path d="M9 13.5h6M9 16.5h10" stroke-linecap="square"/>
+      </svg>
+      <h3>自然语言驱动</h3>
+      <p>Smart Assistant 智能客服模式，ReAct Agent 配 13 个工具，对话式流式响应。</p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: pipeline nodes — one source + 3 connected satellites -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <rect x="3"  y="12" width="6" height="6"/>
+        <rect x="13" y="3"  width="6" height="6"/>
+        <rect x="13" y="19" width="6" height="6"/>
+        <rect x="19" y="12" width="6" height="6"/>
+        <path d="M9 15h4V6h4M9 15h4v7h4M13 15h6" stroke-linecap="square"/>
+      </svg>
+      <h3>多智能体分析流水线</h3>
+      <p>PlannerAgent 编排：SQL → 趋势 / 产品 / 风险分析 → 可视化 → 报告 → 导出，步骤依赖自动调度。</p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: database cylinder — classic data-store glyph, drawn not icon-fonted -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <ellipse cx="14" cy="6" rx="9" ry="3"/>
+        <path d="M5 6v16c0 1.7 4 3 9 3s9-1.3 9-3V6" stroke-linecap="square"/>
+        <path d="M5 14c0 1.7 4 3 9 3s9-1.3 9-3" stroke-linecap="square"/>
+      </svg>
+      <h3>多源数据管理</h3>
+      <p>上传 CSV / Excel 或预配置 MySQL / PostgreSQL，DuckDB 统一查询，支持跨表 JOIN。</p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: document + chart bar — report glyph -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <rect x="4" y="3" width="13" height="17"/>
+        <path d="M8 8h5M8 12h5M8 16h3" stroke-linecap="square"/>
+        <rect x="16" y="14" width="3" height="11"/>
+        <rect x="20" y="9"  width="3" height="16"/>
+      </svg>
+      <h3>多格式报告导出</h3>
+      <p>自动生成图表与文本报告，一键导出 Markdown / PDF 等多格式。</p>
+    </article>
+
+  </div>
+</section>
+
+<!-- 登录/注册弹窗 — all ids preserved for landing.js -->
+<div id="auth-modal" class="modal-overlay hidden">
+  <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+    <h2 id="auth-title">登录</h2>
+    <p class="sub" id="auth-sub">登录以使用数据分析服务</p>
+    <div class="auth-error" id="auth-error" role="alert"></div>
+    <form id="auth-form">
+      <input type="hidden" id="auth-mode" data-mode="login">
+      <div class="form-group">
+        <label for="auth-account">账号</label>
+        <input type="text" id="auth-account" name="account" placeholder="请输入账号" autocomplete="username" required>
+      </div>
+      <div class="form-group">
+        <label for="auth-password">密码</label>
+        <input type="password" id="auth-password" name="password" placeholder="请输入密码" autocomplete="current-password" required>
+      </div>
+      <div class="form-group" id="auth-password2-group" style="display:none">
+        <label for="auth-password2">确认密码</label>
+        <input type="password" id="auth-password2" name="password2" placeholder="请再次输入密码" autocomplete="new-password">
+      </div>
+      <div class="form-group form-group-check">
+        <input type="checkbox" id="auth-remember" name="remember">
+        <label for="auth-remember">记住我（30 天内免登录）</label>
+      </div>
+      <button type="submit" class="btn" id="auth-submit">登 录</button>
+    </form>
+    <a class="auth-toggle" id="auth-toggle" href="#">没有账号？点击注册</a>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <p class="site-footer__statement">从一句提问，到一份完整报告。</p>
+    <p class="site-footer__meta">
+      <span>© 2026 InsightForge AI</span>
+      <span aria-hidden="true">·</span>
+      <span>多智能体协同数据分析平台</span>
+      <span aria-hidden="true">·</span>
+      <span>基于 LangChain + LangGraph 构建</span>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

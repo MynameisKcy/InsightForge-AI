@@ -1,5 +1,5 @@
 """
-Report export helpers for Streamlit UI.
+Report export helpers.
 """
 import datetime
 import re
