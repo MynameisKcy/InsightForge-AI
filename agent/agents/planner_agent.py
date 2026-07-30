@@ -43,16 +43,17 @@ class RequestContext:
     多用户并发会互相覆盖；改为每次请求构造局部 ctx 下传，天然隔离。
     """
 
-    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc")
+    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc", "query")
 
     def __init__(self, user_id: str = "default", session_id: str = "",
                  csv_path: str = "", dataset_name: str = "",
-                 dataset_desc: str = ""):
+                 dataset_desc: str = "", query: str = ""):
         self.user_id = user_id or "default"
         self.session_id = session_id
         self.csv_path = csv_path
         self.dataset_name = dataset_name
         self.dataset_desc = dataset_desc
+        self.query = query
 
 
 PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题，制定分析计划。
@@ -162,7 +163,7 @@ class PlannerAgent(BaseAgent):
 
         ctx = RequestContext(user_id=user_id, session_id=session_id,
                              csv_path=csv_path, dataset_name=dataset_name,
-                             dataset_desc=dataset_desc)
+                             dataset_desc=dataset_desc, query=input_data.get("query", ""))
 
         # 确保该 user 的 DuckDB 实例加载了本次所需 CSV（实例内部按 last_loaded_csv 判重）
         if csv_path and os.path.exists(csv_path):
@@ -204,7 +205,12 @@ class PlannerAgent(BaseAgent):
         # 0. 解析请求上下文（按 user_id 隔离数据集，替代旧的实例属性）
         ctx = self._resolve_context(input_data)
 
-        plan_data = self._create_plan(query, history)
+        # 0.5 查询改写：结合近期对话历史消解指代，使多轮 query（如"分析它的趋势"）
+        # 以自包含形式进入规划。改写仅用于规划；原始 query 仍作为对外的标题/标签。
+        # 详见 docs/adr/0002-query-rewriting-two-points.md
+        plan_query = self._rewrite_query(query, ctx.user_id)
+
+        plan_data = self._create_plan(plan_query, history)
         plan = plan_data.get("plan", [])
         title = plan_data.get("title", "数据分析报告")
         reasoning = plan_data.get("reasoning", "")
@@ -304,6 +310,24 @@ class PlannerAgent(BaseAgent):
             content = str(h.get("content", ""))[:300]
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
+
+    def _rewrite_query(self, query: str, user_id: str) -> str:
+        """结合近期对话历史把 query 改写为自包含形式（消解指代）。
+
+        失败时回退原始 query。改写结果仅用于规划，不替换对外 query（标题/标签仍用原文）。
+        多用户隔离：历史按 user_id 取（get_session），改写器模型按 user_id 取。
+        详见 docs/adr/0002-query-rewriting-two-points.md
+        """
+        try:
+            from agents.query_rewriter import QueryRewriter
+        except ModuleNotFoundError:
+            from agent.agents.query_rewriter import QueryRewriter
+        try:
+            history = get_session(user_id).get_context(max_turns=6)
+            return QueryRewriter(user_id).rewrite(query, history)
+        except Exception as e:
+            logger.warning("Query rewrite failed, using original query: %s", e)
+            return query
 
     def run_stream(self, input_data: dict):
         """
@@ -486,7 +510,13 @@ class PlannerAgent(BaseAgent):
         })
 
     def _run_export(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
-        """导出报告。"""
+        """导出报告。
+
+        导出格式按用户原始请求（ctx.query）解析：用户显式提到 Word/PDF/HTML/Markdown
+        时只导出指定格式，否则回退默认 ["md","html"]。旧实现硬编码 ["md","html"]，使系统
+        提示词宣传的 Word/PDF 永远不会产出（export_agent 本身支持 md/docx/pdf/html，且
+        依赖库缺失时优雅降级，见 export_agent._docx_available/_pdf_available）。
+        """
         report = prev_results.get("report_result", {})
         markdown = report.get("markdown", "")
         title = report.get("title", "分析报告")
@@ -495,8 +525,21 @@ class PlannerAgent(BaseAgent):
         return self.export_agent.run({
             "markdown": markdown,
             "title": title,
-            "formats": ["md", "html"],
+            "formats": self._resolve_export_formats(ctx.query),
         })
+
+    @staticmethod
+    def _resolve_export_formats(query: str) -> list[str]:
+        """从用户请求文本解析要导出的格式；未指定时回退 ["md","html"]。"""
+        text = (query or "").lower()
+        found: list[str] = []
+        for fmt, kws in (("docx", ("docx", "word")),
+                         ("pdf", ("pdf",)),
+                         ("html", ("html", "htm")),
+                         ("md", ("markdown",))):
+            if any(kw in text for kw in kws) and fmt not in found:
+                found.append(fmt)
+        return found or ["md", "html"]
 
     # ── 计划生成 ──
 
@@ -528,7 +571,7 @@ class PlannerAgent(BaseAgent):
         step = 2
 
         # 根据关键词自动添加步骤
-        if any(w in query_lower for w in ["趋势", "trend", "增长", "下降", "变化", "趋势", "月度", "monthly"]):
+        if any(w in query_lower for w in ["趋势", "trend", "增长", "下降", "变化", "月度", "monthly"]):
             plan.append({"step": step, "agent": "trend_analysis", "task": "趋势分析", "depends_on": [1]})
             step += 1
 
@@ -541,11 +584,11 @@ class PlannerAgent(BaseAgent):
             step += 1
 
         if any(w in query_lower for w in ["图", "chart", "visual", "可视化"]):
-            plan.append({"step": step, "agent": "visualization", "task": "图表生成", "depends_on": [step - 1]})
+            plan.append({"step": step, "agent": "visualization", "task": "图表生成", "depends_on": [1]})
             step += 1
 
         if any(w in query_lower for w in ["报告", "report", "分析", "总结", "汇总"]):
-            plan.append({"step": step, "agent": "report", "task": "生成分析报告", "depends_on": [step - 1]})
+            plan.append({"step": step, "agent": "report", "task": "生成分析报告", "depends_on": [1]})
             step += 1
 
         # 确保至少有 trend + product + report 作为最完整的分析

@@ -40,7 +40,14 @@ class FakeChroma:
 
     @staticmethod
     def _match(d, where):
-        return all(d["metadata"].get(k) == v for k, v in (where or {}).items())
+        """where 匹配，与真实 chromadb where 语义一致：支持 $and / $or，扁平多键视为 AND。"""
+        if not where:
+            return True
+        if "$and" in where:
+            return all(FakeChroma._match(d, sub) for sub in where["$and"])
+        if "$or" in where:
+            return any(FakeChroma._match(d, sub) for sub in where["$or"])
+        return all(d["metadata"].get(k) == v for k, v in where.items())
 
     def get(self, where=None, ids=None):
         out = list(self.docs)
@@ -151,7 +158,7 @@ class KnowledgeSelfHealTests(unittest.TestCase):
         svc = _make_service()
         _write(self.path, "x" * 100)
         svc._md5_store.add("stale_md5")  # md5 在
-        svc._ingest_file = lambda path, md5_hex=None: 0  # 模拟入库失败
+        svc._ingest_file = lambda path, md5_hex=None, user_id=None: 0  # 模拟入库失败
         self.assertNotIn("stale_md5", svc.chroma_sources())  # chroma 无分片
         n, skipped = svc._ingest_if_needed(self.path, "stale_md5")
         self.assertEqual(n, 0)

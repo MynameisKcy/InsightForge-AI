@@ -18,10 +18,12 @@ try:
     from agent.rag.rag_service import RagSummarizerService
     from agent.utils.config_handler import agent_conf
     from agent.utils.path_tool import get_abs_path
+    from agent.agents.planner_agent import PlannerAgent
 except ModuleNotFoundError:
     from rag.rag_service import RagSummarizerService
     from utils.config_handler import agent_conf
     from utils.path_tool import get_abs_path
+    from agents.planner_agent import PlannerAgent
 
 rag = RagSummarizerService()
 
@@ -34,7 +36,8 @@ def _external_data_path() -> str:
 
 @tool(description="从向量库中检索参考资料，以纯字符形式返回")
 def rag_sumarize(query:str) -> str:
-    return rag.rag_summarize(query)
+    # owner 隔离：从请求上下文取当前 user_id，仅检索该用户 + 公共 system 知识
+    return rag.rag_summarize(query, _current_user_id())
 
 @tool(description="获取城市天气")
 def get_weather(city:str) -> str:
@@ -71,19 +74,35 @@ def fill_report_context_for_report():
 
 # ── 数据分析桥接工具：使智能客服可以调用多 Agent 分析系统 ──
 
-_analysis_cache = {}  # 缓存分析结果，避免重复计算
+# PlannerAgent 实例按 user_id 缓存：各用户独立实例，用自己的 LLM 配置。
+# 旧实现是进程级单例（PlannerAgent() 不传 user_id）-> 永远用默认模型配置，
+# 导致 per-user LLM 配置在数据分析链路失效。详见 docs/adr/0001-single-entry-analysis-as-tool.md
+_analyst_cache = {}  # user_id -> PlannerAgent
 
 
-def _get_or_create_analyst():
-    """延迟初始化 PlannerAgent（单例）。"""
-    try:
-        from agents.planner_agent import PlannerAgent
-    except ModuleNotFoundError:
-        from agent.agents.planner_agent import PlannerAgent
+def _get_or_create_analyst(user_id: str | None = None):
+    """按 user_id 缓存 PlannerAgent 实例（首次取用时构建）。
 
-    if "_analyst_instance" not in _analysis_cache:
-        _analysis_cache["_analyst_instance"] = PlannerAgent()
-    return _analysis_cache["_analyst_instance"]
+    user_id 决定该实例使用的 LLM 配置（见 factory.get_chat_model）：传入真实 user_id
+    才会按用户配置构建模型，而非默认配置。与 ReactAgent 一样按用户隔离，
+    配置变更时通过 invalidate_analyst 丢弃实例、下次重建。
+    """
+    key = user_id or "default"
+    if key not in _analyst_cache:
+        _analyst_cache[key] = PlannerAgent(user_id=key)
+    return _analyst_cache[key]
+
+
+def invalidate_analyst(user_id: str | None = None) -> None:
+    """丢弃缓存的 PlannerAgent 实例，下次取用时按新配置重建。
+
+    user_id=None -> 清空全部；否则只清该用户。配合 fastapi_server._invalidate_user_agents
+    与 factory.reload_model_config 一并清掉 Agent 实例与模型缓存，使新配置真正生效。
+    """
+    if user_id is None:
+        _analyst_cache.clear()
+    else:
+        _analyst_cache.pop(user_id or "default", None)
 
 
 @tool(description="运行完整的数据分析流程（SQL查询→趋势分析→产品分析→可视化图表→报告）。系统会自动生成图表并嵌入对话，无需你自行绘图。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'找出利润最高的产品'、'可视化各月销售额对比'、'画一幅趋势图'")
@@ -91,7 +110,7 @@ def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:
         from utils.request_context import get_user_id, get_session_id
-        analyst = _get_or_create_analyst()
+        analyst = _get_or_create_analyst(get_user_id())
         result = analyst.run({
             "query": query,
             "user_id": get_user_id(),
@@ -324,7 +343,8 @@ def _list_text_files(user_id: str):
     except ModuleNotFoundError:
         from agent.utils.path_tool import get_abs_path
     import os as _os
-    data_dir = get_abs_path(chroma_conf["data_path"])
+    uid = user_id or _current_user_id()
+    data_dir = _os.path.join(get_abs_path(chroma_conf["data_path"]), uid)
     allowed = tuple(chroma_conf.get("allowed_knowledge_file_type", ["txt", "pdf", "docx", "md"]))
     files = []
     if _os.path.isdir(data_dir):

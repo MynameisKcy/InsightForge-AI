@@ -46,13 +46,26 @@
   });
 })();
 </script>
+<!-- Anti-FOUC: apply theme before first paint. Stored 'if-theme' choice wins; else follow OS.
+     Same key as the landing page, so the chosen theme carries across pages. -->
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem('if-theme');
+    var sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    document.documentElement.setAttribute('data-theme', stored || (sysLight ? 'light' : 'dark'));
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>InsightForge AI · Workbench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="/static/css/tokens.css?v=20260723">
-<link rel="stylesheet" href="/static/css/app.css?v=20260723">
+<link rel="stylesheet" href="/static/css/tokens.css?v=20260730">
+<link rel="stylesheet" href="/static/css/app.css?v=20260730">
 </head>
 <body>
 
@@ -60,7 +73,7 @@
      Cobalt signature: hairlines do the work; accent is the single signal. ── -->
 <div class="sidebar">
   <div class="sidebar-header">
-    <h1 class="sidebar-brand"><span>InsightForge</span> <span class="brand-mark" aria-hidden="true"></span></h1>
+    <h1 class="sidebar-brand"><a href="/" class="brand-home" title="返回首页">InsightForge</a> <span class="brand-mark" aria-hidden="true"></span></h1>
     <div class="user-info" id="userDisplay" onclick="openProfileModal()" title="个人信息设置"></div>
     <button class="btn-new-session" onclick="newSession()"><span>新会话</span></button>
   </div>
@@ -115,7 +128,7 @@
   <!-- ── 账号设置 ── -->
   <div class="set-section">
     <div class="set-header" onclick="toggleSection('set')">
-      <h2><span class="section-chevron" id="chevronSet">▾</span> 账号设置 <span class="set-dot" id="settingsDot"></span></h2>
+      <h2><span class="section-chevron" id="chevronSet">▾</span> 模型设置 <span class="set-dot" id="settingsDot"></span></h2>
     </div>
     <div class="section-body collapsed" id="sectionBodySet">
       <div class="set-body">
@@ -190,6 +203,11 @@
 
   </div>
   <div class="sidebar-footer">
+    <button class="theme-cycle" id="themeToggle" type="button" aria-pressed="false" title="切换主题">
+      <svg class="ic ic-moon" width="16" height="16" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22.5 16.5A9.5 9.5 0 0 1 11.5 5.5a9.5 9.5 0 1 0 11 11z"/></svg>
+      <svg class="ic ic-sun" width="16" height="16" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="14" r="5"/><path d="M14 3v3M14 22v3M3 14h3M22 14h3M5.6 5.6l2.1 2.1M20.3 20.3l2.1 2.1M22.4 5.6l-2.1 2.1M7.7 20.3l-2.1 2.1"/></svg>
+      <span class="theme-cycle__label">深色</span>
+    </button>
     <button class="btn-logout" onclick="logout()"><span>登出</span></button>
   </div>
 </div>
@@ -220,7 +238,7 @@
 
 <script src="/static/js/icons.js?v=20260723"></script>
 <script src="/static/js/auth.js?v=20260723"></script>
-<script src="/static/js/app.js?v=20260723"></script>
+<script src="/static/js/app.js?v=20260723b"></script>
 <div class="toast-container" id="toastContainer"></div>
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal-card">
@@ -260,5 +278,38 @@
     </div>
   </div>
 </div>
+<script>
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  var label = btn.querySelector('.theme-cycle__label');
+  function current() { return root.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+  function sync() {
+    var light = current() === 'light';
+    btn.setAttribute('aria-pressed', light ? 'true' : 'false');
+    btn.setAttribute('title', light ? '切换到深色模式' : '切换到浅色模式');
+    if (label) label.textContent = light ? '浅色' : '深色';
+  }
+  sync();
+  btn.addEventListener('click', function () {
+    var next = current() === 'light' ? 'dark' : 'light';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('if-theme', next); } catch (e) {}
+    sync();
+  });
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    var onSys = function (e) {
+      if (localStorage.getItem('if-theme')) return;   /* explicit choice overrides OS */
+      root.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+      sync();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onSys);
+    else if (mq.addListener) mq.addListener(onSys);
+  } catch (e) {}
+})();
+</script>
 </body>
 </html>

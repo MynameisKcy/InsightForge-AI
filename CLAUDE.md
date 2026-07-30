@@ -93,3 +93,17 @@ Frontend sidebar panel (`ds-section`) lists datasets, shows schema on click, and
 - **ReactAgent middleware**: `monitor_tool` detects `fill_report_context_for_report` to set `runtime.context["report"]=True`; `report_prompt_switch` then swaps the system prompt to `report_prompt.txt`.
 - **Multi-table SQL**: `SQLAgent` uses `get_enhanced_schema_text()` to inject ALL loaded tables into the prompt (not a single hardcoded table). `DataResolver` resolves datasets dynamically from `datasources_db` with fallback to the hardcoded `DATASET_MAP`. `get_data_overview` tool iterates all tables in DuckDB.
 - **DuckDB identifiers**: Always use `safe_ident()` when interpolating table names into DuckDB SQL. Direct f-string interpolation of user-controlled identifiers is a SQL injection risk.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (repo `MynameisKcy/Multi-Agent-Data-Analysis-System`), operated via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles, label string equal to role name (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
