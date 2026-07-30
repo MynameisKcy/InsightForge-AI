@@ -34,3 +34,8 @@ agent/data/train.csv
 # 用户上传的知识库文件（运行时上传到 data/，不入版本库）
 agent/data/*.pdf
 agent/data/*.docx
+
+# 本地辅助脚本与实验性文档（不纳入版本库）
+docs/superpowers/
+scripts/
+claude.md

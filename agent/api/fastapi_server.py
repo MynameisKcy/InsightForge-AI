@@ -183,7 +183,8 @@ async def refresh_auth_cookie(request: Request, call_next):
 # 旧设计是进程级单例，导致 per-user LLM 配置要么失效（单例已建）要么泄漏（首次构建用
 # 某用户配置服务所有人）。改为按 user_id 缓存独立实例，配置变更时丢弃对应用户实例。
 _react_agents = {}    # user_id -> ReactAgent
-_planner_agents = {}  # user_id -> PlannerAgent
+# PlannerAgent 的 per-user 缓存由 agent_tools 统一持有（run_full_analysis 工具的入口），
+# 见 agent_tools._get_or_create_analyst；此处不再重复缓存，避免两份实例需要分别失效。
 
 
 def _get_react_agent(user_id: str):
@@ -197,20 +198,28 @@ def _get_react_agent(user_id: str):
 
 
 def _get_planner_agent(user_id: str):
-    if user_id not in _planner_agents:
-        try:
-            from agents.planner_agent import PlannerAgent
-        except ModuleNotFoundError:
-            from agent.agents.planner_agent import PlannerAgent
-        _planner_agents[user_id] = PlannerAgent(user_id=user_id)
-    return _planner_agents[user_id]
+    """委托给 agent_tools 的 per-user PlannerAgent 缓存（单一真相源）。
+
+    /api/analysis（ADR-0001 已弃用，前端不再调用）与 run_full_analysis 工具共用同一份
+    per-user 实例缓存，配置变更时只需失效一处（见 _invalidate_user_agents）。
+    """
+    try:
+        from agent.agent.tools.agent_tools import _get_or_create_analyst
+    except ModuleNotFoundError:
+        from agent.tools.agent_tools import _get_or_create_analyst
+    return _get_or_create_analyst(user_id)
 
 
 def _invalidate_user_agents(user_id: str):
     """配置保存后调用：丢弃该用户的 Agent 实例，下次请求按新配置重建。
     配合 factory.reload_model_config(user_id) 一并清模型缓存。"""
     _react_agents.pop(user_id, None)
-    _planner_agents.pop(user_id, None)
+    # PlannerAgent 实例缓存由 agent_tools 持有，统一在此失效
+    try:
+        from agent.agent.tools.agent_tools import invalidate_analyst
+    except ModuleNotFoundError:
+        from agent.tools.agent_tools import invalidate_analyst
+    invalidate_analyst(user_id)
 
 
 # ── 知识库服务（单例） ──
@@ -819,12 +828,16 @@ async def reload_datasources(request: Request, user=Depends(require_auth)):
 
 # ── 知识库管理（方案C-5） ──
 
-def _kb_data_dir() -> str:
+def _kb_data_dir(user_id: str | None = None) -> str:
     try:
         from utils.config_handler import chroma_conf
     except ModuleNotFoundError:
         from agent.utils.config_handler import chroma_conf
-    return get_abs_path(chroma_conf["data_path"])
+    base = get_abs_path(chroma_conf["data_path"])
+    # 按用户分目录：data/<user_id>/，消除同名文件覆盖与磁盘级跨用户泄露
+    if not user_id:
+        return base
+    return os.path.join(base, user_id)
 
 
 def _kb_allowed_types() -> tuple:
@@ -946,7 +959,7 @@ async def api_change_password(request: Request, user=Depends(require_auth)):
 async def kb_list_files(request: Request, user=Depends(require_auth)):
     """列出 data/ 下知识库文件，含大小/类型/md5/是否已入库。"""
     user_id = user["user_id"]
-    data_dir = _kb_data_dir()
+    data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
     try:
         from utils.file_handler import get_file_md5_hex
@@ -956,7 +969,7 @@ async def kb_list_files(request: Request, user=Depends(require_auth)):
     vs = _get_vector_store()
     ingested_md5 = vs._load_md5_store()
     # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
-    chroma_sources = vs.chroma_sources()
+    chroma_sources = vs.chroma_sources(user_id)
     chroma_basenames = {os.path.basename(s) for s in chroma_sources}
     files = []
     if os.path.isdir(data_dir):
@@ -985,7 +998,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
     user_id = user["user_id"]
     files = []
     # ── 文本类（PDF/Word/TXT/MD，进 Chroma）──
-    data_dir = _kb_data_dir()
+    data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
     try:
         from utils.file_handler import get_file_md5_hex
@@ -995,7 +1008,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
         vs = _get_vector_store()
         ingested_md5 = vs._load_md5_store()
         # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
-        chroma_sources = vs.chroma_sources()
+        chroma_sources = vs.chroma_sources(user_id)
         chroma_basenames = {os.path.basename(s) for s in chroma_sources}
     except Exception as e:
         logger.warning(f"加载向量库 md5 失败: {e}")
@@ -1041,7 +1054,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
 async def kb_upload(request: Request, files: list[UploadFile] = File(...), user=Depends(require_auth)):
     """上传文件到 data/ 并增量入库。"""
     user_id = user["user_id"]
-    data_dir = _kb_data_dir()
+    data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
     os.makedirs(data_dir, exist_ok=True)
     vs = _get_vector_store()
@@ -1069,7 +1082,7 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...), user=
             content = await f.read()
             with open(fpath, "wb") as out:
                 out.write(content)
-            chunks, skipped = vs.load_single_document(fpath)
+            chunks, skipped = vs.load_single_document(fpath, user_id)
             results.append({
                 "filename": fname,
                 "success": True,
@@ -1090,13 +1103,13 @@ async def kb_delete_file(request: Request, filename: str, user=Depends(require_a
     # 防路径穿越
     if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
         return JSONResponse({"error": "非法文件名"}, status_code=400)
-    data_dir = _kb_data_dir()
+    data_dir = _kb_data_dir(user_id)
     fpath = os.path.join(data_dir, filename)
     if not os.path.isfile(fpath):
         return JSONResponse({"error": "文件不存在"}, status_code=404)
     try:
         vs = _get_vector_store()
-        removed = vs.delete_by_source(fpath)
+        removed = vs.delete_by_source(fpath, user_id)
         os.remove(fpath)
         return JSONResponse({"success": True, "removed_chunks": removed})
     except Exception as e:
@@ -1113,7 +1126,7 @@ async def kb_reindex(request: Request, user=Depends(require_auth)):
         return JSONResponse({"error": "需传 confirm=true 以确认全量重建"}, status_code=400)
     try:
         vs = _get_vector_store()
-        result = vs.reindex_all()
+        result = vs.reindex_all(user_id)
         return JSONResponse({"success": True, **result})
     except Exception as e:
         logger.error(f"知识库重建失败: {traceback.format_exc()}")
@@ -1126,7 +1139,7 @@ async def kb_stats(request: Request, user=Depends(require_auth)):
     user_id = user["user_id"]
     try:
         vs = _get_vector_store()
-        return JSONResponse(vs.get_stats())
+        return JSONResponse(vs.get_stats(user_id))
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

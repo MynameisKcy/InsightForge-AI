@@ -18,11 +18,13 @@ from langchain_core.prompts import PromptTemplate
 
 try:
     from agent.rag.vector_store import VectorStoreService
+    from agent.rag.retrieval_query_rewriter import RetrievalQueryRewriter
     from agent.utils.prompt_loader import load_rag_prompts
     from agent.utils.config_handler import rag_conf
     from agent.model.factory import get_chat_model
 except ModuleNotFoundError:
     from rag.vector_store import VectorStoreService
+    from rag.retrieval_query_rewriter import RetrievalQueryRewriter
     from utils.prompt_loader import load_rag_prompts
     from utils.config_handler import rag_conf
     from model.factory import get_chat_model
@@ -49,21 +51,17 @@ class RagSummarizerService(object):
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
         self.model = get_chat_model()
         self.chain = self.__init_chain()
+        # 检索查询扩展器（多查询改写，扩大粗召回召回率）；按 user_id 延迟取模型，
+        # 单例 service 下仍能按用户隔离 LLM。失败时 retriever_docs 自动回退单查询。
+        self._query_rewriter = RetrievalQueryRewriter()
 
     def __init_chain(self):
         chain = self.prompt_template | self.model |StrOutputParser()
         return chain
 
-    def _coarse_retrieve(self, query: str) -> list[Document]:
-        """向量粗召回：用 retrieve_k 拉大候选池，供 rerank 精排。"""
-        retriever = self.vector_store.get_retriver()
-        # 临时覆盖 search_kwargs 的 k，做一次大候选召回
-        retriever.search_kwargs = {"k": self.retrieve_k}
-        if hasattr(retriever, "invoke"):
-            return retriever.invoke(query)
-        if hasattr(retriever, "get_relevant_documents"):
-            return retriever.get_relevant_documents(query)
-        return []
+    def _coarse_retrieve(self, query: str, user_id: str | None = None) -> list[Document]:
+        """向量粗召回：用 retrieve_k 拉大候选池，供 rerank 精排。按 owner 过滤（自己+公共 system）。"""
+        return self.vector_store.similarity_search(query, user_id=user_id, k=self.retrieve_k)
 
     def _rerank(self, query: str, docs: list[Document]) -> list[Document]:
         """用 DashScope gte-rerank 对粗召回结果精排，取 top_n 并丢弃低分文档。
@@ -119,9 +117,40 @@ class RagSummarizerService(object):
             logger.error("rerank 调用失败，回退粗召回: %s", str(e))
             return docs[: self.rerank_top_n]
 
-    def retriever_docs(self,query:str) -> list[Document]:
-        # 粗召回大候选池 + rerank 精排，提升中文检索相关性
-        coarse = self._coarse_retrieve(query)
+    def _expand_queries(self, query: str, user_id: str | None = None) -> list[str]:
+        """多查询扩展：返回原始 query + N 条改写。无改写器/失败时回退 [原始 query]。"""
+        rewriter = getattr(self, "_query_rewriter", None)
+        if rewriter is None or not query:
+            return [query] if query else []
+        try:
+            return rewriter.expand(query, user_id)
+        except Exception as e:
+            logger.warning("Query expand failed, using original query only: %s", e)
+            return [query] if query else []
+
+    @staticmethod
+    def _doc_id(doc: Document) -> str:
+        """chunk 去重键：优先 metadata id，否则 source+内容前缀。"""
+        mid = (doc.metadata or {}).get("id")
+        if mid:
+            return f"id:{mid}"
+        source = (doc.metadata or {}).get("source", "")
+        return f"{source}::{doc.page_content[:80]}"
+
+    def retriever_docs(self, query: str, user_id: str | None = None) -> list[Document]:
+        # 多查询扩展 + 粗召回大候选池 + rerank 精排，提升中文检索召回率与相关性
+        # （详见 docs/adr/0002-query-rewriting-two-points.md）
+        queries = self._expand_queries(query, user_id)
+        seen_ids: set[str] = set()
+        coarse: list[Document] = []
+        for q in queries:
+            for doc in self._coarse_retrieve(q, user_id):
+                did = self._doc_id(doc)
+                if did in seen_ids:
+                    continue
+                seen_ids.add(did)
+                coarse.append(doc)
+        # 精排仍用原始 query 打分（改写只为扩大召回，不参与排序）
         return self._rerank(query, coarse)
 
     @staticmethod
@@ -151,8 +180,8 @@ class RagSummarizerService(object):
             lines.append(self._format_doc_source(doc, index))
         return "\n".join(lines)
 
-    def rag_summarize(self,query:str) -> str:
-        context_docs = self.retriever_docs(query)
+    def rag_summarize(self, query: str, user_id: str | None = None) -> str:
+        context_docs = self.retriever_docs(query, user_id)
 
         context = ""
         counter = 0

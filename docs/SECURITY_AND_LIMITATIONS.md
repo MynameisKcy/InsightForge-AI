@@ -1,0 +1,38 @@
+# 安全说明与能力边界
+
+## 安全机制
+
+- `.env` 已在 `.gitignore` 中忽略且**未被 git 跟踪**（`.gitignore:2-3`），内含真实 `DASHSCOPE_API_KEY` 与 `INSIGHTFORGE_SETTINGS_KEY`。请勿提交；若历史上曾误提交，应立即在 DashScope 控制台轮换 Key。
+- 用户密码以 `bcrypt` 哈希存储（兼容旧 SHA-256 并在下次登录惰性升级）；令牌为 `secrets.token_hex(16)` 随机串、24h 过期、登出 / 改密 / 改昵称即清进程内缓存。
+- 用户 API Key 以 Fernet 对称加密存于 `user_settings.db`，主密钥在 `INSIGHTFORGE_SETTINGS_KEY`；任何能读 `.env` 者可解密，请妥善保护该文件与运行环境。
+- 会话端点均做 owner 校验并返回 404 防枚举；数据集 / 文件操作按 `owner_user_id` 隔离并有路径穿越防护。
+- 生产部署建议：在反代层叠加超时 / 限流 / 请求体大小上限，并为只读 SQL 查询增加资源配额（补齐沙箱未覆盖的 DoS 面）。
+
+## 架构 / 功能限制
+
+为避免误用，以下为经源码核验的能力边界（非缺陷清单，而是"它是什么 / 不是什么"）：
+
+### 架构层面
+
+- 子代理为**静态注册**（`_agent_map` 硬编码），无动态插件 / 注册表 / 磁盘加载机制；新增代理需改 `planner_agent.py` + `agents/__init__.py`。
+- 流水线**严格顺序执行**，无并行；`depends_on` 仅用于"跳过未就绪步骤"，不调度并发。
+- 无跨代理重试 / fallback；仅 `SQLAgent._fix_sql` 内部错误回灌重生成（最多 3 次）。
+
+### 安全层面
+
+- "沙箱"是 **SQL 语句级 AST 校验**，非进程 / 容器 / 虚拟化隔离；**无 CPU / 内存 / 磁盘 / 行数 / 超时上限**，只读但昂贵的查询存在 DoS 风险。
+- 向量库与图表知识库为**全局共享**，无按用户隔离（任意用户的上传知识可被他人检索到）。
+- 无 CSRF token、无限流 / 登录防爆破、无 CORS 配置（同源）、无 CSP；图表 iframe 无 `sandbox` 属性；前端 XSS 防护为自研 `escapeHtml` + URL 协议白名单（未用 DOMPurify）。
+- 客户端中断 SSE 后，**后台线程仍跑完整任务**，无服务端取消。
+
+### 功能层面
+
+- **无多模态**：仅文本理解，PDF 不做 OCR / 图像解析。
+- **无模型 fallback 链**：单模型 per user，`ChatTongyi`/`ChatOpenAI` 为 provider 选择而非故障切换。
+- 导出 4 种格式均已实现；`_run_export` 现按用户请求文本解析格式（`_resolve_export_formats`，`planner_agent.py:528,532`），未指定时回退 `["md","html"]`；docx/pdf 需显式提及且** PDF 会丢弃图片与表格**。
+- `DocumentReportAgent` **不走 RAG**，直接把原文截断至 8000 字塞给 LLM。
+- 长期记忆摘要**写入但不回灌**聊天 prompt（见 [§4 记忆系统](DESIGN_DETAILS.md#4-记忆系统两层结构与当前限制)）；短期记忆按 `user_id` 而非 `session_id` 索引，存在跨会话串扰。
+- `get_weather` / `get_user_id` / `get_user_location` 三个工具为**演示桩**（返回硬编码 / 随机值）。
+- 审计通道 `[AUDIT]` / `[CONTEXT]` 仅有前端解析、无后端产出，处于 dormant 状态。
+- `_duckdb_instances` 为无上限 dict，高用户 churn 下内存只增不减。
+- 日志按日落盘但**无轮转 / 容量上限**。

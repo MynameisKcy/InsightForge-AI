@@ -146,3 +146,37 @@
     }
   })();
 })();
+
+// ── 主题切换（日间 / 暗夜）──────────────────────────────────────────
+// 防 FOUC 的初值已由 index.html <head> 内联脚本在首绘前写好 <html data-theme>。
+// 这里只负责：按钮交互、aria 同步、持久化，以及「未显式选择时跟随系统偏好」。
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+
+  function currentTheme() { return root.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+  function syncAria() { toggle.setAttribute('aria-pressed', currentTheme() === 'light' ? 'true' : 'false'); }
+  function apply(theme) { root.setAttribute('data-theme', theme); syncAria(); }
+
+  // 初值同步按钮 aria-pressed（滑块位置由 CSS 据 [data-theme] 决定，首绘即正确）
+  syncAria();
+
+  toggle.addEventListener('click', function () {
+    var next = currentTheme() === 'light' ? 'dark' : 'light';
+    apply(next);
+    try { localStorage.setItem('if-theme', next); } catch (e) { /* 配额禁用等，忽略 */ }
+  });
+
+  // 未显式选择时跟随系统主题变化；一旦用户手动切换（if-theme 已写入），停止跟随。
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    var onSysChange = function (e) {
+      if (localStorage.getItem('if-theme')) return;   // 已显式选择，不再跟随系统
+      apply(e.matches ? 'light' : 'dark');
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onSysChange);
+    else if (mq.addListener) mq.addListener(onSysChange);   // 旧版 Safari
+  } catch (e) { /* matchMedia 不可用则忽略 */ }
+})();

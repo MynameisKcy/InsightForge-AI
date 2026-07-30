@@ -102,6 +102,7 @@
   --dur-fast: 140ms;
   --dur-base: 220ms;
   --dur-slow: 320ms;
+  --dur-theme: 300ms;   /* dual-theme crossfade (0.3s per spec) - scoped, never transition:all */
 
   /* === Shadows — sharp, not soft glows. Dark surfaces elevate via lightness. === */
   --shadow-card:   0 1px 2px oklch(0% 0 0 / 0.30);              /* barely-there lift on code card */
@@ -118,6 +119,56 @@
   --z-sticky-nav: 300;    /* top nav always out-paints */
   --z-modal: 1000;        /* auth modal */
   --z-toast: 1100;
+}
+
+/* === Warm-Sun (日间) theme - applied via <html data-theme="light"> on BOTH the landing page
+   and the workbench (app.html). :root stays deep-space dark and is the default whenever the
+   attribute is absent or "dark"; each page's anti-FOUC head script sets it before first paint.
+   Every --color-* is overridden with a warm cream + terracotta-amber palette.
+   Contrast verified >=4.5:1 for body text (ink-2 L37% / ink-3 L42% on cream L97%) and for
+   white-on-accent (accent-ink L98% on accent L47%). Accents are deliberately deep warm tones
+   so they pass WCAG as both fills-with-white-text and as text-on-cream. === */
+[data-theme="light"] {
+  /* Paper band - warm cream, NEVER pure white (carries the "never pure #fff" DNA rule) */
+  --color-paper:        oklch(97% 0.012 85);   /* warm cream base */
+  --color-paper-2:      oklch(94% 0.016 85);   /* raised surface (cards, code hero) */
+  --color-paper-3:      oklch(91% 0.020 85);   /* hover / active surface */
+  --color-paper-emit:   transparent;           /* kill the dark-mode inner-emit glow; cards elevate via shadow instead */
+
+  /* Ink - warm near-black, never pure black (min L20% DNA rule) */
+  --color-ink:          oklch(24% 0.015 70);   /* headlines - ~14:1 on cream */
+  --color-ink-2:        oklch(37% 0.014 70);   /* body text - ~7:1 on cream */
+  --color-ink-3:        oklch(42% 0.012 70);   /* muted/labels - ~5.6:1 on cream (small text safe) */
+
+  /* Rules / hairlines - warm dark hairlines at low opacity on cream */
+  --color-rule:         oklch(24% 0.012 70 / 0.12);
+  --color-rule-2:       oklch(24% 0.012 70 / 0.18);
+  --color-rule-blueprint: oklch(58% 0.14 60 / 0.05);
+
+  /* Accent - warm amber/terracotta (per decision: light-mode primary action goes warm, not cobalt).
+     Deep enough that white text on the fill (>=5.1:1) AND accent-as-text on cream (>=5.0:1) and on
+     paper-2 (>=4.6:1, e.g. the code-card prompt) all pass WCAG 4.5:1. */
+  --color-accent:       oklch(45% 0.17 55);    /* burnt amber - primary CTA, focus ring, links, code prompt */
+  --color-accent-2:     oklch(45% 0.16 28);    /* deep coral - verb landmark (large text) + 200 OK chip + code keys */
+  --color-accent-ink:   oklch(98% 0.01 70);    /* near-white text on amber fill - >=5.1:1 */
+  --color-accent-hover: oklch(40% 0.18 55);    /* darker amber on hover */
+  --color-accent-halo:  oklch(45% 0.17 55 / 0.20);
+  --color-accent-border-hover: oklch(45% 0.17 55 / 0.55);
+  --color-focus:        var(--color-accent);
+
+  /* Status */
+  --color-ok:           var(--color-accent-2);
+  --color-error:        oklch(52% 0.20 22);
+  --color-error-ink:    oklch(45% 0.20 22);    /* readable coral text on the tinted error surface */
+  --color-error-surface: oklch(52% 0.20 22 / 0.10);
+  --color-error-border: oklch(52% 0.20 22 / 0.35);
+
+  /* Scrim stays dark in both themes (modal overlays are always dark) - inherited from :root, not overridden */
+
+  /* Shadows - soft warm shadows replace the dark-mode glow borders (per spec: day-mode cards
+     get a light box-shadow instead of a luminous border). Sharp, not soft glows. */
+  --shadow-card:   0 1px 2px oklch(40% 0.02 70 / 0.06), 0 6px 16px -8px oklch(40% 0.02 70 / 0.14);
+  --shadow-pop:    0 16px 40px -10px oklch(40% 0.02 70 / 0.22);
 }
 
 /* Reduced-motion: every animation collapses to instant final state. */

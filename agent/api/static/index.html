@@ -1,51 +1,80 @@
 <!DOCTYPE html>
-<!-- Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: custom (sci-tech / deep-space Cobalt)
-     · tone: technical · anchor hue: cool blue (250°) · studied-DNA: hum-07 (structural reference only)
-     Design tokens live in css/tokens.css (shared with app.html — Task 10). Page rules in
-     css/landing.css + css/auth.css. landing.js is UNCHANGED — every id it queries is preserved. -->
+<!-- Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: dual (sci-tech dark + warm-sun light)
+     · tone: technical · anchor hue: cool blue (250°, dark) / warm amber (55°, light) · studied-DNA: hum-07 (structural reference only)
+     Design tokens live in css/tokens.css (shared with app.html). Page rules in css/landing.css + css/auth.css.
+     landing.js queries ids by id; every id it queries is preserved. Theme toggle + GitHub entries added. -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>InsightForge AI · 多智能体协同数据分析平台</title>
 
+<!-- Anti-FOUC: apply theme before first paint. A stored explicit choice wins; otherwise
+     follow the OS prefers-color-scheme. Runs before CSS so [data-theme] is set pre-paint. -->
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem('if-theme');
+    var sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    document.documentElement.setAttribute('data-theme', stored || (sysLight ? 'light' : 'dark'));
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="/static/css/tokens.css?v=20260723">
-<link rel="stylesheet" href="/static/css/landing.css?v=20260723">
-<link rel="stylesheet" href="/static/css/auth.css?v=20260723">
-<script src="/static/js/auth.js?v=20260723"></script>
-<script src="/static/js/icons.js?v=20260723"></script>
-<script src="/static/js/landing.js?v=20260723" defer></script>
+<link rel="stylesheet" href="/static/css/tokens.css?v=20260730">
+<link rel="stylesheet" href="/static/css/landing.css?v=20260730">
+<link rel="stylesheet" href="/static/css/auth.css?v=20260730">
+<script src="/static/js/auth.js?v=20260730"></script>
+<script src="/static/js/icons.js?v=20260730"></script>
+<script src="/static/js/landing.js?v=20260730" defer></script>
 </head>
 <body>
 
 <nav class="nav-bar" aria-label="主导航">
   <a class="nav-brand" href="/">InsightForge&nbsp;AI</a>
   <div class="nav-actions">
+    <a class="nav-btn nav-btn-github" id="btn-github-nav" href="https://github.com/MynameisKcy/Multi-Agent-Data-Analysis-System" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库（新窗口打开）">
+      <svg class="ic ic-github" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.42.36.79 1.08.79 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/></svg>
+      <span class="btn-label">GitHub</span>
+    </a>
     <button class="nav-btn nav-btn-login" id="btn-login" type="button">登录</button>
     <button class="nav-btn nav-btn-start" id="btn-start" type="button">免费开始</button>
-    <a class="nav-btn nav-btn-workbench hidden" id="btn-workbench" href="/app">进入工作台 →</a>
+    <a class="nav-btn nav-btn-workbench hidden" id="btn-workbench" href="/app">进入工作台 -&gt;</a>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换日间 / 暗夜主题" aria-pressed="false">
+      <span class="theme-toggle__track">
+        <span class="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true"><svg class="ic ic-sun" width="24" height="24" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="14" r="5"/><path d="M14 3v3M14 22v3M3 14h3M22 14h3M5.6 5.6l2.1 2.1M20.3 20.3l2.1 2.1M22.4 5.6l-2.1 2.1M7.7 20.3l-2.1 2.1"/></svg></span>
+        <span class="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true"><svg class="ic ic-moon" width="24" height="24" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 16.5A9.5 9.5 0 0 1 11.5 5.5a9.5 9.5 0 1 0 11 11z"/></svg></span>
+        <span class="theme-toggle__knob" aria-hidden="true"></span>
+      </span>
+    </button>
   </div>
 </nav>
 
 <section class="hero">
   <div class="hero__lede">
     <p class="hero__eyebrow">01 · 多智能体数据分析平台</p>
-    <h1>用自然语言 <span class="accent-verb">驱动</span> 多智能体协同分析。</h1>
+    <h1>问一句话，<span class="accent-verb">拿到</span>一份完整分析报告。</h1>
     <p class="hero__sub">
-      LangChain + LangGraph 编排 SQL 查询、趋势 / 产品 / 风险分析、图表生成与多格式报告导出。
-      从一句提问到一份完整报告，一站式协同。
+      上传销售明细，用自然语言提问--智能体团队自动查数、算趋势、画图表、写报告。
+      不懂 SQL 也能一键取数，写错 SQL 自动纠错。
     </p>
     <div class="hero__cta">
       <button class="btn btn-primary" id="hero-start" type="button">立即开始</button>
+      <a class="btn btn-secondary" href="https://github.com/MynameisKcy/Multi-Agent-Data-Analysis-System" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 上 Star（新窗口打开）">
+        <svg class="ic ic-github" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.42.36.79 1.08.79 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/></svg>
+        Star on GitHub
+      </a>
       <a class="btn btn-ghost" href="#features">查看能力</a>
     </div>
   </div>
 
-  <!-- Code-as-hero demo — Cobalt signature. Typographic frame (top rule + filename +
+  <!-- Code-as-hero demo - Cobalt signature. Typographic frame (top rule + filename +
        status), NOT fake window chrome. One line types in once, then static. -->
   <figure class="code-card" aria-label="自然语言到分析报告的请求示例">
     <figcaption class="code-card__bar">
@@ -54,36 +83,27 @@
     </figcaption>
 <pre><code><span class="tok-mut">&gt;</span> <span class="tok-prompt">分析近一季度各产品线销售额趋势，识别风险并导出报告</span>
 
-<span class="tok-key">SQLAgent</span>      <span class="tok-mut">→</span> <span class="tok-typeline">SELECT product_line, SUM(...) </span><span class="tok-mut">…</span>
-<span class="tok-key">TrendAgent</span>   <span class="tok-mut">→</span> <span class="tok-str">Q3 环比 +12.4%，产品 C 下滑 -6.1%</span>
-<span class="tok-key">RiskAgent</span>    <span class="tok-mut">→</span> <span class="tok-str">产品 C 库存周转偏低，标记关注</span>
-<span class="tok-key">ReportAgent</span>  <span class="tok-mut">→</span> <span class="tok-str">生成图表 + 文本报告 ✓</span>
-<span class="tok-key">ExportAgent</span>  <span class="tok-mut">→</span> <span class="tok-str">report_q3.md  · report_q3.pdf</span></code></pre>
+<span class="tok-key">SQLAgent</span>      <span class="tok-mut">-&gt;</span> <span class="tok-typeline">SELECT product_line, SUM(...) </span><span class="tok-mut">…</span>
+<span class="tok-key">TrendAgent</span>   <span class="tok-mut">-&gt;</span> <span class="tok-str">Q3 环比 +12.4%，产品 C 下滑 -6.1%</span>
+<span class="tok-key">RiskAgent</span>    <span class="tok-mut">-&gt;</span> <span class="tok-str">产品 C 库存周转偏低，标记关注</span>
+<span class="tok-key">ReportAgent</span>  <span class="tok-mut">-&gt;</span> <span class="tok-str">生成图表 + 文本报告 ✓</span>
+<span class="tok-key">ExportAgent</span>  <span class="tok-mut">-&gt;</span> <span class="tok-str">report_q3.md  · report_q3.pdf</span></code></pre>
   </figure>
 </section>
 
 <section class="features" id="features">
   <header class="features__head">
     <h2>核心能力</h2>
-    <p class="features__sub">从自然语言到多格式报告，一站式协同分析。</p>
+    <p class="features__sub">六大技术卖点，每一项都直击一个真实数据分析痛点。</p>
   </header>
 
-  <!-- 2×2 hairline grid — NOT 3-identical-cards (gate 3). Each card leads with a
-       distinct CSS/SVG geometric mark, no emoji (gate 30). -->
+  <!-- 2x3 pain->solution grid - NOT 3-identical-cards (gate 3). Each card leads with a
+       distinct CSS/SVG geometric mark, no emoji (gate 30); pain is muted, solution leads
+       with an accent label + a mono scenario sub-line. -->
   <div class="features-grid">
 
     <article class="feature-card">
-      <!-- mark: chat bubble — pure inline SVG, one signal stroke -->
-      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <path d="M4 8h20v11H10l-6 5V8z"/>
-        <path d="M9 13.5h6M9 16.5h10" stroke-linecap="square"/>
-      </svg>
-      <h3>自然语言驱动</h3>
-      <p>Smart Assistant 智能客服模式，ReAct Agent 配 13 个工具，对话式流式响应。</p>
-    </article>
-
-    <article class="feature-card">
-      <!-- mark: pipeline nodes — one source + 3 connected satellites -->
+      <!-- mark: pipeline nodes - one source + 3 connected satellites -->
       <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
         <rect x="3"  y="12" width="6" height="6"/>
         <rect x="13" y="3"  width="6" height="6"/>
@@ -91,37 +111,77 @@
         <rect x="19" y="12" width="6" height="6"/>
         <path d="M9 15h4V6h4M9 15h4v7h4M13 15h6" stroke-linecap="square"/>
       </svg>
-      <h3>多智能体分析流水线</h3>
-      <p>PlannerAgent 编排：SQL → 趋势 / 产品 / 风险分析 → 可视化 → 报告 → 导出，步骤依赖自动调度。</p>
+      <h3>多智能体协同</h3>
+      <p class="pain"><span class="card-label">痛点</span>单个 AI 回答片面，复杂分析要人手动串联多个工具、反复提问。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>PlannerAgent 编排 SQL -&gt; 趋势 / 产品 / 风险 -&gt; 可视化 -&gt; 报告 -&gt; 导出，步骤依赖自动调度。<span class="scenario">一句「分析近一季度各产品线销售额」，七个智能体自动接力。</span></p>
     </article>
 
     <article class="feature-card">
-      <!-- mark: database cylinder — classic data-store glyph, drawn not icon-fonted -->
+      <!-- mark: shield + check - safe execution -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14 3l9 3v6c0 6-4 10-9 13-5-3-9-7-9-13V6l9-3z"/>
+        <path d="M10 14l3 3 5-6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h3>沙盒安全执行</h3>
+      <p class="pain"><span class="card-label">痛点</span>让 AI 直接写 SQL，怕它删库、读文件、把系统拖垮。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>sqlglot AST 只读沙箱，拦截多语句注入、文件读取与 DDL / DML，查询通道与管理通道强隔离。<span class="scenario">AI 生成的 SQL 只能 SELECT，删表 / 读文件一律拒绝。</span></p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: database cylinder - SQL generation -->
       <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
         <ellipse cx="14" cy="6" rx="9" ry="3"/>
         <path d="M5 6v16c0 1.7 4 3 9 3s9-1.3 9-3V6" stroke-linecap="square"/>
         <path d="M5 14c0 1.7 4 3 9 3s9-1.3 9-3" stroke-linecap="square"/>
       </svg>
-      <h3>多源数据管理</h3>
-      <p>上传 CSV / Excel 或预配置 MySQL / PostgreSQL，DuckDB 统一查询，支持跨表 JOIN。</p>
+      <h3>SQL 智能生成与优化</h3>
+      <p class="pain"><span class="card-label">痛点</span>不会写 SQL，或写错了要反复调试。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>自然语言转 SQL，执行报错自动回灌 LLM 重新生成（最多 3 次尝试），多表 schema 自动注入。<span class="scenario">自然语言一键取数，SQL 报错自动纠错重试。</span></p>
     </article>
 
     <article class="feature-card">
-      <!-- mark: document + chart bar — report glyph -->
+      <!-- mark: two curved arrows - query rewriting -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 12a8 8 0 0 1 14-4"/>
+        <path d="M19 4v4h-4"/>
+        <path d="M23 16a8 8 0 0 1-14 4"/>
+        <path d="M9 24v-4h4"/>
+      </svg>
+      <h3>Query 深度改写</h3>
+      <p class="pain"><span class="card-label">痛点</span>多轮对话里「它 / 上个月 / 刚才那个」让 AI 丢上下文，检索也召回不全。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>分析桥消解指代、让 query 自包含进入规划；RAG 多查询扩展（N=3）扩召回、rerank 保精度。<span class="scenario">「分析它的趋势」-&gt; 自动补全为「分析产品 C 近一月销售趋势」。</span></p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: stacked layers - long/short-term memory -->
+      <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14 4l10 5-10 5-10-5 10-5z"/>
+        <path d="M4 14l10 5 10-5"/>
+        <path d="M4 19l10 5 10-5"/>
+      </svg>
+      <h3>长短时记忆 LTM / STM</h3>
+      <p class="pain"><span class="card-label">痛点</span>每次提问都要重讲一遍背景，AI 记不住上文。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>短期记忆 30 轮窗口 + LLM 压缩摘要；长期记忆 SQLite 持久化，保留可检索的对话历史。<span class="scenario">「上次说的那个产品」也能接上。</span></p>
+    </article>
+
+    <article class="feature-card">
+      <!-- mark: document + chart bars - multi-format parsing -->
       <svg class="mark" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
         <rect x="4" y="3" width="13" height="17"/>
         <path d="M8 8h5M8 12h5M8 16h3" stroke-linecap="square"/>
         <rect x="16" y="14" width="3" height="11"/>
         <rect x="20" y="9"  width="3" height="16"/>
       </svg>
-      <h3>多格式报告导出</h3>
-      <p>自动生成图表与文本报告，一键导出 Markdown / PDF 等多格式。</p>
+      <h3>多格式文件解析</h3>
+      <p class="pain"><span class="card-label">痛点</span>数据散在 PDF 报告、Excel 表格、Word 文档里，要手动整理才能分析。</p>
+      <p class="solution"><span class="card-label card-label--accent">方案</span>上传即分轨：表格（CSV / Excel）入 DuckDB，可直接 SQL 与跨表 JOIN；文档（PDF / Word / TXT / MD）入向量库，可问答。<span class="scenario">上传一份销售 Excel，直接问「哪个品类利润最高」。</span></p>
+      <span class="roadmap-chip">图像解析 · 即将支持</span>
     </article>
 
   </div>
 </section>
 
-<!-- 登录/注册弹窗 — all ids preserved for landing.js -->
+<!-- 登录/注册弹窗 - all ids preserved for landing.js -->
 <div id="auth-modal" class="modal-overlay hidden">
   <div class="auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
     <h2 id="auth-title">登录</h2>
@@ -160,6 +220,11 @@
       <span>多智能体协同数据分析平台</span>
       <span aria-hidden="true">·</span>
       <span>基于 LangChain + LangGraph 构建</span>
+      <span aria-hidden="true">·</span>
+      <a href="https://github.com/MynameisKcy/Multi-Agent-Data-Analysis-System" target="_blank" rel="noopener noreferrer" aria-label="GitHub 开源仓库（新窗口打开）">
+        <svg class="ic ic-github" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.3-1.7-1.3-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.11-.76.41-1.27.74-1.56-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.42.36.79 1.08.79 2.18 0 1.58-.01 2.85-.01 3.24 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/></svg>
+        Open Source on GitHub
+      </a>
     </p>
   </div>
 </footer>

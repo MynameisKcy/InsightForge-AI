@@ -308,7 +308,7 @@ async function sendMessage() {
   } catch (err) {
     // 用户主动停止或超时：streamChat 内部已处理气泡，不在此覆写
     if (!userStopped) {
-      bubble.innerHTML = `<span style="color:var(--color-error)">请求失败: ${err.message}</span>`;
+      bubble.innerHTML = `<span style="color:var(--color-error)">请求失败: ${escapeHtml(err.message)}</span>`;
     }
   } finally {
     isProcessing = false;
@@ -492,6 +492,9 @@ async function streamChat(text, bubble) {
       if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
         const iframe = document.createElement('iframe');
         iframe.src = chartUrl;
+        // sandbox 收紧图表 HTML 权限：仅放行脚本（Plotly 渲染所需），不带 allow-same-origin，
+        // 使图表运行于 null origin，无法读取父页面 cookie / localStorage。
+        iframe.setAttribute('sandbox', 'allow-scripts allow-popups');
         iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
         const wrapper = document.createElement('div');
         if (!wrapper.dataset.created) {
@@ -730,8 +733,10 @@ function renderMarkdown(text) {
 
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  div.textContent = text == null ? '' : String(text);
+  // innerHTML 仅转义 & < >；补转义单/双引号以闭合 HTML 属性上下文（title="..." 等），
+  // 防止用户可控内容（文件名等）突破属性边界注入。
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function copyCode(btn) {
@@ -780,7 +785,7 @@ async function loadKbFiles() {
         return `<div class="kb-file" title="${escapeHtml(f.filename)}">
           <span class="kb-name">${escapeHtml(f.filename)}</span>
           ${badge}
-          <button class="kb-del" onclick="deleteKbFile('${escapeHtml(f.filename)}')" title="删除">✕</button>
+          <button class="kb-del" data-kb-file="${escapeHtml(f.filename)}" title="删除">✕</button>
         </div>`;
       }).join('');
     }
@@ -874,13 +879,13 @@ async function loadDatasets() {
       list.innerHTML = datasets.map(d => {
         const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
         const safeId = String(d.name).replace(/[^A-Za-z0-9_]/g,'_');
-        return `<div class="ds-item" onclick="toggleDsDetail('${safeId}')">
+        return `<div class="ds-item" data-ds-toggle="${escapeHtml(safeId)}">
           <span class="ds-icon">${dsIcon(d.source_type)}</span>
           <span class="ds-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
           <span class="ds-rows">${rows}</span>
-          <button class="ds-del" onclick="event.stopPropagation();deleteDs('${escapeHtml(d.name)}')" title="删除">✕</button>
+          <button class="ds-del" data-ds-del="${escapeHtml(d.name)}" title="删除">✕</button>
         </div>
-        <div class="ds-detail" id="ds-detail-${safeId}">加载中...</div>`;
+        <div class="ds-detail" id="ds-detail-${escapeHtml(safeId)}">加载中...</div>`;
       }).join('');
     }
   } catch(e) { console.log('加载数据集失败:', e); }
@@ -1096,9 +1101,7 @@ async function loadAllFiles() {
             ? '<span class="kb-badge" style="background:var(--color-error-surface);color:var(--color-paper);">失败</span>'
             : '<span class="kb-badge out">处理中</span>');
       var sizeStr = f.size ? fmtSize(f.size) : '';
-      var delFn = f.type === 'table'
-        ? "deleteFile('" + escapeHtml(f.name) + "','table')"
-        : "deleteFile('" + escapeHtml(f.name) + "','text')";
+      var delType = f.type === 'table' ? 'table' : 'text';
       var tail = f.type === 'table'
         ? (f.table_name ? '<span style="font-size:10px;color:var(--color-ink-3);">表:' + escapeHtml(f.table_name) + '</span>' : '')
         : (sizeStr ? '<span style="font-size:10px;color:var(--color-ink-3);">' + sizeStr + '</span>' : '');
@@ -1106,7 +1109,7 @@ async function loadAllFiles() {
         '<span style="flex-shrink:0;">' + icon + '</span>' +
         '<span class="kb-name">' + escapeHtml(f.name) + '</span>' +
         tail + badge +
-        '<button class="kb-del" onclick="' + delFn + '" title="删除">✕</button>' +
+        '<button class="kb-del" data-file-name="' + escapeHtml(f.name) + '" data-file-type="' + delType + '" title="删除">✕</button>' +
         '</div>';
     }).join('');
   } catch(e) {
@@ -1217,6 +1220,28 @@ async function deleteFile(name, type) {
 }
 
 // ── 初始化 ──
+// 事件委托：文件名等用户可控内容不再拼进 onclick 内联 JS（属性上下文下 HTML 实体会被解码，
+// 仅转义不足以防 XSS），改为 data-* 属性 + 委托点击，从根上杜绝存储型 XSS。
+(function initDelegatedHandlers() {
+  var kbList = document.getElementById('kbFileList');
+  if (kbList) kbList.addEventListener('click', function(e) {
+    var btn = e.target.closest('.kb-del');
+    if (btn && btn.dataset.kbFile) deleteKbFile(btn.dataset.kbFile);
+  });
+  var allList = document.getElementById('allFileList');
+  if (allList) allList.addEventListener('click', function(e) {
+    var btn = e.target.closest('.kb-del');
+    if (btn && btn.dataset.fileName) deleteFile(btn.dataset.fileName, btn.dataset.fileType);
+  });
+  var dsListEl = document.getElementById('dsList');
+  if (dsListEl) dsListEl.addEventListener('click', function(e) {
+    var delBtn = e.target.closest('.ds-del');
+    if (delBtn) { e.stopPropagation(); deleteDs(delBtn.dataset.dsDel); return; }
+    var item = e.target.closest('.ds-item');
+    if (item && item.dataset.dsToggle) toggleDsDetail(item.dataset.dsToggle);
+  });
+})();
+
 loadSessions();
 loadKbFiles();
 loadSettingsStatus();

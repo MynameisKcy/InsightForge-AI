@@ -28,6 +28,10 @@ except ModuleNotFoundError:
     from model.factory import get_embed_model
 
 
+# 公共 / 历史 owner：迁移前无 user_id 的分片统一归属 system，作为对所有用户可见的公共知识。
+PUBLIC_OWNER = "system"
+
+
 def _load_file_documents(read_path: str) -> list[Document]:
     """按扩展名分发到对应的加载器，统一返回 Document 列表。"""
     lower = read_path.lower()
@@ -56,6 +60,54 @@ class VectorStoreService:
             separators=chroma_conf["separators"],
             length_function=len,
         )
+        # 历史无 owner 分片迁移为 PUBLIC_OWNER（幂等），使既有数据作为公共知识可见
+        self._migrate_legacy_owner()
+
+    # ── owner 过滤器 ──
+    @staticmethod
+    def _owner_filter(user_id: str | None, include_public: bool = True) -> dict:
+        """构造 Chroma where 过滤器。
+        include_public=True（检索用）：自己 + 公共 system；
+        include_public=False（删除/列表/统计用）：仅自己。
+        user_id 为空时返回 {}（不过滤，兼容全量场景）。"""
+        if not user_id:
+            return {}
+        if include_public:
+            return {"$or": [{"user_id": user_id}, {"user_id": PUBLIC_OWNER}]}
+        return {"user_id": user_id}
+
+    @staticmethod
+    def _where_source_owner(source: str, user_id: str | None) -> dict:
+        """按 source(+owner) 构造 Chroma where 子句。
+
+        多条件必须用 $and 显式组合：chromadb 的 delete(where=...) 只接受单一操作符，
+        直接写 {"source":..,"user_id":..} 会被拒（get 接受、delete 不接受），
+        统一用 $and 规避版本差异。user_id 为空时仅按 source 过滤。
+        """
+        if user_id:
+            return {"$and": [{"source": source}, {"user_id": user_id}]}
+        return {"source": source}
+
+    def _migrate_legacy_owner(self) -> None:
+        """把缺少 user_id 元数据的历史分片标记为 PUBLIC_OWNER（system），作为公共知识可见。
+        幂等：已有 user_id 的不动。失败不影响主流程。"""
+        try:
+            col = getattr(self.vector_store, "_collection", None) or getattr(self.vector_store, "collection", None)
+            if col is None:
+                return
+            data = col.get(include=["metadatas"])
+            ids = data.get("ids") or []
+            metas = data.get("metadatas") or []
+            upd_ids, upd_metas = [], []
+            for _id, m in zip(ids, metas):
+                if not m or "user_id" not in m:
+                    upd_ids.append(_id)
+                    upd_metas.append({"user_id": PUBLIC_OWNER})
+            if upd_ids:
+                col.update(ids=upd_ids, metadatas=upd_metas)
+                logger.info(f"owner 迁移：{len(upd_ids)} 个历史分片标记为 {PUBLIC_OWNER}")
+        except Exception as e:
+            logger.warning(f"历史 owner 迁移失败（可忽略）: {e}")
 
     # ── md5 存储：json set，O(1) 查询 + 支持按文件删除 ──
     def _md5_store_path(self) -> str:
@@ -106,57 +158,89 @@ class VectorStoreService:
 
     # ── chroma 实际状态查询：md5 仅作去重提示，chroma 才是“可读”的真相 ──
     # 修复 md5 存储与 chroma 偏离（md5 在、chroma 空）导致“显示已入库但读不到”的 bug。
-    def chroma_sources(self) -> set:
+    def chroma_sources(self, user_id: str | None = None) -> set:
         """返回 Chroma 中实际存在分片的 source 路径集合（一次 get 调用）。
-        列表/状态展示据此判定是否“已入库”，而非仅凭 md5 存储。"""
+        user_id 给定时仅返回该用户的来源；None 时全量（兼容）。"""
         try:
-            metas = self.vector_store.get().get("metadatas") or []
+            where = self._owner_filter(user_id, include_public=False)
+            metas = self.vector_store.get(where=where).get("metadatas") or []
             return {m.get("source") for m in metas if m and m.get("source")}
         except Exception as e:
             logger.error(f"读取 chroma sources 失败: {e}")
             return set()
 
-    def _source_has_chunks(self, source: str) -> bool:
-        """chroma 中是否存在该来源的分片。"""
+    def _source_has_chunks(self, source: str, user_id: str | None = None) -> bool:
+        """chroma 中是否存在该来源的分片。user_id 给定时限定 owner。"""
         try:
-            data = self.vector_store.get(where={"source": source})
+            data = self.vector_store.get(where=self._where_source_owner(source, user_id))
             return bool(data and data.get("ids"))
         except Exception:
             return False
 
-    def get_retriver(self):
-        return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
+    def get_retriver(self, user_id: str | None = None):
+        sk = {"k": chroma_conf["k"]}
+        flt = self._owner_filter(user_id, include_public=True)
+        if flt:
+            sk["filter"] = flt
+        return self.vector_store.as_retriever(search_kwargs=sk)
 
-    def load_document(self):
-        """批量加载 data/ 下所有允许类型的知识库文件（增量，已入库的跳过）。"""
+    def similarity_search(self, query: str, user_id: str | None = None, k: int | None = None):
+        """向量检索：按 owner 过滤（自己 + 公共 system）。user_id 为空时全量。"""
+        try:
+            kk = k or int(chroma_conf.get("k", 5))
+            kwargs = {"k": kk}
+            flt = self._owner_filter(user_id, include_public=True)
+            if flt:
+                kwargs["filter"] = flt
+            return self.vector_store.similarity_search(query, **kwargs)
+        except Exception as e:
+            logger.error(f"向量检索失败: {e}")
+            return []
+
+    def _data_dir_for(self, user_id: str | None) -> str:
+        """用户知识库落盘目录：data/<user_id>/。"""
+        base = get_abs_path(chroma_conf["data_path"])
+        uid = user_id or "default"
+        return os.path.join(base, uid)
+
+    def load_document(self, user_id: str | None = None):
+        """批量加载知识库文件。user_id 给定时只加载 data/<user_id>/；
+        None 时遍历 data/ 下所有用户子目录（兼容批量 / __main__）。"""
         loaded_count = 0
         available_count = 0
-
-        allowed_files_path = listdir_with_allowed_type(
-            get_abs_path(chroma_conf["data_path"]),
-            tuple(chroma_conf["allowed_knowledge_file_type"]),
-        )
-
-        if not allowed_files_path:
-            logger.warning("未找到可加载的知识库文件")
+        base = get_abs_path(chroma_conf["data_path"])
+        if user_id:
+            targets = [(user_id, self._data_dir_for(user_id))]
+        else:
+            targets = []
+            if os.path.isdir(base):
+                for name in sorted(os.listdir(base)):
+                    sub = os.path.join(base, name)
+                    if os.path.isdir(sub):
+                        targets.append((name, sub))
+        if not targets:
+            logger.warning("未找到可加载的知识库文件目录")
             return loaded_count, available_count
-
-        for path in allowed_files_path:
-            md5_hex = get_file_md5_hex(path)
-            if not md5_hex:
-                logger.warning(f"跳过无效文件:{path}")
+        allowed_types = tuple(chroma_conf["allowed_knowledge_file_type"])
+        for uid, d in targets:
+            allowed_files_path = listdir_with_allowed_type(d, allowed_types)
+            if not allowed_files_path:
                 continue
-            n, skipped = self._ingest_if_needed(path, md5_hex)
-            if n > 0:
-                loaded_count += 1
-                available_count += 1
-            elif skipped:
-                available_count += 1
-
+            for path in allowed_files_path:
+                md5_hex = get_file_md5_hex(path)
+                if not md5_hex:
+                    logger.warning(f"跳过无效文件:{path}")
+                    continue
+                n, skipped = self._ingest_if_needed(path, md5_hex, uid)
+                if n > 0:
+                    loaded_count += 1
+                    available_count += 1
+                elif skipped:
+                    available_count += 1
         return loaded_count, available_count
 
-    def _ingest_file(self, path: str, md5_hex: str | None = None) -> int:
-        """加载单个文件入库，返回分片数。失败返回 0。"""
+    def _ingest_file(self, path: str, md5_hex: str | None = None, user_id: str | None = None) -> int:
+        """加载单个文件入库，返回分片数。失败返回 0。分片写入 user_id owner 元数据。"""
         if md5_hex is None:
             md5_hex = get_file_md5_hex(path)
         if not md5_hex:
@@ -170,19 +254,21 @@ class VectorStoreService:
             if not split_document:
                 logger.warning(f"{path}分片后无有效内容")
                 return 0
-            # 统一写入 source 元数据，便于按来源删除
+            uid = user_id or "default"
+            # 统一写入 source / file_md5 / user_id 元数据，便于按来源与 owner 删除/过滤
             for doc in split_document:
                 doc.metadata.setdefault("source", path)
                 doc.metadata.setdefault("file_md5", md5_hex)
+                doc.metadata["user_id"] = uid   # owner 隔离关键字段
             self.vector_store.add_documents(split_document)
             self._add_md5(md5_hex)
-            logger.info(f"{path}加载成功，{len(split_document)} 个分片")
+            logger.info(f"{path}加载成功，{len(split_document)} 个分片 (owner={uid})")
             return len(split_document)
         except Exception as e:
             logger.error(f"{path}加载失败:{str(e)}", exc_info=True)
             return 0
 
-    def _ingest_if_needed(self, path: str, md5_hex: str | None = None):
+    def _ingest_if_needed(self, path: str, md5_hex: str | None = None, user_id: str | None = None):
         """按需入库：md5 命中 且 chroma 确有该来源分片 才跳过；否则重新入库。
 
         修复 md5 存储与 chroma 实际状态偏离的 bug（md5 在、chroma 空）：
@@ -194,56 +280,62 @@ class VectorStoreService:
             md5_hex = get_file_md5_hex(path)
         if not md5_hex:
             return 0, False
+        uid = user_id or "default"
         # 真正已入库（md5 命中 且 chroma 确有分片）才跳过
-        if self._check_md5(md5_hex) and self._source_has_chunks(path):
+        if self._check_md5(md5_hex) and self._source_has_chunks(path, uid):
             logger.info(f"运行时入库：{path} 已存在且可读，跳过")
             return 0, True
         # md5 在但 chroma 缺失（偏离）/ 内容变更：先清该来源残留分片，避免重复
-        if self._source_has_chunks(path):
+        if self._source_has_chunks(path, uid):
             try:
-                self.vector_store.delete(where={"source": path})
+                self.vector_store.delete(where=self._where_source_owner(path, uid))
             except Exception as e:
                 logger.warning(f"清理旧分片失败 {path}: {e}")
-        n = self._ingest_file(path, md5_hex)
+        n = self._ingest_file(path, md5_hex, uid)
         # 入库失败但 md5 残留（历史脏数据）：清掉误导性的 md5，避免假已入库
-        if n == 0 and self._check_md5(md5_hex) and not self._source_has_chunks(path):
+        if n == 0 and self._check_md5(md5_hex) and not self._source_has_chunks(path, uid):
             self._remove_md5(md5_hex)
         return n, False
 
-    def load_single_document(self, path: str):
+    def load_single_document(self, path: str, user_id: str | None = None):
         """运行时增量入库单个文件（知识库管理接口用）。
         返回 (loaded_chunks, skipped) - skipped=True 表示已存在且可读、跳过。
         md5 与 chroma 偏离时会自愈重灌。"""
         if not os.path.exists(path):
             logger.error(f"文件不存在: {path}")
             return 0, False
-        return self._ingest_if_needed(path)
+        return self._ingest_if_needed(path, user_id=user_id)
 
-    def delete_by_source(self, source: str) -> int:
-        """按来源文件路径删除所有相关分片，并移除 md5 记录。返回删除的估计数量。"""
+    def delete_by_source(self, source: str, user_id: str | None = None) -> int:
+        """按来源文件路径删除所有相关分片，并移除 md5 记录。返回删除的估计数量。
+        user_id 给定时仅删该 owner 的分片（不误删他人同名来源）。"""
+        uid = user_id or "default"
+        where = self._where_source_owner(source, user_id)
         try:
             # 先取该 source 的 chunk 数用于返回
             try:
-                existing = self.vector_store.get(where={"source": source})
+                existing = self.vector_store.get(where=where)
                 count = len(existing.get("ids", []) or [])
             except Exception:
                 count = 0
-            self.vector_store.delete(where={"source": source})
+            self.vector_store.delete(where=where)
             # 移除 md5（按文件重算）
             if os.path.exists(source):
                 md5_hex = get_file_md5_hex(source)
                 if md5_hex:
                     self._remove_md5(md5_hex)
-            logger.info(f"已删除来源 {source} 的 {count} 个分片")
+            logger.info(f"已删除来源 {source} 的 {count} 个分片 (owner={uid})")
             return count
         except Exception as e:
             logger.error(f"删除来源 {source} 失败: {e}", exc_info=True)
             return 0
 
-    def get_stats(self) -> dict:
-        """返回知识库统计：总 chunk 数、唯一来源数、嵌入维度、collection 名。"""
+    def get_stats(self, user_id: str | None = None) -> dict:
+        """返回知识库统计：总 chunk 数、唯一来源数、嵌入维度、collection 名。
+        user_id 给定时仅统计该用户；None 时全量。"""
         try:
-            data = self.vector_store.get()
+            where = self._owner_filter(user_id, include_public=False)
+            data = self.vector_store.get(where=where)
             ids = data.get("ids", []) or []
             metadatas = data.get("metadatas", []) or []
             sources = {m.get("source") for m in metadatas if m and m.get("source")}
@@ -263,23 +355,31 @@ class VectorStoreService:
                     "collection_name": chroma_conf["collection_name"],
                     "persist_directory": chroma_conf["persist_directory"]}
 
-    def reindex_all(self) -> dict:
-        """清空向量库与 md5 记录，全量重新入库 data/ 下所有文件。"""
+    def reindex_all(self, user_id: str | None = None) -> dict:
+        """清空并全量重新入库。user_id 给定时仅清空并重灌该用户目录；
+        None 时清空全部（兼容旧的全量行为）。"""
         try:
-            # 清空 collection
-            data = self.vector_store.get()
-            ids = data.get("ids", []) or []
-            if ids:
-                self.vector_store.delete(ids=ids)
-            logger.info(f"reindex: 已清空 {len(ids)} 个旧分片")
+            if user_id:
+                data = self.vector_store.get(where={"user_id": user_id})
+                ids = data.get("ids", []) or []
+                if ids:
+                    self.vector_store.delete(ids=ids)
+                logger.info(f"reindex: 已清空 owner={user_id} 的 {len(ids)} 个分片")
+            else:
+                # 清空 collection
+                data = self.vector_store.get()
+                ids = data.get("ids", []) or []
+                if ids:
+                    self.vector_store.delete(ids=ids)
+                logger.info(f"reindex: 已清空 {len(ids)} 个旧分片")
         except Exception as e:
             logger.error(f"reindex 清空失败: {e}")
-        # 清空 md5
+        # 清空 md5（全量重建场景；per-user 重建时 md5 自愈，清空不影响正确性）
         self._save_md5_store(set())
         # 全量重灌
-        loaded, available = self.load_document()
+        loaded, available = self.load_document(user_id=user_id)
         return {"reloaded_files": loaded, "total_files": available,
-                "stats": self.get_stats()}
+                "stats": self.get_stats(user_id=user_id)}
 
 
 if __name__ == "__main__":

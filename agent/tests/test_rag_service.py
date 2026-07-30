@@ -33,12 +33,19 @@ class DummyRetrieverWithLegacyMethod:
 
 
 class DummyVectorStore:
-    """桩向量库：get_retriver 返回注入的 retriever，避免依赖真实 Chroma。"""
+    """桩向量库：similarity_search 经注入的 retriever 返回文档，避免依赖真实 Chroma。"""
     def __init__(self, retriever):
         self._retriever = retriever
 
-    def get_retriver(self):
+    def get_retriver(self, user_id=None, k=None):
         return self._retriever
+
+    def similarity_search(self, query, user_id=None, k=None):
+        if hasattr(self._retriever, "invoke"):
+            return self._retriever.invoke(query)
+        if hasattr(self._retriever, "get_relevant_documents"):
+            return self._retriever.get_relevant_documents(query)
+        return []
 
 
 def _make_service(retriever):
@@ -133,6 +140,66 @@ class RagServiceTests(unittest.TestCase):
         self.assertTrue(is_report_content(content))
         self.assertTrue(build_report_filename(content).startswith("user_report_1001_5_"))
         self.assertEqual(to_markdown_bytes(content), content.strip().encode("utf-8"))
+
+
+class _ScriptedVectorStore:
+    """按 query 返回预设文档的桩向量库，用于测试多查询合并去重。"""
+
+    def __init__(self, mapping):
+        self._mapping = mapping  # query -> list[Document]
+
+    def similarity_search(self, query, user_id=None, k=None):
+        return list(self._mapping.get(query, []))
+
+
+class _FakeRewriter:
+    """跳过 LLM 的检索改写器桩：expand 原样返回预设查询列表。"""
+
+    def __init__(self, queries):
+        self._queries = queries
+
+    def expand(self, query, user_id=None):
+        return list(self._queries)
+
+
+class RetrieverMultiQueryTests(unittest.TestCase):
+    """多查询扩展在 retriever_docs 中的合并/去重/回退（不触达 DashScope）。"""
+
+    def _make(self, mapping, rewriter=None):
+        service = RagSummarizerService.__new__(RagSummarizerService)
+        service.vector_store = _ScriptedVectorStore(mapping)
+        service.retrieve_k = 15
+        service.rerank_top_n = 3
+        service.rerank_score_threshold = 0.3
+        if rewriter is not None:
+            service._query_rewriter = rewriter
+        return service
+
+    def test_multi_query_unions_and_dedups(self):
+        doc1 = Document(page_content="销售数据A", metadata={"source": "a.txt"})
+        doc2 = Document(page_content="销售数据B", metadata={"source": "a.txt"})
+        doc3 = Document(page_content="利润数据C", metadata={"source": "b.txt"})
+        mapping = {
+            "扫地机器人": [doc1, doc2],
+            "改写A": [doc2, doc3],   # doc2 与原始重复 -> 去重
+            "改写B": [doc1],          # doc1 重复 -> 去重
+        }
+        service = self._make(mapping, rewriter=_FakeRewriter(["扫地机器人", "改写A", "改写B"]))
+        docs = service.retriever_docs("扫地机器人")
+        # 3 个唯一 chunk；_rerank 在 docs<=top_n 时直接截断返回，不调 DashScope
+        self.assertEqual(len(docs), 3)
+        contents = {d.page_content for d in docs}
+        self.assertEqual(contents, {"销售数据A", "销售数据B", "利润数据C"})
+        # doc3 只能从改写A召回 -> 证明多查询确实扩大了召回
+        self.assertIn("利润数据C", contents)
+
+    def test_no_rewriter_falls_back_to_single_query(self):
+        doc1 = Document(page_content="销售数据A", metadata={"source": "a.txt"})
+        mapping = {"扫地机器人": [doc1]}
+        service = self._make(mapping, rewriter=None)  # 不注入改写器
+        docs = service.retriever_docs("扫地机器人")
+        self.assertEqual(len(docs), 1)
+        self.assertEqual(docs[0].page_content, "销售数据A")
 
 
 if __name__ == "__main__":
