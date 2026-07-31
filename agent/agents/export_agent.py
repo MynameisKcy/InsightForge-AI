@@ -41,6 +41,8 @@ except ImportError:
     _pdf_available = False
     logger.warning("reportlab not installed. PDF export disabled.")
 
+_cjk_font_registered = False
+_cjk_font_name = None  # 注册成功后的字体名，None 表示未注册
 
 EXPORT_DIR = "reports"
 
@@ -86,6 +88,36 @@ class ExportAgent(BaseAgent):
                 results["errors"].append(f"Export {fmt} failed: {e}")
 
         return results
+
+    def _register_cjk_font(self) -> str | None:
+        """注册一个 Windows 自带的中文字体供 reportlab 使用。
+
+        优先 msyh.ttc（微软雅黑）→ simsun.ttc（宋体），用 subfontIndex=0 取集合首字体。
+        全局只注册一次。都找不到则记 warning 返回 None，不阻断 PDF 生成。
+        """
+        global _cjk_font_registered, _cjk_font_name
+        if _cjk_font_registered:
+            return _cjk_font_name
+        if not _pdf_available:
+            _cjk_font_registered = True
+            return None
+
+        fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+        candidates = ["msyh.ttc", "msyhbd.ttc", "simsun.ttc", "simhei.ttf"]
+        for fname in candidates:
+            fpath = os.path.join(fonts_dir, fname)
+            if os.path.exists(fpath):
+                try:
+                    pdfmetrics.registerFont(TTFont("CJK", fpath, subfontIndex=0))
+                    _cjk_font_name = "CJK"
+                    logger.info(f"Registered CJK font: {fpath}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to register font {fpath}: {e}")
+        if _cjk_font_name is None:
+            logger.warning("No CJK font found; PDF Chinese may render incorrectly.")
+        _cjk_font_registered = True
+        return _cjk_font_name
 
     def _export(self, markdown: str, title: str, fmt: str) -> str | None:
         """按格式导出。"""
