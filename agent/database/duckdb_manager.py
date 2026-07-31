@@ -424,8 +424,51 @@ class DuckDBManager:
             logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path}")
             return {"success": True, "row_count": row_count, "error": None}
         except Exception as e:
-            logger.error(f"load_csv_dataset failed for '{table_name}': {e}")
-            return {"success": False, "row_count": 0, "error": str(e)}
+            # 回退：DuckDB read_csv_auto 默认 UTF-8，遇 GBK/GB18030 等非 UTF-8 中文 CSV
+            # 会因 "Invalid unicode" 失败。改用 pandas 按候选编码解码为 DataFrame 再建表
+            # （复用 load_excel_dataset 的 register+CREATE TABLE 模式，零扩展依赖）。
+            logger.warning(f"load_csv_dataset: read_csv_auto failed for '{table_name}' ({e}); trying pandas fallback")
+            fallback_err = self._load_csv_via_pandas(csv_path, table_name)
+            if fallback_err is None:
+                row_count = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {safe_ident(table_name)}"
+                ).fetchone()[0]
+                logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path} (pandas fallback)")
+                return {"success": True, "row_count": row_count, "error": None}
+            logger.error(f"load_csv_dataset failed for '{table_name}': {fallback_err}")
+            return {"success": False, "row_count": 0, "error": fallback_err}
+
+    def _load_csv_via_pandas(self, csv_path: str, table_name: str) -> str | None:
+        """用 pandas 按 GBK/GB18030/UTF-8-SIG 解码 CSV 再建表。
+
+        返回 None 表示成功；返回错误字符串表示失败。供 load_csv_dataset 回退。
+        内部自算 qname，不依赖调用处的 qname（load_csv_dataset 可能在 qname 赋值前就抛）。
+        """
+        try:
+            df = None
+            for enc in ("gbk", "gb18030", "utf-8-sig", "utf-16"):
+                try:
+                    df = pd.read_csv(csv_path, encoding=enc)
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+            if df is None:
+                return f"无法解码 CSV（已尝试 GBK/GB18030/UTF-8/UTF-16）：{csv_path}"
+            if len(df.columns) == 0:
+                return f"CSV 文件无有效数据列：{csv_path}"
+            qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            tmp_view = f"__csv_load_{table_name}"
+            self.conn.register(tmp_view, df)
+            try:
+                self.conn.execute(f"CREATE TABLE {qname} AS SELECT * FROM {tmp_view}")
+            finally:
+                self.conn.unregister(tmp_view)
+            return None
+        except Exception as pe:
+            return f"pandas 回退失败: {pe}"
 
     def load_excel_dataset(self, excel_path: str, table_name: str, sheet: str | None = None) -> dict:
         """加载 Excel 文件到指定表（管理通道，不经只读校验）。
