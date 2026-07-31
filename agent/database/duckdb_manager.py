@@ -409,6 +409,8 @@ class DuckDBManager:
             if not os.path.exists(csv_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {csv_path}"}
             qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             self.conn.execute(
                 f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
@@ -447,6 +449,8 @@ class DuckDBManager:
                 return {"success": False, "row_count": 0, "error": "Excel 文件无有效数据列"}
 
             qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             # 用临时视图名注册 DataFrame，避免与用户表名冲突
             tmp_view = f"__excel_load_{table_name}"
