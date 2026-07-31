@@ -76,6 +76,15 @@ class TrendAnalysis:
             return {"trend_summary": "No data available", "growth_rate": "N/A", "anomaly_months": []}
 
         series = monthly_df[value_col]
+        # 强制数值化:文本列或脏数据转 NaN,避免 pct_change 的 str/str 崩溃
+        series = pd.to_numeric(series, errors="coerce")
+        if series.dropna().empty:
+            return {
+                "trend_summary": f"列 {value_col} 非数值或无有效数据,无法计算趋势",
+                "growth_rate": "N/A",
+                "anomaly_months": [],
+                "overall_growth_pct": "N/A",
+            }
         labels = monthly_df[month_col].tolist()
         growth = TrendAnalysis.growth_rate(series)
         anomalies = TrendAnalysis.detect_anomalies(series)
