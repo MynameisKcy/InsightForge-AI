@@ -387,6 +387,9 @@ class DuckDBManager:
         try:
             _validate_table_name(table_name)
             _validate_csv_path(csv_path)
+            # 删除旧表前先清画像缓存,避免 reload 后 get_enhanced_schema_text 命中 stale profile
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             # 删除旧表
             self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
             # 加载新数据（_load_csv 内部会校验 self.table_name，故先同步实例属性）
