@@ -156,3 +156,53 @@ def test_load_csv_clears_profile_cache():
             if os.path.exists(p):
                 os.unlink(p)
 
+
+def test_reload_csv_clears_profile_cache():
+    """reload_csv 重建同名表应清旧画像缓存,避免 stale profile。"""
+    import os
+    import tempfile
+
+    # _validate_csv_path 要求文件在 data/ 目录下
+    try:
+        from utils.path_tool import get_abs_path
+    except ModuleNotFoundError:
+        from agent.utils.path_tool import get_abs_path
+    data_dir = get_abs_path("data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    def _write_csv(content: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".csv", dir=data_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    csv1 = _write_csv("a,b\n1,3\n2,4\n")
+    csv2 = _write_csv("x,y\np,r\nq,s\n")
+    try:
+        # 用 csv_path 构造实例,触发 _load_csv 加载 csv1 为 transactions 表
+        mgr = DuckDBManager(csv_path=csv1, user_id="test_reload_csv")
+        assert mgr.table_name == "transactions"
+        mgr.get_enhanced_schema_text()  # populate cache
+        assert "transactions" in getattr(mgr, "_profile_cache", {})
+        cached1 = mgr._profile_cache["transactions"]
+        assert {"a", "b"} == {c["name"] for c in cached1["columns"]}
+
+        # reload_csv 加载 csv2(不同列 x/y)到同名 transactions 表
+        ok = mgr.reload_csv(csv2)
+        assert ok is True
+        # reload_csv 必须清掉旧画像缓存,否则下次 schema 文本会返回 stale 列(a/b)
+        assert "transactions" not in getattr(mgr, "_profile_cache", {})
+        # 重新生成应反映新列结构(x/y)
+        mgr.get_enhanced_schema_text()
+        cached2 = mgr._profile_cache["transactions"]
+        assert {"x", "y"} == {c["name"] for c in cached2["columns"]}
+    finally:
+        for p in (csv1, csv2):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
