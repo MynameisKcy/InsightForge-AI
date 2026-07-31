@@ -409,7 +409,13 @@ async function streamChat(text, bubble) {
     if (!line.startsWith('data: ')) return false;
     const data = line.slice(6);
 
-    if (data === '[DONE]') return false;
+    if (data === '[DONE]') {
+      // 报告类内容（含 markdown 标题或较长正文）流结束后追加导出按钮
+      if (fullText && fullText.length > 50 && /^#{1,3}\s/m.test(fullText)) {
+        appendExportBar(bubble, fullText);
+      }
+      return false;
+    }
 
     if (data === '[KEEPALIVE]') return false;   // 心跳保活：仅 resetIdle，不渲染
 
@@ -1241,6 +1247,62 @@ async function deleteFile(name, type) {
     if (item && item.dataset.dsToggle) toggleDsDetail(item.dataset.dsToggle);
   });
 })();
+
+// ── 报告导出：在报告 bubble 末尾追加导出按钮栏 ──
+function appendExportBar(bubble, markdown) {
+  // 标题从 markdown 首行 # 解析，回退到默认
+  var title = '数据分析报告';
+  var m = markdown.match(/^#\s+(.+)$/m);
+  if (m) title = m[1].trim();
+  var bar = document.createElement('div');
+  bar.className = 'export-bar';
+  [
+    { fmt: 'md',   label: 'Markdown' },
+    { fmt: 'docx', label: 'Word' },
+    { fmt: 'pdf',  label: 'PDF' },
+    { fmt: 'html', label: 'HTML' },
+  ].forEach(function (item) {
+    var btn = document.createElement('button');
+    btn.className = 'export-btn';
+    btn.textContent = '导出 ' + item.label;
+    btn.onclick = function () { doExport(btn, markdown, title, item.fmt); };
+    bar.appendChild(btn);
+  });
+  bubble.appendChild(bar);
+  scrollToBottom();
+}
+
+function doExport(btn, markdown, title, fmt) {
+  var tip = document.createElement('span');
+  tip.className = 'export-tip';
+  btn.disabled = true;
+  var oldText = btn.textContent;
+  btn.textContent = '生成中...';
+  fetch('/api/report/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown: markdown, title: title, format: fmt }),
+  }).then(function (resp) {
+    if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
+    return resp.blob();
+  }).then(function (blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = (title || 'report') + '.' + (fmt === 'docx' ? 'docx' : fmt);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }).catch(function (err) {
+    tip.textContent = '导出失败: ' + err.message;
+    btn.parentElement.appendChild(tip);
+    setTimeout(function () { tip.remove(); }, 4000);
+  }).finally(function () {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  });
+}
 
 loadSessions();
 loadKbFiles();
