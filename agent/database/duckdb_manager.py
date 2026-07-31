@@ -413,24 +413,35 @@ class DuckDBManager:
 
         若表已存在则先 DROP 再重建。sheet 参数可选，指定工作表名。
         返回 {"success": bool, "row_count": int, "error": str|None}。
+
+        实现说明：不使用 DuckDB 的 read_excel()（依赖 spatial 扩展，需联网下载，
+        在受限网络下会卡死/失败）。改用 pandas + openpyxl 读取为 DataFrame，
+        再通过 con.register() 注册后建表，零扩展依赖、无需联网。
         """
         try:
             _validate_table_name(table_name)
             _validate_csv_path(excel_path)
             if not os.path.exists(excel_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {excel_path}"}
+
+            # pandas 读取 Excel（.xlsx/.xls 均支持；sheet_name 指定工作表，默认首张）
+            read_kwargs = {}
+            if sheet:
+                read_kwargs["sheet_name"] = sheet
+            df = pd.read_excel(excel_path, **read_kwargs)
+            if df is None or len(df.columns) == 0:
+                return {"success": False, "row_count": 0, "error": "Excel 文件无有效数据列"}
+
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
-            # 构建 read_excel 参数
-            if sheet:
-                sheet_escaped = sheet.replace("'", "''")
-                self.conn.execute(
-                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}', sheet_name='{sheet_escaped}')"
-                )
-            else:
-                self.conn.execute(
-                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}')"
-                )
+            # 用临时视图名注册 DataFrame，避免与用户表名冲突
+            tmp_view = f"__excel_load_{table_name}"
+            self.conn.register(tmp_view, df)
+            try:
+                self.conn.execute(f"CREATE TABLE {qname} AS SELECT * FROM {tmp_view}")
+            finally:
+                self.conn.unregister(tmp_view)
+
             row_count = self.conn.execute(
                 f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]

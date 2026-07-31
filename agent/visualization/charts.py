@@ -2,6 +2,7 @@
 Chart Generator: 使用 Plotly 生成交互式图表，支持多种图表类型。
 """
 
+import inspect
 import os
 import sys
 from datetime import datetime
@@ -40,6 +41,25 @@ def _ensure_output_dir() -> str:
     output_path = get_abs_path(CHART_OUTPUT_DIR)
     os.makedirs(output_path, exist_ok=True)
     return output_path
+
+
+def _filter_kwargs(func, kwargs: dict) -> dict:
+    """按目标函数签名过滤 kwargs，只保留它接受的参数。
+
+    auto_chart 会向 normalized 注入 names_col/values_col 等列键做兜底推断，
+    但不同图表签名不同（bar_chart 只认 x_col/y_col，pie_chart 只认
+    names_col/values_col，heatmap 只认 title）。不过滤直接 splat 会导致
+    TypeError: got an unexpected keyword argument。若 func 含 **kwargs
+    （pie/heatmap），则全部保留。
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+    params = sig.parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return dict(kwargs)
+    return {k: v for k, v in kwargs.items() if k in params}
 
 
 class ChartGenerator:
@@ -142,6 +162,10 @@ class ChartGenerator:
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
         work_df = df.copy()
+        # 剔除 y_col 缺失行，避免空点/断线
+        work_df = work_df.dropna(subset=[y_col])
+        if work_df.empty:
+            return _empty_data_placeholder("line_chart", y_col)
         month_like = ChartGenerator._is_month_like(work_df, x_col)
         use_x = "_x_display" if month_like else x_col
         if month_like:
@@ -166,6 +190,10 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("bar_chart", title)
 
+        # 剔除 y_col 缺失行，避免画出高度为 0 的空柱
+        df = df.dropna(subset=[y_col])
+        if df.empty:
+            return _empty_data_placeholder("bar_chart", y_col)
         data = df.head(top_n) if len(df) > top_n else df
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
@@ -206,6 +234,10 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("pie_chart", title)
 
+        # 剔除 values_col 缺失行，避免占比失真
+        df = df.dropna(subset=[values_col])
+        if df.empty:
+            return _empty_data_placeholder("pie_chart", values_col)
         fig = px.pie(df, names=names_col, values=values_col, title=title,
                      color_discrete_sequence=PALETTE)
         fig.update_traces(textposition="inside", textinfo="percent+label")
@@ -240,6 +272,10 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("scatter", title)
 
+        # 剔除 x_col/y_col 缺失行，避免空点
+        df = df.dropna(subset=[x_col, y_col])
+        if df.empty:
+            return _empty_data_placeholder("scatter_chart", f"{x_col}/{y_col}")
         labels = {x_col: x_label or x_col, y_col: y_label or y_col}
         if color_col and color_col in df.columns:
             fig = px.scatter(df, x=x_col, y=y_col, color=color_col, title=title,
@@ -298,7 +334,7 @@ class ChartGenerator:
         if "values_col" not in normalized and len(numeric_cols) >= 1:
             normalized["values_col"] = numeric_cols[-1] if len(numeric_cols) >= 1 else df.columns[-1]
 
-        return func(df, **normalized)
+        return func(df, **_filter_kwargs(func, normalized))
 
     @staticmethod
     def detect_chart_type(data_description: str) -> str:
@@ -342,3 +378,8 @@ def _safe_name(name: str) -> str:
 def _placeholder(chart_type: str, title: str) -> str:
     """当 Plotly 不可用时返回占位文本。"""
     return f"[PLACEHOLDER: {chart_type} - {title}. Install plotly to generate charts.]"
+
+
+def _empty_data_placeholder(chart_type: str, col: str) -> str:
+    """dropna 后无有效数据时返回占位文本，不抛异常。"""
+    return f"[{chart_type}: 列 {col!r} 无有效数值数据（全部缺失）]"
