@@ -471,6 +471,8 @@ class DuckDBManager:
             _validate_table_name(table_name)
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             logger.info(f"drop_table: dropped '{table_name}'")
             return True
         except Exception as e:
@@ -515,14 +517,10 @@ class DuckDBManager:
                 "wide_table_range": wide_range, "row_count": total}
 
     def get_enhanced_schema_text(self) -> str:
-        """增强版 schema 文本，包含行数和来源类型标注。
+        """增强版 schema 文本,含列语义统计(分类列取值/数值 min-max/宽表标记)。
 
-        从 datasources_db 读取元数据，格式：
-        Table: {name} ({source_type}) [{row_count} rows]
-          - col1 (TYPE)
-          - col2 (TYPE)
+        画像经实例级 _profile_cache 缓存,缓存缺失懒计算兜底。
         """
-        # 获取 DuckDB 中所有表
         tables = self.get_table_names()
         if not tables:
             return "No tables found."
@@ -542,26 +540,47 @@ class DuckDBManager:
         parts = []
         for table_name in tables:
             _validate_table_name(table_name)
-            qname = safe_ident(table_name)
-            cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
-            col_lines = [f"  - {col_name} ({col_type})" for col_name, col_type, *_ in cols]
+            # 缓存懒初始化 + 懒计算
+            if not hasattr(self, "_profile_cache"):
+                self._profile_cache = {}
+            if table_name not in self._profile_cache:
+                try:
+                    self._profile_cache[table_name] = self._compute_table_profile(table_name)
+                except Exception as e:
+                    logger.warning(f"_compute_table_profile failed for '{table_name}': {e}")
+                    self._profile_cache[table_name] = None
+            profile = self._profile_cache[table_name]
 
-            # 获取元数据
             meta = meta_map.get(table_name, {})
             source_type = meta.get("source_type", "local")
-            # 优先使用元数据中的 row_count，否则实时查询
-            if "row_count" in meta and meta["row_count"] > 0:
-                row_count = meta["row_count"]
-            else:
-                try:
-                    row_count = self.conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()[0]
-                except Exception:
-                    row_count = 0
+            row_count = profile["row_count"] if profile else meta.get("row_count", 0)
 
-            parts.append(
-                f"Table: {table_name} ({source_type}) [{row_count} rows]\n" + "\n".join(col_lines)
-            )
-        return "\n\n".join(parts)
+            header = f"Table: {table_name} ({source_type}) [{row_count} rows]"
+            if profile and profile.get("is_wide_table"):
+                header += f"  [宽表:年份列 {profile['wide_table_range']}]"
+            parts.append(header)
+
+            if profile:
+                for c in profile["columns"]:
+                    line = f"  - {c['name']} ({c['dtype']})"
+                    if c.get("values") is not None:
+                        vals = c["values"]
+                        suffix = f"共{c['nunique']}个" if c["nunique"] > 8 else f"{c['nunique']}个"
+                        line += f" — {suffix}唯一值: {vals}"
+                        if c["nunique"] > 8:
+                            line += " …"
+                    elif c["nunique"] > 0:
+                        line += f" — {c['nunique']}个唯一值"
+                    if c.get("min") is not None:
+                        line += f" (min={c['min']}, max={c['max']}, {c['non_null']}/{c['total']}非空)"
+                    parts.append(line)
+            else:
+                # 画像失败兜底:回退到纯 DESCRIBE
+                qname = safe_ident(table_name)
+                cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
+                for col_name, col_type, *_ in cols:
+                    parts.append(f"  - {col_name} ({col_type})")
+        return "\n".join(parts)
 
     def register_external_databases(self) -> dict:
         """读取 datasources_conf 配置，安装 DuckDB 扩展，注册外部数据库表为视图。

@@ -65,3 +65,43 @@ def test_compute_table_profile_high_cardinality_omits_values():
     col_by_name = {c["name"]: c for c in profile["columns"]}
     assert col_by_name["id"]["nunique"] == 20
     assert "values" not in col_by_name["id"] or col_by_name["id"].get("values") is None
+
+
+def test_enhanced_schema_text_lists_indicator_values():
+    """schema 文本应含 Indicator Name 的取值,让 LLM 看出指标内容。"""
+    df = pd.DataFrame({
+        "Country Name": ["Germany", "France", "Italy"],
+        "Indicator Name": ["Primary completion rate, female"] * 3,
+        "2002": [103.4, float("nan"), 99.9],
+        "1960": [float("nan")] * 3, "1961": [float("nan")] * 3,
+        "1962": [float("nan")] * 3, "1963": [float("nan")] * 3, "1964": [float("nan")] * 3,
+    })
+    mgr = _make_mgr_with_table("wb_schema", df)
+    text = mgr.get_enhanced_schema_text()
+    assert "Primary completion rate, female" in text
+    assert "宽表" in text  # 宽表标记
+
+
+def test_enhanced_schema_text_uses_cache(monkeypatch):
+    """第二次调用应命中缓存,不重算(用调用计数验证)。"""
+    df = pd.DataFrame({"Country Name": ["A", "B"], "val": [1.0, 2.0]})
+    mgr = _make_mgr_with_table("cache_test", df)
+    call_count = {"n": 0}
+    orig = mgr._compute_table_profile
+    def counting(table_name):
+        call_count["n"] += 1
+        return orig(table_name)
+    monkeypatch.setattr(mgr, "_compute_table_profile", counting)
+    mgr.get_enhanced_schema_text()
+    mgr.get_enhanced_schema_text()
+    assert call_count["n"] == 1  # 第二次走缓存
+
+
+def test_enhanced_schema_text_cache_cleared_on_drop():
+    """drop_table 后缓存清空,下次 schema 文本重新计算。"""
+    df = pd.DataFrame({"Country Name": ["A", "B"], "val": [1.0, 2.0]})
+    mgr = _make_mgr_with_table("drop_cache", df)
+    mgr.get_enhanced_schema_text()
+    assert "drop_cache" in mgr._profile_cache
+    mgr.drop_table("drop_cache")
+    assert "drop_cache" not in mgr._profile_cache
