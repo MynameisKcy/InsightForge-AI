@@ -77,6 +77,36 @@ class TestDatasourcesDB(unittest.TestCase):
         self.assertEqual(ds["row_count"], 500)
         self.assertEqual(ds["description"], "updated")
 
+    def test_add_dataset_with_display_name(self):
+        """add_dataset 带 display_name 时能读回（原始中文文件名）。"""
+        self.db.add_dataset(
+            "ds_202507242126", "csv", "/tmp/x.csv", "ds_202507242126", "[]", 17,
+            display_name="山东省经济、农业、人口普查公报信息202507242126",
+        )
+        ds = self.db.get_dataset("ds_202507242126")
+        self.assertIsNotNone(ds)
+        self.assertEqual(ds["display_name"], "山东省经济、农业、人口普查公报信息202507242126")
+
+    def test_display_name_defaults_empty(self):
+        """不传 display_name 时默认空字符串（兼容旧调用）。"""
+        self.db.add_dataset("no_disp", "csv", "/n.csv", "no_disp", "[]", 0)
+        ds = self.db.get_dataset("no_disp")
+        self.assertEqual(ds["display_name"], "")
+
+    def test_list_datasets_includes_display_name(self):
+        """list_datasets 返回含 display_name 字段。"""
+        self.db.add_dataset("a", "csv", "/a.csv", "a", "[]", 10,
+                            display_name="销售数据")
+        datasets = self.db.list_datasets()
+        self.assertEqual(datasets[0]["display_name"], "销售数据")
+
+    def test_update_display_name(self):
+        """update_dataset 能更新 display_name。"""
+        self.db.add_dataset("updn", "csv", "/u.csv", "updn", "[]", 0)
+        r = self.db.update_dataset("updn", display_name="新名称")
+        self.assertTrue(r["success"])
+        self.assertEqual(self.db.get_dataset("updn")["display_name"], "新名称")
+
     def test_get_all_table_names(self):
         self.db.add_dataset("t1", "csv", "/t1.csv", "table_one", "[]", 0)
         self.db.add_dataset("t2", "mysql", "db:erp", "erp_orders", "[]", 0)

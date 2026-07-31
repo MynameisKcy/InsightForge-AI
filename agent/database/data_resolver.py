@@ -99,22 +99,42 @@ class DataResolver:
         # --- 1. 尝试动态数据集（按 user_id 隔离）---
         dynamic_datasets = DataResolver._load_dynamic_datasets(user_id=user_id)
         if dynamic_datasets:
-            # 关键词匹配：在 name 和 description 中搜索
-            matched = []
+            # 关键词匹配：在 name、display_name（原始中文文件名）和 description 中搜索。
+            # display_name 是用户能认得的名字（如「山东省经济...」），用户输入"山东"
+            # 应命中它，而非只匹配安全化表名 ds_202507242126。
+            # 中文无空格分词，无法靠 split 切词；改用滑动窗口 n-gram：取 display/name/desc
+            # 的 2~3 字符片段，若出现在 query 中则计分（3-gram 权重高于 2-gram，避免"数据"
+            # 这种泛词压过"山东"）。最终取最高分数据集，并列取第一。
+            scored = []  # [(score, ds), ...]
             for ds in dynamic_datasets:
                 name_lower = (ds.get("name") or "").lower()
+                display_lower = (ds.get("display_name") or "").lower()
                 desc_lower = (ds.get("description") or "").lower()
-                if query_lower and (name_lower in query_lower or any(
-                        w in name_lower or w in desc_lower
-                        for w in query_lower.split() if len(w) > 1)):
-                    matched.append(ds)
+                score = 0
+                if query_lower:
+                    # 数据集名/显示名/描述的 n-gram 出现在 query 中即加分
+                    for src in (display_lower, name_lower, desc_lower):
+                        if not src:
+                            continue
+                        for n, weight in ((3, 3), (2, 1)):
+                            for i in range(len(src) - n + 1):
+                                if src[i:i + n] in query_lower:
+                                    score += weight
+                    # 英文空格场景：query 切出的英文词是数据集名子串（"sales" in "sales_2024"）
+                    for w in query_lower.split():
+                        if len(w) > 1 and (w in name_lower or w in display_lower or w in desc_lower):
+                            score += 2
+                if score > 0:
+                    scored.append((score, ds))
 
-            # 如果没有关键词匹配，返回所有动态数据集
-            if not matched:
+            if scored:
+                # 降序取最高分；分数相同则保持原顺序（稳定）
+                scored.sort(key=lambda x: x[0], reverse=True)
+                matched = [ds for _, ds in scored]
+                matched_by = "dynamic_keyword_match"
+            else:
                 matched = dynamic_datasets
                 matched_by = "dynamic_all"
-            else:
-                matched_by = "dynamic_keyword_match"
 
             # 取第一个匹配的数据集作为主结果
             primary = matched[0]
@@ -122,7 +142,8 @@ class DataResolver:
             table_names = [ds.get("table_name", "transactions") for ds in matched]
 
             logger.info(f"DataResolver: matched '{primary['name']}' for query "
-                        f"(method={matched_by}, dynamic_count={len(matched)})")
+                        f"(method={matched_by}, dynamic_count={len(matched)}, "
+                        f"top_score={scored[0][0] if scored else 0})")
             return {
                 "csv_path": csv_path,
                 "name": primary["name"],

@@ -885,9 +885,14 @@ async function loadDatasets() {
       list.innerHTML = datasets.map(d => {
         const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
         const safeId = String(d.name).replace(/[^A-Za-z0-9_]/g,'_');
+        // 侧边栏优先显示用户能认得的原始文件名（display_name，含中文），
+        // 安全化表名（ds_202507242126）只作 hover title 兜底；二者都无则用 name。
+        const showName = d.display_name || d.name;
+        const titleTip = (d.display_name && d.display_name !== d.name)
+          ? `${d.display_name}（表 ${d.name}）` : d.name;
         return `<div class="ds-item" data-ds-toggle="${escapeHtml(safeId)}">
           <span class="ds-icon">${dsIcon(d.source_type)}</span>
-          <span class="ds-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
+          <span class="ds-name" title="${escapeHtml(titleTip)}">${escapeHtml(showName)}</span>
           <span class="ds-rows">${rows}</span>
           <button class="ds-del" data-ds-del="${escapeHtml(d.name)}" title="删除">✕</button>
         </div>
@@ -1188,6 +1193,12 @@ document.getElementById('allFileInput').addEventListener('change', async functio
   fails.forEach(function(f) {
     var msg = (f.data && f.data.error) || f.error || '失败';
     showToast(f.file + ' 上传失败：' + msg, 'error', 5000);
+  });
+  // 批量上传对应关系：逐个展示「原始文件名 → 数据集显示名/表名」，让用户能对上号
+  results.filter(function(x){return x.ok && x.kind === 'table' && x.data && x.data.name;}).forEach(function(r) {
+    var disp = r.data.display_name || r.data.name;
+    var arrow = (disp !== r.file) ? (' → 数据集「' + disp + '」') : (' → 数据集「' + disp + '」');
+    showToast('✓ ' + r.file + arrow, 'info', 6000);
   });
   loadAllFiles();
   loadDatasets();           // CSV 类经路由入 DuckDB，数据集列表也需同步
