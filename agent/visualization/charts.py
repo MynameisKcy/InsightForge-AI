@@ -4,6 +4,7 @@ Chart Generator: 使用 Plotly 生成交互式图表，支持多种图表类型�
 
 import inspect
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Any
@@ -194,6 +195,10 @@ class ChartGenerator:
         df = df.dropna(subset=[y_col])
         if df.empty:
             return _empty_data_placeholder("bar_chart", y_col)
+        # 剔除汇总行（如「全省」混入各市排名），避免汇总占大头挤扁其余柱
+        df = ChartGenerator._drop_summary_rows(df, cat_col=x_col, values_col=y_col)
+        if df.empty:
+            return _empty_data_placeholder("bar_chart", y_col)
         data = df.head(top_n) if len(df) > top_n else df
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
@@ -228,6 +233,39 @@ class ChartGenerator:
         return _save_chart(fig, f"bar_{_safe_name(title)}")
 
     @staticmethod
+    def _drop_summary_rows(df: pd.DataFrame, cat_col: str, values_col: str) -> pd.DataFrame:
+        """剔除汇总行，避免对比图把汇总当一个类别（如全省/总计混入各市饼图）。
+
+        两条判据（命中任一即剔）：
+        1. 类别名命中汇总关键词：全省/总计/合计/汇总/全部/小计/共计/总和
+        2. 某行数值 ≈ 其余正数值之和（误差 2%，且该行是最大值）——「全省=各市之和」模式。
+
+        仅在类别列存在时生效；无类别列或全无匹配则原样返回（不误伤正常数据）。
+        """
+        if df is None or df.empty or cat_col not in df.columns:
+            return df if df is not None else pd.DataFrame()
+        SUMMARY_KEYWORDS = re.compile(r"(?:全省|总计|合计|汇总|全部|小计|共计|总和)")
+        # 判据1：关键词命中
+        cat_str = df[cat_col].astype(str)
+        kw_mask = cat_str.str.contains(SUMMARY_KEYWORDS, na=False)
+        if kw_mask.any():
+            return df[~kw_mask].reset_index(drop=True)
+        # 判据2：数值≈其余正数之和（汇总行特征）
+        if values_col in df.columns:
+            vals = df[values_col]
+            numeric_vals = pd.to_numeric(vals, errors="coerce")
+            positive = numeric_vals[numeric_vals > 0]
+            if len(positive) >= 3:
+                total = positive.sum()
+                # 找最大值行，若它 ≈ (总和 - 它自己) 则视为汇总行
+                max_idx = positive.idxmax()
+                max_val = positive.loc[max_idx]
+                rest_sum = total - max_val
+                if rest_sum > 0 and abs(max_val - rest_sum) / rest_sum <= 0.02:
+                    return df.drop(index=max_idx).reset_index(drop=True)
+        return df.reset_index(drop=True)
+
+    @staticmethod
     def pie_chart(df: pd.DataFrame, names_col: str, values_col: str,
                   title: str = "占比图", **kwargs) -> str:
         """生成饼图（类别占比分析）。返回保存路径。"""
@@ -236,6 +274,10 @@ class ChartGenerator:
 
         # 剔除 values_col 缺失行，避免占比失真
         df = df.dropna(subset=[values_col])
+        if df.empty:
+            return _empty_data_placeholder("pie_chart", values_col)
+        # 剔除汇总行（如「全省」混入各市占比），避免汇总占大头挤扁其余 slice
+        df = ChartGenerator._drop_summary_rows(df, cat_col=names_col, values_col=values_col)
         if df.empty:
             return _empty_data_placeholder("pie_chart", values_col)
         fig = px.pie(df, names=names_col, values=values_col, title=title,
