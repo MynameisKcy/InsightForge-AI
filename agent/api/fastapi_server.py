@@ -715,6 +715,9 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
 
         # 写入元数据（带 owner_user_id 实现多用户隔离）
         source_type = "csv" if ext == "csv" else "excel"
+        # display_name: 原始文件名去扩展名，保留中文，供侧边栏展示与 DataResolver 匹配
+        # （table_name 是安全化 ASCII 名，用户无法对应；display_name 是用户能认得的名字）
+        display_name = os.path.splitext(fname)[0].strip()
         meta_result = datasources_db.add_dataset(
             name=table_name,
             source_type=source_type,
@@ -723,6 +726,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
             schema_json=schema_json,
             row_count=load_result["row_count"],
             owner_user_id=user_id,
+            display_name=display_name,
         )
         # 元数据写入失败（如 UNIQUE 冲突）：删除文件并明确报错，避免"上传报成功但侧边栏查不到"
         if not meta_result.get("success"):
@@ -738,6 +742,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
         return JSONResponse({
             "success": True,
             "name": table_name,
+            "display_name": display_name,
             "source_type": source_type,
             "row_count": load_result["row_count"],
             "columns": [c[0] for c in cols],

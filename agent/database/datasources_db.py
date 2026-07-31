@@ -51,6 +51,7 @@ class DatasourcesDB:
                 CREATE TABLE IF NOT EXISTS datasets (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
                     source_type TEXT NOT NULL,
                     file_path TEXT NOT NULL,
                     table_name TEXT NOT NULL,
@@ -69,6 +70,12 @@ class DatasourcesDB:
                     "ALTER TABLE datasets ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''"
                 )
                 logger.info("DatasourcesDB: migrated datasets table — added owner_user_id column")
+            # 迁移：为旧表补 display_name 列（原始文件名，保留中文，供 DataResolver 匹配与侧边栏展示）
+            if "display_name" not in cols:
+                conn.execute(
+                    "ALTER TABLE datasets ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+                )
+                logger.info("DatasourcesDB: migrated datasets table — added display_name column")
 
             # 迁移：旧表 name 带列级 UNIQUE 时，与多用户隔离冲突（跨用户同名触发 IntegrityError）。
             # SQLite 无法直接 DROP 列约束，需重建表去掉它（保留数据，联合唯一由下方
@@ -95,6 +102,7 @@ class DatasourcesDB:
                         CREATE TABLE datasets_new (
                             id TEXT PRIMARY KEY,
                             name TEXT NOT NULL,
+                            display_name TEXT NOT NULL DEFAULT '',
                             source_type TEXT NOT NULL,
                             file_path TEXT NOT NULL,
                             table_name TEXT NOT NULL,
@@ -106,9 +114,9 @@ class DatasourcesDB:
                             updated_at TEXT NOT NULL
                         );
                         INSERT OR IGNORE INTO datasets_new
-                            (id, name, source_type, file_path, table_name, schema_json,
+                            (id, name, display_name, source_type, file_path, table_name, schema_json,
                              row_count, description, owner_user_id, created_at, updated_at)
-                        SELECT id, name, source_type, file_path, table_name, schema_json,
+                        SELECT id, name, COALESCE(display_name, ''), source_type, file_path, table_name, schema_json,
                                row_count, description, owner_user_id, created_at, updated_at
                         FROM datasets;
                         DROP TABLE datasets;
@@ -141,7 +149,8 @@ class DatasourcesDB:
 
     def add_dataset(self, name: str, source_type: str, file_path: str,
                     table_name: str, schema_json: str, row_count: int,
-                    description: str = "", owner_user_id: str = "") -> dict:
+                    description: str = "", owner_user_id: str = "",
+                    display_name: str = "") -> dict:
         if not name or not _TABLE_NAME_RE.match(name):
             raise ValueError(f"非法数据集名: {name!r}")
         if not table_name or not _TABLE_NAME_RE.match(table_name):
@@ -151,14 +160,14 @@ class DatasourcesDB:
             now = datetime.now().isoformat()
             with self._get_conn() as conn:
                 conn.execute(
-                    """INSERT INTO datasets (id, name, source_type, file_path, table_name,
+                    """INSERT INTO datasets (id, name, display_name, source_type, file_path, table_name,
                        schema_json, row_count, description, owner_user_id, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (ds_id, name, source_type, file_path, table_name,
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (ds_id, name, display_name, source_type, file_path, table_name,
                      schema_json, row_count, description, owner_user_id, now, now),
                 )
                 conn.commit()
-            logger.info(f"DatasourcesDB: added dataset '{name}' (owner={owner_user_id}, type={source_type}, rows={row_count})")
+            logger.info(f"DatasourcesDB: added dataset '{name}' (display='{display_name}', owner={owner_user_id}, type={source_type}, rows={row_count})")
             return {"success": True, "id": ds_id}
         except sqlite3.IntegrityError:
             return {"success": False, "error": f"数据集 '{name}' 已存在"}
@@ -214,7 +223,7 @@ class DatasourcesDB:
         if not kwargs:
             return {"success": False, "error": "无更新字段"}
         allowed = {"source_type", "file_path", "table_name", "schema_json",
-                   "row_count", "description"}
+                   "row_count", "description", "display_name"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return {"success": False, "error": "无有效更新字段"}
