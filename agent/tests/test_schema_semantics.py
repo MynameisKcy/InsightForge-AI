@@ -105,3 +105,54 @@ def test_enhanced_schema_text_cache_cleared_on_drop():
     assert "drop_cache" in mgr._profile_cache
     mgr.drop_table("drop_cache")
     assert "drop_cache" not in mgr._profile_cache
+
+
+def test_load_csv_clears_profile_cache():
+    """重新加载同名表应清旧画像缓存,避免 stale profile。"""
+    import os
+    import tempfile
+
+    # _validate_csv_path 要求文件在 data/ 目录下,用同一解析获取可写目录
+    try:
+        from utils.path_tool import get_abs_path
+    except ModuleNotFoundError:
+        from agent.utils.path_tool import get_abs_path
+    data_dir = get_abs_path("data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    mgr = DuckDBManager(user_id="test_schema")
+    table = "reload_t"
+
+    def _write_csv(content: str) -> str:
+        # NamedTemporaryFile(delete=False) 在 data 目录下建文件,返回路径
+        fd, path = tempfile.mkstemp(suffix=".csv", dir=data_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    csv1 = _write_csv("a,b\n1,3\n2,4\n")
+    csv2 = _write_csv("x,y,z\np,r,5.0\nq,s,6.0\n")
+    try:
+        assert mgr.load_csv_dataset(csv1, table)["success"] is True
+        mgr.get_enhanced_schema_text()  # populate cache
+        assert table in mgr._profile_cache
+        cached1 = mgr._profile_cache[table]
+        assert {"a", "b"} == {c["name"] for c in cached1["columns"]}
+
+        # 第二份 CSV:不同列结构(x/y/z),同名重载
+        assert mgr.load_csv_dataset(csv2, table)["success"] is True
+        # load_csv_dataset 必须清掉旧画像缓存,否则下次 schema 文本会返回 stale 列
+        assert table not in mgr._profile_cache
+        # 重新生成应反映新列结构
+        mgr.get_enhanced_schema_text()
+        cached2 = mgr._profile_cache[table]
+        assert {"x", "y", "z"} == {c["name"] for c in cached2["columns"]}
+    finally:
+        for p in (csv1, csv2):
+            if os.path.exists(p):
+                os.unlink(p)
+
