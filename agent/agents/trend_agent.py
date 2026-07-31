@@ -70,8 +70,22 @@ class TrendAgent(BaseAgent):
         elif date_col in df.columns and value_col in df.columns:
             summary = TrendAnalysis.build_trend_summary(df, value_col=value_col, month_col=date_col)
         else:
-            # 尝试直接用现有列做趋势分析
-            summary = TrendAnalysis.build_trend_summary(df, value_col=df.columns[-1], month_col=df.columns[0])
+            # 兜底:选真正的数值列做 value_col,避免取到文本列导致 str/str
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            if not num_cols:
+                return {
+                    "error": "数据集无可分析的数值列,无法做趋势分析",
+                    "trend_summary": "No numeric column for trend analysis",
+                    "growth_rate": "N/A",
+                    "anomaly_months": [],
+                }
+            # month_col 取第一个非数值列,若无则用 df.columns[0]
+            non_num = [c for c in df.columns if c not in num_cols]
+            picked_value = num_cols[0]
+            picked_month = non_num[0] if non_num else df.columns[0]
+            summary = TrendAnalysis.build_trend_summary(
+                df, value_col=picked_value, month_col=picked_month
+            )
 
         # 使用 LLM 生成自然语言洞察
         try:

@@ -34,6 +34,8 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.platypus import Table, TableStyle
+    from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_CENTER
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
@@ -41,6 +43,8 @@ except ImportError:
     _pdf_available = False
     logger.warning("reportlab not installed. PDF export disabled.")
 
+_cjk_font_registered = False
+_cjk_font_name = None  # 注册成功后的字体名，None 表示未注册
 
 EXPORT_DIR = "reports"
 
@@ -86,6 +90,36 @@ class ExportAgent(BaseAgent):
                 results["errors"].append(f"Export {fmt} failed: {e}")
 
         return results
+
+    def _register_cjk_font(self) -> str | None:
+        """注册一个 Windows 自带的中文字体供 reportlab 使用。
+
+        优先 msyh.ttc（微软雅黑）→ simsun.ttc（宋体），用 subfontIndex=0 取集合首字体。
+        全局只注册一次。都找不到则记 warning 返回 None，不阻断 PDF 生成。
+        """
+        global _cjk_font_registered, _cjk_font_name
+        if _cjk_font_registered:
+            return _cjk_font_name
+        if not _pdf_available:
+            _cjk_font_registered = True
+            return None
+
+        fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+        candidates = ["msyh.ttc", "msyhbd.ttc", "simsun.ttc", "simhei.ttf"]
+        for fname in candidates:
+            fpath = os.path.join(fonts_dir, fname)
+            if os.path.exists(fpath):
+                try:
+                    pdfmetrics.registerFont(TTFont("CJK", fpath, subfontIndex=0))
+                    _cjk_font_name = "CJK"
+                    logger.info(f"Registered CJK font: {fpath}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to register font {fpath}: {e}")
+        if _cjk_font_name is None:
+            logger.warning("No CJK font found; PDF Chinese may render incorrectly.")
+        _cjk_font_registered = True
+        return _cjk_font_name
 
     def _export(self, markdown: str, title: str, fmt: str) -> str | None:
         """按格式导出。"""
@@ -213,6 +247,9 @@ class ExportAgent(BaseAgent):
         filename = _make_filename(title, "pdf")
         filepath = os.path.join(output_dir, filename)
 
+        cjk = self._register_cjk_font()
+        font_for_pdf = cjk or "Helvetica"
+
         doc = SimpleDocTemplate(filepath, pagesize=A4,
                                 leftMargin=20*mm, rightMargin=20*mm,
                                 topMargin=20*mm, bottomMargin=20*mm)
@@ -221,13 +258,15 @@ class ExportAgent(BaseAgent):
         # 使用基本样式
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle("CustomTitle", parent=styles["Title"],
-                                     fontSize=18, spaceAfter=12)
+                                     fontName=font_for_pdf, fontSize=18, spaceAfter=12)
         h1_style = ParagraphStyle("CustomH1", parent=styles["Heading1"],
-                                  fontSize=16, spaceBefore=12, spaceAfter=6)
+                                  fontName=font_for_pdf, fontSize=16, spaceBefore=12, spaceAfter=6)
         h2_style = ParagraphStyle("CustomH2", parent=styles["Heading2"],
-                                  fontSize=13, spaceBefore=10, spaceAfter=4)
+                                  fontName=font_for_pdf, fontSize=13, spaceBefore=10, spaceAfter=4)
         body_style = ParagraphStyle("CustomBody", parent=styles["Normal"],
-                                    fontSize=10, leading=14, spaceAfter=6)
+                                    fontName=font_for_pdf, fontSize=10, leading=14, spaceAfter=6)
+
+        styles_dict = {"font_name": font_for_pdf}
 
         # 添加标题
         story.append(Paragraph(title, title_style))
@@ -259,9 +298,14 @@ class ExportAgent(BaseAgent):
             elif line.startswith("---"):
                 story.append(Spacer(1, 4*mm))
             elif line.startswith("!["):
-                pass  # PDF 不嵌入图片（简化处理）
+                story.append(Paragraph("（图表见 HTML 版报告）", body_style))
             elif line.startswith("|"):
-                pass  # PDF 不嵌入表格（简化处理）
+                table_lines = []
+                while i < len(lines) and lines[i].strip().startswith("|"):
+                    table_lines.append(lines[i].strip())
+                    i += 1
+                i -= 1
+                self._add_pdf_table(story, table_lines, styles_dict)
             else:
                 story.append(Paragraph(clean, body_style))
             i += 1
@@ -273,6 +317,36 @@ class ExportAgent(BaseAgent):
         except Exception as e:
             logger.error(f"PDF build failed: {e}")
             return None
+
+    def _add_pdf_table(self, story, table_lines: list, styles: dict):
+        """把 markdown 表格行渲染为 reportlab Table。"""
+        if len(table_lines) < 2:
+            return
+        header_cells = [c.strip() for c in table_lines[0].split("|") if c.strip()]
+        data_start = 2 if len(table_lines) > 1 and "---" in table_lines[1] else 1
+        rows = []
+        for line in table_lines[data_start:]:
+            cells = [c.strip() for c in line.split("|") if c.strip()]
+            if cells:
+                rows.append(cells)
+        if not header_cells:
+            return
+        # 列数对齐
+        col_count = len(header_cells)
+        table_data = [header_cells] + [r[:col_count] + [""] * (col_count - len(r)) for r in rows]
+        font_name = styles.get("font_name", "Helvetica")
+        style = TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f2f2")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+        ])
+        tbl = Table(table_data, style=style, hAlign="LEFT")
+        story.append(tbl)
+        story.append(Spacer(1, 4 * mm))
 
     def _clean_md_for_pdf(self, text: str) -> str:
         """清理 Markdown 标记，转为纯文本 + HTML 标签（reportlab 支持的）。"""
