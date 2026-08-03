@@ -132,6 +132,14 @@ def get_chat_model(user_id: str | None = None):
         return _chat_model_cache[key]
 
 
+def get_chat_model_name(user_id: str | None = None) -> str:
+    """当前 user 解析到的聊天模型名（用户配置 > .env > YAML）。
+
+    供记忆层按模型查上下文窗口（ADR-0003 Phase 2），与 get_chat_model 用同一解析逻辑。
+    """
+    return _resolve_chat_model_name(_load_user_override(user_id))
+
+
 def get_embed_model(user_id: str | None = None):
     """getter：按 user_id 缓存向量模型实例；并发安全。"""
     key = user_id or "__default__"
