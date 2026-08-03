@@ -380,6 +380,14 @@ async def api_chat(request: Request, user=Depends(require_auth)):
     # max_turns=None：不按轮数截断，依赖 token 预算压缩（Phase 2）控制窗口大小
     mem_context = memory.get_context(max_turns=None)
     memory.add_user_message(query)
+    # ── 跨会话记忆召回注入（ADR-0003 Phase 4）：前置历史会话摘要到上下文 ──
+    # 召回该 user 其他会话的终版摘要，作为 system 消息注入；排除当前会话（其上下文已在 mem_context）。
+    # 失败/无召回则不注入，聊天正常进行。ReactAgent 透传 system 角色，故召回节进入 LLM 输入。
+    try:
+        from memory.recall import get_memory_recall
+        mem_context = get_memory_recall().inject_recall(mem_context, query, user_id, session_id)
+    except Exception as e:
+        logger.warning(f"memory recall injection failed: {e}")
 
     agent = _get_react_agent(user_id)
 
@@ -553,7 +561,11 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
 
 @app.get("/api/conversation/history")
 async def api_conversation_history(request: Request, limit: int = 20, user=Depends(require_auth)):
-    """获取用户历史会话记录（长期记忆）。"""
+    """获取用户历史会话记录（长期记忆）。
+
+    遗留端点（ADR-0003 后前端改用 /api/sessions + /api/sessions/{id} 按会话加载）：
+    返回 user 级跨会话最近 N 轮（混合多会话），保留供兼容/审计。
+    """
     user_id = user["user_id"]
     turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})

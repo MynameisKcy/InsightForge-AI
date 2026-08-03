@@ -197,6 +197,27 @@ class MemoryRecallService:
         except Exception as e:
             logger.warning(f"delete_session_memory failed: {e}")
 
+    # ── 召回注入（ADR-0003 Phase 4）：前置历史会话记忆到聊天上下文 ──
+    def inject_recall(self, mem_context: list[dict], query: str, user_id: str,
+                      session_id: str = "") -> list[dict]:
+        """把跨会话召回的终版摘要作为 system 消息前置到 mem_context；无召回/失败则原样返回。
+
+        供 /api/chat 在调用 ReactAgent 前注入「## 历史会话记忆」节。排除当前会话
+        （其上下文已在 mem_context 的滚动摘要 + 最近轮次里），避免召回自身。
+        ReactAgent._execute_stream_inner 透传 system 角色，故召回节会进入 LLM 输入。
+        """
+        if not query or not user_id:
+            return mem_context
+        try:
+            text = self.recall(query, user_id, exclude_session_id=session_id or None)
+        except Exception as e:
+            logger.warning(f"inject_recall recall failed: {e}")
+            return mem_context
+        if not text:
+            return mem_context
+        logger.info(f"Inject recall for user {user_id} session {session_id} ({len(text)} chars)")
+        return [{"role": "system", "content": text}] + list(mem_context)
+
     # ── 闲置检测：fire-and-forget ──
     def finalize_idle_sessions(self, user_id: str, except_session_id: str = "",
                                idle_seconds: int = SESSION_IDLE_SECONDS) -> list[str]:

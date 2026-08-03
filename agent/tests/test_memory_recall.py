@@ -270,5 +270,108 @@ class MemoryRecallTests(unittest.TestCase):
         self.assertFalse(self.memory_store.retrieve_session_memories("x", "alice", k=10))
 
 
+class RecallInjectionTests(unittest.TestCase):
+    """inject_recall：把跨会话召回前置为 system 消息（ADR-0003 Phase 4）。"""
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(self.db_path)
+        self.ltm = LongTermMemory(db_path=self.db_path)
+        self.memory_store = _make_memory_store()
+        from memory.recall import MemoryRecallService
+        self.recall = MemoryRecallService(
+            ltm=self.ltm, memory_store=self.memory_store, summarizer=_FakeSummarizer()
+        )
+
+    def tearDown(self):
+        try:
+            os.unlink(self.db_path)
+        except OSError:
+            pass
+
+    def test_inject_recall_prepends_system_message_e2e(self):
+        """e2e 叙事：session A(销售)结束 -> session B 问"对比上次销售" -> 召回命中 A 摘要。"""
+        sid_a = self.ltm.create_session("alice", title="销售分析")
+        self.ltm.save_conversation_pair("alice", "查山东销售", "山东销售100万", session_id=sid_a)
+        self.recall.finalize_session(sid_a, "alice")  # A 结束，终版摘要入库
+
+        sid_b = self.ltm.create_session("alice", title="库存")
+        # B 问对比上次销售：inject_recall 应前置 A 的摘要为 system 消息
+        ctx = self.recall.inject_recall([], "对比上次销售", "alice", session_id=sid_b)
+
+        self.assertEqual(ctx[0]["role"], "system")
+        self.assertIn("## 历史会话记忆", ctx[0]["content"])
+        self.assertIn("销售", ctx[0]["content"])  # 命中 A 的摘要
+
+    def test_inject_recall_no_op_when_no_memories(self):
+        ctx = self.recall.inject_recall([], "任意问题", "alice", session_id="s1")
+        self.assertEqual(ctx, [])  # 无召回，原样返回
+
+    def test_inject_recall_excludes_current_session(self):
+        sid_a = self.ltm.create_session("alice", title="销售")
+        self.ltm.save_conversation_pair("alice", "查销售", "销售100万", session_id=sid_a)
+        self.recall.finalize_session(sid_a, "alice")
+        sid_b = self.ltm.create_session("alice", title="库存")
+        self.ltm.save_conversation_pair("alice", "查库存", "库存50件", session_id=sid_b)
+        self.recall.finalize_session(sid_b, "alice")
+
+        # 在 A 中召回，排除 A -> 只剩 B
+        ctx = self.recall.inject_recall([], "数据", "alice", session_id=sid_a)
+        self.assertEqual(ctx[0]["role"], "system")
+        self.assertNotIn("销售100万", ctx[0]["content"])
+        self.assertIn("库存50件", ctx[0]["content"])
+
+    def test_inject_recall_preserves_existing_context(self):
+        sid = self.ltm.create_session("alice", title="销售")
+        self.ltm.save_conversation_pair("alice", "查销售", "销售100万", session_id=sid)
+        self.recall.finalize_session(sid, "alice")
+
+        existing = [{"role": "user", "content": "之前聊过啥"}, {"role": "assistant", "content": "嗯"}]
+        ctx = self.recall.inject_recall(existing, "销售", "alice", session_id="other")
+        # system 召回节在最前，原有上下文顺次保留
+        self.assertEqual(ctx[0]["role"], "system")
+        self.assertEqual(ctx[1], existing[0])
+        self.assertEqual(ctx[2], existing[1])
+
+
+class _FakeStreamAgent:
+    """伪 create_agent 产物：捕获 stream 入参 input_dict，不产出 chunk。"""
+
+    def __init__(self):
+        self.captured = None
+
+    def stream(self, input_dict, stream_mode="values", context=None):
+        self.captured = input_dict
+        return iter([])
+
+
+class ReactAgentRecallWiringTests(unittest.TestCase):
+    """ReactAgent._execute_stream_inner 透传 recall system 消息到 agent 输入（Phase 4 接线）。"""
+
+    def test_recall_system_message_reaches_agent_input(self):
+        from agent.react_agent import ReactAgent  # 懒导入：仅本用例承担 agent_tools 构造开销
+        r = ReactAgent.__new__(ReactAgent)  # 绕开 create_agent（真实 LLM）
+        fake = _FakeStreamAgent()
+        r.agent = fake
+
+        recall_msg = {"role": "system",
+                      "content": "## 历史会话记忆\n1. [销售分析 | 2026-08-03] 山东销售100万"}
+        history = [recall_msg, {"role": "user", "content": "之前聊过啥"},
+                   {"role": "assistant", "content": "嗯"}]
+
+        list(r._execute_stream_inner("对比上次销售", history=history,
+                                     user_id="alice", session_id=""))
+
+        msgs = fake.captured["messages"]
+        # recall system 消息被透传到 agent 输入
+        self.assertTrue(
+            any(m["role"] == "system" and "历史会话记忆" in m["content"] for m in msgs),
+            "recall system 消息应进入 agent 的 messages 输入",
+        )
+        # 当前 query 作为最后一条 user 消息追加
+        self.assertTrue(any(m["role"] == "user" and m["content"] == "对比上次销售" for m in msgs))
+
+
 if __name__ == "__main__":
     unittest.main()
