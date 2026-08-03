@@ -363,7 +363,8 @@ async def api_chat(request: Request, user=Depends(require_auth)):
     # ── Session Memory：按 session_id 隔离 + 池 miss 时从 DB 回灌（ADR-0003）──
     memory = get_session(session_id, user_id)
     # 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复）
-    mem_context = memory.get_context(max_turns=10)
+    # max_turns=None：不按轮数截断，依赖 token 预算压缩（Phase 2）控制窗口大小
+    mem_context = memory.get_context(max_turns=None)
     memory.add_user_message(query)
 
     agent = _get_react_agent(user_id)

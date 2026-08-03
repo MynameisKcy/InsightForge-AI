@@ -116,56 +116,78 @@ class SessionMemoryTests(unittest.TestCase):
         self.assertEqual(mem.summarized_up_to, -1)
         self.assertEqual(ctx, [])
 
-    # ── 3. 水印模型:压缩后摘要 + 水印后轮次 ──
-    def test_compression_advances_watermark_and_bounds_window(self):
+    # ── 3. token 触发压缩（实测 input_tokens >= 90%）──
+    def test_compress_on_real_token_measurement(self):
         sid = self.ltm.create_session("u1", title="t")
         mem = get_session(sid, "u1")
-        keep = MAX_TURNS // 2  # 压缩后保留的轮数
-
-        # 灌入 MAX_TURNS+2 轮,触发一次压缩(第 MAX_TURNS+1 轮 user 触发)
-        n = MAX_TURNS + 2
-        for i in range(n):
+        mem._context_window = 1000            # 小窗口便于触发
+        mem.last_measured_input_tokens = 950  # >= 90% * 1000
+        for i in range(8):                    # 足够折叠（size > min_keep）
             mem.add_user_message(f"q{i}")
             mem.add_assistant_message(f"a{i}")
 
-        # 摘要已生成(伪摘要器被调用)
-        self.assertTrue(self._fake_summarizer.calls, "压缩应触发摘要器")
+        self.assertTrue(self._fake_summarizer.calls, "实测 token 达阈值应触发压缩")
         self.assertEqual(mem.summary, "FAKE_SUMMARY")
-        # 水印推进:折叠了 (MAX_TURNS+1 - keep) 轮,watermark = -1 + fold_count
-        fold_count = (MAX_TURNS + 1) - keep
-        self.assertEqual(mem.summarized_up_to, -1 + fold_count)
-        # 工作窗口有界:不超过 MAX_TURNS
-        self.assertLessEqual(mem.size(), MAX_TURNS)
-
-        ctx = mem.get_context()
-        # 摘要前置为 system 消息
-        self.assertEqual(ctx[0]["role"], "system")
-        self.assertIn("FAKE_SUMMARY", ctx[0]["content"])
-        contents = " ".join(m["content"] for m in ctx)
+        self.assertGreaterEqual(mem.summarized_up_to, 0)  # 水印推进
+        self.assertLess(mem.size(), 8)  # 折半折叠后工作窗口有界
+        contents = " ".join(m["content"] for m in mem.get_context())
+        self.assertIn("q7", contents)     # 最新轮保留
         self.assertNotIn("q0", contents)  # 最老轮已折叠进摘要
-        self.assertIn(f"q{n - 1}", contents)  # 最新轮仍在窗口
-
-        # 摘要 + 水印已持久化到 chat_sessions
         meta = self.ltm.get_session_memory_meta(sid)
         self.assertIsNotNone(meta)
-        self.assertEqual(meta, ("FAKE_SUMMARY", -1 + fold_count))
+        self.assertEqual(meta[0], "FAKE_SUMMARY")
 
-    def test_compression_keeps_recent_turns_only(self):
-        """压缩后工作窗口只含水印之后的轮次;被折叠的轮次不再出现在 get_context。"""
+    def test_no_compress_below_threshold(self):
         sid = self.ltm.create_session("u1", title="t")
         mem = get_session(sid, "u1")
-        keep = MAX_TURNS // 2
-        n = MAX_TURNS + 2
-        for i in range(n):
+        mem._context_window = 1000
+        mem.last_measured_input_tokens = 500  # 50% < 90%,不触发
+        for i in range(8):
             mem.add_user_message(f"q{i}")
             mem.add_assistant_message(f"a{i}")
-        watermark = mem.summarized_up_to
-        # 水印 = turn_index;DB 中 turn_index 0..watermark 已折叠,> watermark 保留
-        contents = " ".join(m["content"] for m in mem.get_context())
-        # 水印对应的轮(即第 watermark+1 轮,q{watermark})应已被折叠
-        self.assertNotIn(f"q{watermark}", contents)
-        # 水印后第一轮 q{watermark+1} 应保留
-        self.assertIn(f"q{watermark + 1}", contents)
+        self.assertFalse(self._fake_summarizer.calls)
+        self.assertEqual(mem.summary, "")
+        self.assertEqual(mem.summarized_up_to, -1)
+
+    # ── 4. 字符兜底触发（无实测 token, chars >= 80%）──
+    def test_compress_on_char_fallback(self):
+        sid = self.ltm.create_session("u1", title="t")
+        mem = get_session(sid, "u1")
+        mem._context_window = 100  # 80% = 80 token ≈ 200 chars（2.5 chars/token）
+        # 无 last_measured_input_tokens -> 走字符兜底
+        for i in range(8):
+            mem.add_user_message(f"问题内容编号{i}的销售数据趋势分析报告")
+            mem.add_assistant_message(f"回答内容编号{i}的销售数据趋势结果汇总")
+        self.assertTrue(self._fake_summarizer.calls, "字符估算达 80% 应触发兜底压缩")
+        self.assertEqual(mem.summary, "FAKE_SUMMARY")
+
+    # ── 5. 压缩后实测值失效（下一轮退回字符兜底,直至新一轮模型调用回填）──
+    def test_measurement_invalidated_after_compress(self):
+        sid = self.ltm.create_session("u1", title="t")
+        mem = get_session(sid, "u1")
+        mem._context_window = 1000
+        mem.last_measured_input_tokens = 950
+        for i in range(8):
+            mem.add_user_message(f"q{i}")
+            mem.add_assistant_message(f"a{i}")
+        self.assertIsNone(mem.last_measured_input_tokens)
+
+    # ── 6. get_context(max_turns=None) 不截断（聊天路径依赖 token 预算,非轮数帽）──
+    def test_get_context_no_cap(self):
+        mem = get_session("sNC", "u1")
+        mem._context_window = 100000  # 大窗口,不触发压缩
+        for i in range(5):
+            mem.add_user_message(f"q{i}")
+            mem.add_assistant_message(f"a{i}")
+        ctx = mem.get_context(max_turns=None)
+        self.assertEqual(len(ctx), 10)  # 5 轮 = 10 条,全部返回
+
+    def test_record_input_tokens(self):
+        mem = get_session("sRT", "u1")
+        mem.record_input_tokens(1234)
+        self.assertEqual(mem.last_measured_input_tokens, 1234)
+        mem.record_input_tokens(None)  # None 不覆盖
+        self.assertEqual(mem.last_measured_input_tokens, 1234)
 
     # ── 4. LRU 淘汰 ──
     def test_lru_evicts_oldest_and_promotes_on_access(self):
