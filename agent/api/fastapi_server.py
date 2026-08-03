@@ -360,6 +360,20 @@ async def api_chat(request: Request, user=Depends(require_auth)):
             return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
 
+    # ── 闲置会话终版摘要写入（fire-and-forget，不阻塞当前请求；ADR-0003 Phase 3） ──
+    # 请求进来时 piggyback 检查该 user 其他闲置会话，后台线程异步 finalize（写入 memory
+    # collection 供日后召回）。finalized_up_to 门控避免重复 LLM 调用。
+    try:
+        from memory.recall import get_memory_recall
+        threading.Thread(
+            target=get_memory_recall().finalize_idle_sessions,
+            args=(user_id,),
+            kwargs={"except_session_id": session_id},
+            daemon=True,
+        ).start()
+    except Exception as e:
+        logger.warning(f"finalize_idle_sessions trigger failed: {e}")
+
     # ── Session Memory：按 session_id 隔离 + 池 miss 时从 DB 回灌（ADR-0003）──
     memory = get_session(session_id, user_id)
     # 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复）
@@ -585,6 +599,12 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     _long_term_memory.delete_session(session_id)
     clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
+    # 清理跨会话记忆 embedding（ADR-0003 Phase 3）
+    try:
+        from memory.recall import get_memory_recall
+        get_memory_recall().delete_session_memory(session_id, user_id)
+    except Exception as e:
+        logger.warning(f"delete session memory embedding failed: {e}")
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 
