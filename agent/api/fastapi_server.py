@@ -94,10 +94,10 @@ from utils.path_tool import get_abs_path
 
 # ── 记忆系统 & 用户认证 & 数据解析 ──
 try:
-    from memory.short_term import get_session, ConversationMemory
+    from memory.short_term import get_session, clear_session, ConversationMemory
     from memory.long_term import LongTermMemory
 except ModuleNotFoundError:
-    from agent.memory.short_term import get_session, ConversationMemory
+    from agent.memory.short_term import get_session, clear_session, ConversationMemory
     from agent.memory.long_term import LongTermMemory
 
 try:
@@ -346,13 +346,8 @@ async def api_chat(request: Request, user=Depends(require_auth)):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = user["user_id"]
-    memory = get_session(user_id)
 
-    # ── 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复） ──
-    mem_context = memory.get_context(max_turns=10)
-    memory.add_user_message(query)
-
-    # ── 会话管理：无 session_id 则创建新会话 ──
+    # ── 会话管理：先解析/创建 session_id + IDOR 校验（per-session keying 的前提） ──
     new_session = False
     if not session_id:
         title = query[:30] + ("..." if len(query) > 30 else "")
@@ -364,6 +359,12 @@ async def api_chat(request: Request, user=Depends(require_auth)):
         if owner is None or owner != user_id:
             return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
+
+    # ── Session Memory：按 session_id 隔离 + 池 miss 时从 DB 回灌（ADR-0003）──
+    memory = get_session(session_id, user_id)
+    # 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复）
+    mem_context = memory.get_context(max_turns=10)
+    memory.add_user_message(query)
 
     agent = _get_react_agent(user_id)
 
@@ -464,7 +465,8 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = user["user_id"]
-    memory = get_session(user_id)
+    session_id = body.get("session_id", "").strip()
+    memory = get_session(session_id, user_id)
     memory.add_user_message(query)
 
     try:
@@ -581,6 +583,7 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     _long_term_memory.delete_session(session_id)
+    clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 
