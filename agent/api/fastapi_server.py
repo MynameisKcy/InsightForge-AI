@@ -380,14 +380,8 @@ async def api_chat(request: Request, user=Depends(require_auth)):
     # max_turns=None：不按轮数截断，依赖 token 预算压缩（Phase 2）控制窗口大小
     mem_context = memory.get_context(max_turns=None)
     memory.add_user_message(query)
-    # ── 跨会话记忆召回注入（ADR-0003 Phase 4）：前置历史会话摘要到上下文 ──
-    # 召回该 user 其他会话的终版摘要，作为 system 消息注入；排除当前会话（其上下文已在 mem_context）。
-    # 失败/无召回则不注入，聊天正常进行。ReactAgent 透传 system 角色，故召回节进入 LLM 输入。
-    try:
-        from memory.recall import get_memory_recall
-        mem_context = get_memory_recall().inject_recall(mem_context, query, user_id, session_id)
-    except Exception as e:
-        logger.warning(f"memory recall injection failed: {e}")
+    # 跨会话记忆召回注入已移至 report_prompt_switch @dynamic_prompt 中间件（ADR-0003 Phase 4 修订）：
+    # 召回并入单条 system prompt，报告模式不注入，避免泄漏 + 多 system 消息问题。
 
     agent = _get_react_agent(user_id)
 
