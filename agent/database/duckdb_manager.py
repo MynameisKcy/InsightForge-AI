@@ -143,6 +143,20 @@ def _validate_table_name(name: str) -> str:
     return name
 
 
+def _detect_wide_table(col_names: list[str]) -> tuple[bool, str | None]:
+    """检测是否为宽表(≥5 个 4 位年份列名)。返回 (is_wide, 'YYYY-YYYY'|None)。"""
+    import re
+    year_cols = []
+    for c in col_names:
+        s = str(c).strip()
+        if re.fullmatch(r"(19|20)\d{2}", s):
+            year_cols.append(int(s))
+    if len(year_cols) >= 5:
+        year_cols.sort()
+        return True, f"{year_cols[0]}-{year_cols[-1]}"
+    return False, None
+
+
 def _validate_csv_path(path: str) -> str:
     """校验数据文件路径安全：必须在 data 目录下且不含单引号（防 read_csv_auto 注入与路径穿越）。"""
     if not path:
@@ -373,6 +387,9 @@ class DuckDBManager:
         try:
             _validate_table_name(table_name)
             _validate_csv_path(csv_path)
+            # 删除旧表前先清画像缓存,避免 reload 后 get_enhanced_schema_text 命中 stale profile
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             # 删除旧表
             self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
             # 加载新数据（_load_csv 内部会校验 self.table_name，故先同步实例属性）
@@ -395,6 +412,8 @@ class DuckDBManager:
             if not os.path.exists(csv_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {csv_path}"}
             qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             self.conn.execute(
                 f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
@@ -405,32 +424,88 @@ class DuckDBManager:
             logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path}")
             return {"success": True, "row_count": row_count, "error": None}
         except Exception as e:
-            logger.error(f"load_csv_dataset failed for '{table_name}': {e}")
-            return {"success": False, "row_count": 0, "error": str(e)}
+            # 回退：DuckDB read_csv_auto 默认 UTF-8，遇 GBK/GB18030 等非 UTF-8 中文 CSV
+            # 会因 "Invalid unicode" 失败。改用 pandas 按候选编码解码为 DataFrame 再建表
+            # （复用 load_excel_dataset 的 register+CREATE TABLE 模式，零扩展依赖）。
+            logger.warning(f"load_csv_dataset: read_csv_auto failed for '{table_name}' ({e}); trying pandas fallback")
+            fallback_err = self._load_csv_via_pandas(csv_path, table_name)
+            if fallback_err is None:
+                row_count = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {safe_ident(table_name)}"
+                ).fetchone()[0]
+                logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path} (pandas fallback)")
+                return {"success": True, "row_count": row_count, "error": None}
+            logger.error(f"load_csv_dataset failed for '{table_name}': {fallback_err}")
+            return {"success": False, "row_count": 0, "error": fallback_err}
+
+    def _load_csv_via_pandas(self, csv_path: str, table_name: str) -> str | None:
+        """用 pandas 按 GBK/GB18030/UTF-8-SIG 解码 CSV 再建表。
+
+        返回 None 表示成功；返回错误字符串表示失败。供 load_csv_dataset 回退。
+        内部自算 qname，不依赖调用处的 qname（load_csv_dataset 可能在 qname 赋值前就抛）。
+        """
+        try:
+            df = None
+            for enc in ("gbk", "gb18030", "utf-8-sig", "utf-16"):
+                try:
+                    df = pd.read_csv(csv_path, encoding=enc)
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+            if df is None:
+                return f"无法解码 CSV（已尝试 GBK/GB18030/UTF-8/UTF-16）：{csv_path}"
+            if len(df.columns) == 0:
+                return f"CSV 文件无有效数据列：{csv_path}"
+            qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            tmp_view = f"__csv_load_{table_name}"
+            self.conn.register(tmp_view, df)
+            try:
+                self.conn.execute(f"CREATE TABLE {qname} AS SELECT * FROM {tmp_view}")
+            finally:
+                self.conn.unregister(tmp_view)
+            return None
+        except Exception as pe:
+            return f"pandas 回退失败: {pe}"
 
     def load_excel_dataset(self, excel_path: str, table_name: str, sheet: str | None = None) -> dict:
         """加载 Excel 文件到指定表（管理通道，不经只读校验）。
 
         若表已存在则先 DROP 再重建。sheet 参数可选，指定工作表名。
         返回 {"success": bool, "row_count": int, "error": str|None}。
+
+        实现说明：不使用 DuckDB 的 read_excel()（依赖 spatial 扩展，需联网下载，
+        在受限网络下会卡死/失败）。改用 pandas + openpyxl 读取为 DataFrame，
+        再通过 con.register() 注册后建表，零扩展依赖、无需联网。
         """
         try:
             _validate_table_name(table_name)
             _validate_csv_path(excel_path)
             if not os.path.exists(excel_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {excel_path}"}
-            qname = safe_ident(table_name)
-            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
-            # 构建 read_excel 参数
+
+            # pandas 读取 Excel（.xlsx/.xls 均支持；sheet_name 指定工作表，默认首张）
+            read_kwargs = {}
             if sheet:
-                sheet_escaped = sheet.replace("'", "''")
-                self.conn.execute(
-                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}', sheet_name='{sheet_escaped}')"
-                )
-            else:
-                self.conn.execute(
-                    f"CREATE TABLE {qname} AS SELECT * FROM read_excel('{excel_path}')"
-                )
+                read_kwargs["sheet_name"] = sheet
+            df = pd.read_excel(excel_path, **read_kwargs)
+            if df is None or len(df.columns) == 0:
+                return {"success": False, "row_count": 0, "error": "Excel 文件无有效数据列"}
+
+            qname = safe_ident(table_name)
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            # 用临时视图名注册 DataFrame，避免与用户表名冲突
+            tmp_view = f"__excel_load_{table_name}"
+            self.conn.register(tmp_view, df)
+            try:
+                self.conn.execute(f"CREATE TABLE {qname} AS SELECT * FROM {tmp_view}")
+            finally:
+                self.conn.unregister(tmp_view)
+
             row_count = self.conn.execute(
                 f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]
@@ -446,21 +521,56 @@ class DuckDBManager:
             _validate_table_name(table_name)
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
+            if hasattr(self, "_profile_cache"):
+                self._profile_cache.pop(table_name, None)
             logger.info(f"drop_table: dropped '{table_name}'")
             return True
         except Exception as e:
             logger.error(f"drop_table failed for '{table_name}': {e}")
             return False
 
-    def get_enhanced_schema_text(self) -> str:
-        """增强版 schema 文本，包含行数和来源类型标注。
+    def _compute_table_profile(self, table_name: str) -> dict:
+        """计算单表语义画像:每列 nunique/取值/数值统计 + 宽表标记。供 schema 文本与缓存使用。"""
+        _validate_table_name(table_name)
+        qname = safe_ident(table_name)
+        cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
+        col_names = [c[0] for c in cols]
+        total = self.conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()[0]
+        is_wide, wide_range = _detect_wide_table(col_names)
 
-        从 datasources_db 读取元数据，格式：
-        Table: {name} ({source_type}) [{row_count} rows]
-          - col1 (TYPE)
-          - col2 (TYPE)
+        col_profiles = []
+        for col_name, col_type, *_ in cols:
+            is_numeric = col_type.upper() in ("DOUBLE", "FLOAT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "REAL", "HUGEINT")
+            # nunique + 非空数
+            agg = self.conn.execute(
+                f'SELECT COUNT(DISTINCT "{col_name}"), COUNT("{col_name}") FROM {qname}'
+            ).fetchone()
+            nunique, non_null = int(agg[0]), int(agg[1])
+            entry = {"name": col_name, "dtype": col_type, "nunique": nunique,
+                     "non_null": non_null, "total": total}
+            if is_numeric:
+                if non_null > 0:
+                    mm = self.conn.execute(
+                        f'SELECT MIN("{col_name}"), MAX("{col_name}") FROM {qname} WHERE "{col_name}" IS NOT NULL'
+                    ).fetchone()
+                    entry["min"] = float(mm[0]) if mm[0] is not None else None
+                    entry["max"] = float(mm[1]) if mm[1] is not None else None
+            else:
+                # 低基数分类列:列取值(最多 8 个)
+                if 0 < nunique <= 15:
+                    vals = self.conn.execute(
+                        f'SELECT DISTINCT "{col_name}" FROM {qname} WHERE "{col_name}" IS NOT NULL LIMIT 8'
+                    ).fetchall()
+                    entry["values"] = [str(v[0]) for v in vals]
+            col_profiles.append(entry)
+        return {"columns": col_profiles, "is_wide_table": is_wide,
+                "wide_table_range": wide_range, "row_count": total}
+
+    def get_enhanced_schema_text(self) -> str:
+        """增强版 schema 文本,含列语义统计(分类列取值/数值 min-max/宽表标记)。
+
+        画像经实例级 _profile_cache 缓存,缓存缺失懒计算兜底。
         """
-        # 获取 DuckDB 中所有表
         tables = self.get_table_names()
         if not tables:
             return "No tables found."
@@ -480,26 +590,47 @@ class DuckDBManager:
         parts = []
         for table_name in tables:
             _validate_table_name(table_name)
-            qname = safe_ident(table_name)
-            cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
-            col_lines = [f"  - {col_name} ({col_type})" for col_name, col_type, *_ in cols]
+            # 缓存懒初始化 + 懒计算
+            if not hasattr(self, "_profile_cache"):
+                self._profile_cache = {}
+            if table_name not in self._profile_cache:
+                try:
+                    self._profile_cache[table_name] = self._compute_table_profile(table_name)
+                except Exception as e:
+                    logger.warning(f"_compute_table_profile failed for '{table_name}': {e}")
+                    self._profile_cache[table_name] = None
+            profile = self._profile_cache[table_name]
 
-            # 获取元数据
             meta = meta_map.get(table_name, {})
             source_type = meta.get("source_type", "local")
-            # 优先使用元数据中的 row_count，否则实时查询
-            if "row_count" in meta and meta["row_count"] > 0:
-                row_count = meta["row_count"]
-            else:
-                try:
-                    row_count = self.conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()[0]
-                except Exception:
-                    row_count = 0
+            row_count = profile["row_count"] if profile else meta.get("row_count", 0)
 
-            parts.append(
-                f"Table: {table_name} ({source_type}) [{row_count} rows]\n" + "\n".join(col_lines)
-            )
-        return "\n\n".join(parts)
+            header = f"Table: {table_name} ({source_type}) [{row_count} rows]"
+            if profile and profile.get("is_wide_table"):
+                header += f"  [宽表:年份列 {profile['wide_table_range']}]"
+            parts.append(header)
+
+            if profile:
+                for c in profile["columns"]:
+                    line = f"  - {c['name']} ({c['dtype']})"
+                    if c.get("values") is not None:
+                        vals = c["values"]
+                        suffix = f"共{c['nunique']}个" if c["nunique"] > 8 else f"{c['nunique']}个"
+                        line += f" — {suffix}唯一值: {vals}"
+                        if c["nunique"] > 8:
+                            line += " …"
+                    elif c["nunique"] > 0:
+                        line += f" — {c['nunique']}个唯一值"
+                    if c.get("min") is not None:
+                        line += f" (min={c['min']}, max={c['max']}, {c['non_null']}/{c['total']}非空)"
+                    parts.append(line)
+            else:
+                # 画像失败兜底:回退到纯 DESCRIBE
+                qname = safe_ident(table_name)
+                cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
+                for col_name, col_type, *_ in cols:
+                    parts.append(f"  - {col_name} ({col_type})")
+        return "\n".join(parts)
 
     def register_external_databases(self) -> dict:
         """读取 datasources_conf 配置，安装 DuckDB 扩展，注册外部数据库表为视图。

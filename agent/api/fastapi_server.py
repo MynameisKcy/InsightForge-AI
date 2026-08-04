@@ -94,10 +94,10 @@ from utils.path_tool import get_abs_path
 
 # ── 记忆系统 & 用户认证 & 数据解析 ──
 try:
-    from memory.short_term import get_session, ConversationMemory
+    from memory.short_term import get_session, clear_session, ConversationMemory
     from memory.long_term import LongTermMemory
 except ModuleNotFoundError:
-    from agent.memory.short_term import get_session, ConversationMemory
+    from agent.memory.short_term import get_session, clear_session, ConversationMemory
     from agent.memory.long_term import LongTermMemory
 
 try:
@@ -346,13 +346,8 @@ async def api_chat(request: Request, user=Depends(require_auth)):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = user["user_id"]
-    memory = get_session(user_id)
 
-    # ── 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复） ──
-    mem_context = memory.get_context(max_turns=10)
-    memory.add_user_message(query)
-
-    # ── 会话管理：无 session_id 则创建新会话 ──
+    # ── 会话管理：先解析/创建 session_id + IDOR 校验（per-session keying 的前提） ──
     new_session = False
     if not session_id:
         title = query[:30] + ("..." if len(query) > 30 else "")
@@ -364,6 +359,29 @@ async def api_chat(request: Request, user=Depends(require_auth)):
         if owner is None or owner != user_id:
             return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
         _long_term_memory.touch_session(session_id)
+
+    # ── 闲置会话终版摘要写入（fire-and-forget，不阻塞当前请求；ADR-0003 Phase 3） ──
+    # 请求进来时 piggyback 检查该 user 其他闲置会话，后台线程异步 finalize（写入 memory
+    # collection 供日后召回）。finalized_up_to 门控避免重复 LLM 调用。
+    try:
+        from memory.recall import get_memory_recall
+        threading.Thread(
+            target=get_memory_recall().finalize_idle_sessions,
+            args=(user_id,),
+            kwargs={"except_session_id": session_id},
+            daemon=True,
+        ).start()
+    except Exception as e:
+        logger.warning(f"finalize_idle_sessions trigger failed: {e}")
+
+    # ── Session Memory：按 session_id 隔离 + 池 miss 时从 DB 回灌（ADR-0003）──
+    memory = get_session(session_id, user_id)
+    # 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复）
+    # max_turns=None：不按轮数截断，依赖 token 预算压缩（Phase 2）控制窗口大小
+    mem_context = memory.get_context(max_turns=None)
+    memory.add_user_message(query)
+    # 跨会话记忆召回注入已移至 report_prompt_switch @dynamic_prompt 中间件（ADR-0003 Phase 4 修订）：
+    # 召回并入单条 system prompt，报告模式不注入，避免泄漏 + 多 system 消息问题。
 
     agent = _get_react_agent(user_id)
 
@@ -464,7 +482,8 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
         return JSONResponse({"error": "query is required"}, status_code=400)
 
     user_id = user["user_id"]
-    memory = get_session(user_id)
+    session_id = body.get("session_id", "").strip()
+    memory = get_session(session_id, user_id)
     memory.add_user_message(query)
 
     try:
@@ -489,9 +508,58 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
         )
 
 
+_EXPORT_FORMATS = {"md", "docx", "pdf", "html"}
+
+
+@app.post("/api/report/export")
+async def api_export_report(request: Request, user=Depends(require_auth)):
+    """导出报告为 Word/Markdown/PDF/HTML。
+
+    入参 JSON: {"markdown": str, "title": str, "format": "md"|"docx"|"pdf"|"html"}
+    返回 FileResponse 触发浏览器下载。
+    """
+    body = await request.json()
+    markdown = body.get("markdown", "")
+    title = body.get("title", "数据分析报告") or "数据分析报告"
+    fmt = (body.get("format", "") or "").lower().strip()
+
+    if not markdown.strip():
+        return JSONResponse({"error": "No markdown content"}, status_code=400)
+    if fmt not in _EXPORT_FORMATS:
+        return JSONResponse({"error": f"Unsupported format: {fmt}"}, status_code=400)
+
+    try:
+        from agents.export_agent import ExportAgent
+        result = ExportAgent().run({
+            "markdown": markdown,
+            "title": title,
+            "formats": [fmt],
+        })
+        files = result.get("files", [])
+        if not files:
+            errs = result.get("errors", [])
+            msg = errs[0] if errs else f"{fmt} export produced no file"
+            return JSONResponse({"error": msg}, status_code=502)
+        fpath = files[0]["path"]
+        if not os.path.exists(fpath):
+            return JSONResponse({"error": "Export file missing"}, status_code=502)
+        # 浏览器下载文件名（FileResponse 的 filename 参数会自动生成
+        # RFC 5987 filename*=UTF-8''... 头，正确处理中文等非 ASCII 文件名；
+        # 不手写 Content-Disposition 以免 latin-1 编码失败）
+        download_name = os.path.basename(fpath)
+        return FileResponse(fpath, filename=download_name)
+    except Exception as e:
+        logger.error(f"Export error: {traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/conversation/history")
 async def api_conversation_history(request: Request, limit: int = 20, user=Depends(require_auth)):
-    """获取用户历史会话记录（长期记忆）。"""
+    """获取用户历史会话记录（长期记忆）。
+
+    遗留端点（ADR-0003 后前端改用 /api/sessions + /api/sessions/{id} 按会话加载）：
+    返回 user 级跨会话最近 N 轮（混合多会话），保留供兼容/审计。
+    """
     user_id = user["user_id"]
     turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
@@ -536,6 +604,13 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     _long_term_memory.delete_session(session_id)
+    clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
+    # 清理跨会话记忆 embedding（ADR-0003 Phase 3）
+    try:
+        from memory.recall import get_memory_recall
+        get_memory_recall().delete_session_memory(session_id, user_id)
+    except Exception as e:
+        logger.warning(f"delete session memory embedding failed: {e}")
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 
@@ -670,6 +745,9 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
 
         # 写入元数据（带 owner_user_id 实现多用户隔离）
         source_type = "csv" if ext == "csv" else "excel"
+        # display_name: 原始文件名去扩展名，保留中文，供侧边栏展示与 DataResolver 匹配
+        # （table_name 是安全化 ASCII 名，用户无法对应；display_name 是用户能认得的名字）
+        display_name = os.path.splitext(fname)[0].strip()
         meta_result = datasources_db.add_dataset(
             name=table_name,
             source_type=source_type,
@@ -678,6 +756,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
             schema_json=schema_json,
             row_count=load_result["row_count"],
             owner_user_id=user_id,
+            display_name=display_name,
         )
         # 元数据写入失败（如 UNIQUE 冲突）：删除文件并明确报错，避免"上传报成功但侧边栏查不到"
         if not meta_result.get("success"):
@@ -693,6 +772,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
         return JSONResponse({
             "success": True,
             "name": table_name,
+            "display_name": display_name,
             "source_type": source_type,
             "row_count": load_result["row_count"],
             "columns": [c[0] for c in cols],

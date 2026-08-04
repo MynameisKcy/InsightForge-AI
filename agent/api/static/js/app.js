@@ -409,7 +409,13 @@ async function streamChat(text, bubble) {
     if (!line.startsWith('data: ')) return false;
     const data = line.slice(6);
 
-    if (data === '[DONE]') return false;
+    if (data === '[DONE]') {
+      // 报告类内容（含 markdown 标题或较长正文）流结束后追加导出按钮
+      if (fullText && fullText.length > 50 && /^#{1,3}\s/m.test(fullText)) {
+        appendExportBar(bubble, fullText);
+      }
+      return false;
+    }
 
     if (data === '[KEEPALIVE]') return false;   // 心跳保活：仅 resetIdle，不渲染
 
@@ -879,9 +885,14 @@ async function loadDatasets() {
       list.innerHTML = datasets.map(d => {
         const rows = d.row_count > 0 ? d.row_count.toLocaleString() + '行' : '';
         const safeId = String(d.name).replace(/[^A-Za-z0-9_]/g,'_');
+        // 侧边栏优先显示用户能认得的原始文件名（display_name，含中文），
+        // 安全化表名（ds_202507242126）只作 hover title 兜底；二者都无则用 name。
+        const showName = d.display_name || d.name;
+        const titleTip = (d.display_name && d.display_name !== d.name)
+          ? `${d.display_name}（表 ${d.name}）` : d.name;
         return `<div class="ds-item" data-ds-toggle="${escapeHtml(safeId)}">
           <span class="ds-icon">${dsIcon(d.source_type)}</span>
-          <span class="ds-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
+          <span class="ds-name" title="${escapeHtml(titleTip)}">${escapeHtml(showName)}</span>
           <span class="ds-rows">${rows}</span>
           <button class="ds-del" data-ds-del="${escapeHtml(d.name)}" title="删除">✕</button>
         </div>
@@ -1183,6 +1194,12 @@ document.getElementById('allFileInput').addEventListener('change', async functio
     var msg = (f.data && f.data.error) || f.error || '失败';
     showToast(f.file + ' 上传失败：' + msg, 'error', 5000);
   });
+  // 批量上传对应关系：逐个展示「原始文件名 → 数据集显示名/表名」，让用户能对上号
+  results.filter(function(x){return x.ok && x.kind === 'table' && x.data && x.data.name;}).forEach(function(r) {
+    var disp = r.data.display_name || r.data.name;
+    var arrow = (disp !== r.file) ? (' → 数据集「' + disp + '」') : (' → 数据集「' + disp + '」');
+    showToast('✓ ' + r.file + arrow, 'info', 6000);
+  });
   loadAllFiles();
   loadDatasets();           // CSV 类经路由入 DuckDB，数据集列表也需同步
   _expandSection('Files');  // 上传后自动展开文件管理区块
@@ -1241,6 +1258,62 @@ async function deleteFile(name, type) {
     if (item && item.dataset.dsToggle) toggleDsDetail(item.dataset.dsToggle);
   });
 })();
+
+// ── 报告导出：在报告 bubble 末尾追加导出按钮栏 ──
+function appendExportBar(bubble, markdown) {
+  // 标题从 markdown 首行 # 解析，回退到默认
+  var title = '数据分析报告';
+  var m = markdown.match(/^#\s+(.+)$/m);
+  if (m) title = m[1].trim();
+  var bar = document.createElement('div');
+  bar.className = 'export-bar';
+  [
+    { fmt: 'md',   label: 'Markdown' },
+    { fmt: 'docx', label: 'Word' },
+    { fmt: 'pdf',  label: 'PDF' },
+    { fmt: 'html', label: 'HTML' },
+  ].forEach(function (item) {
+    var btn = document.createElement('button');
+    btn.className = 'export-btn';
+    btn.textContent = '导出 ' + item.label;
+    btn.onclick = function () { doExport(btn, markdown, title, item.fmt); };
+    bar.appendChild(btn);
+  });
+  bubble.appendChild(bar);
+  scrollToBottom();
+}
+
+function doExport(btn, markdown, title, fmt) {
+  var tip = document.createElement('span');
+  tip.className = 'export-tip';
+  btn.disabled = true;
+  var oldText = btn.textContent;
+  btn.textContent = '生成中...';
+  fetch('/api/report/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ markdown: markdown, title: title, format: fmt }),
+  }).then(function (resp) {
+    if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
+    return resp.blob();
+  }).then(function (blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = (title || 'report') + '.' + (fmt === 'docx' ? 'docx' : fmt);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }).catch(function (err) {
+    tip.textContent = '导出失败: ' + err.message;
+    btn.parentElement.appendChild(tip);
+    setTimeout(function () { tip.remove(); }, 4000);
+  }).finally(function () {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  });
+}
 
 loadSessions();
 loadKbFiles();

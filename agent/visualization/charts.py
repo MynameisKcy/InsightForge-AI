@@ -2,7 +2,9 @@
 Chart Generator: 使用 Plotly 生成交互式图表，支持多种图表类型。
 """
 
+import inspect
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Any
@@ -40,6 +42,25 @@ def _ensure_output_dir() -> str:
     output_path = get_abs_path(CHART_OUTPUT_DIR)
     os.makedirs(output_path, exist_ok=True)
     return output_path
+
+
+def _filter_kwargs(func, kwargs: dict) -> dict:
+    """按目标函数签名过滤 kwargs，只保留它接受的参数。
+
+    auto_chart 会向 normalized 注入 names_col/values_col 等列键做兜底推断，
+    但不同图表签名不同（bar_chart 只认 x_col/y_col，pie_chart 只认
+    names_col/values_col，heatmap 只认 title）。不过滤直接 splat 会导致
+    TypeError: got an unexpected keyword argument。若 func 含 **kwargs
+    （pie/heatmap），则全部保留。
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return dict(kwargs)
+    params = sig.parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return dict(kwargs)
+    return {k: v for k, v in kwargs.items() if k in params}
 
 
 class ChartGenerator:
@@ -142,6 +163,10 @@ class ChartGenerator:
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
         work_df = df.copy()
+        # 剔除 y_col 缺失行，避免空点/断线
+        work_df = work_df.dropna(subset=[y_col])
+        if work_df.empty:
+            return _empty_data_placeholder("line_chart", y_col)
         month_like = ChartGenerator._is_month_like(work_df, x_col)
         use_x = "_x_display" if month_like else x_col
         if month_like:
@@ -166,6 +191,14 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("bar_chart", title)
 
+        # 剔除 y_col 缺失行，避免画出高度为 0 的空柱
+        df = df.dropna(subset=[y_col])
+        if df.empty:
+            return _empty_data_placeholder("bar_chart", y_col)
+        # 剔除汇总行（如「全省」混入各市排名），避免汇总占大头挤扁其余柱
+        df = ChartGenerator._drop_summary_rows(df, cat_col=x_col, values_col=y_col)
+        if df.empty:
+            return _empty_data_placeholder("bar_chart", y_col)
         data = df.head(top_n) if len(df) > top_n else df
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
@@ -200,12 +233,53 @@ class ChartGenerator:
         return _save_chart(fig, f"bar_{_safe_name(title)}")
 
     @staticmethod
+    def _drop_summary_rows(df: pd.DataFrame, cat_col: str, values_col: str) -> pd.DataFrame:
+        """剔除汇总行，避免对比图把汇总当一个类别（如全省/总计混入各市饼图）。
+
+        两条判据（命中任一即剔）：
+        1. 类别名命中汇总关键词：全省/总计/合计/汇总/全部/小计/共计/总和
+        2. 某行数值 ≈ 其余正数值之和（误差 2%，且该行是最大值）——「全省=各市之和」模式。
+
+        仅在类别列存在时生效；无类别列或全无匹配则原样返回（不误伤正常数据）。
+        """
+        if df is None or df.empty or cat_col not in df.columns:
+            return df if df is not None else pd.DataFrame()
+        SUMMARY_KEYWORDS = re.compile(r"(?:全省|总计|合计|汇总|全部|小计|共计|总和)")
+        # 判据1：关键词命中
+        cat_str = df[cat_col].astype(str)
+        kw_mask = cat_str.str.contains(SUMMARY_KEYWORDS, na=False)
+        if kw_mask.any():
+            return df[~kw_mask].reset_index(drop=True)
+        # 判据2：数值≈其余正数之和（汇总行特征）
+        if values_col in df.columns:
+            vals = df[values_col]
+            numeric_vals = pd.to_numeric(vals, errors="coerce")
+            positive = numeric_vals[numeric_vals > 0]
+            if len(positive) >= 3:
+                total = positive.sum()
+                # 找最大值行，若它 ≈ (总和 - 它自己) 则视为汇总行
+                max_idx = positive.idxmax()
+                max_val = positive.loc[max_idx]
+                rest_sum = total - max_val
+                if rest_sum > 0 and abs(max_val - rest_sum) / rest_sum <= 0.02:
+                    return df.drop(index=max_idx).reset_index(drop=True)
+        return df.reset_index(drop=True)
+
+    @staticmethod
     def pie_chart(df: pd.DataFrame, names_col: str, values_col: str,
                   title: str = "占比图", **kwargs) -> str:
         """生成饼图（类别占比分析）。返回保存路径。"""
         if not _plotly_available:
             return _placeholder("pie_chart", title)
 
+        # 剔除 values_col 缺失行，避免占比失真
+        df = df.dropna(subset=[values_col])
+        if df.empty:
+            return _empty_data_placeholder("pie_chart", values_col)
+        # 剔除汇总行（如「全省」混入各市占比），避免汇总占大头挤扁其余 slice
+        df = ChartGenerator._drop_summary_rows(df, cat_col=names_col, values_col=values_col)
+        if df.empty:
+            return _empty_data_placeholder("pie_chart", values_col)
         fig = px.pie(df, names=names_col, values=values_col, title=title,
                      color_discrete_sequence=PALETTE)
         fig.update_traces(textposition="inside", textinfo="percent+label")
@@ -240,6 +314,10 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("scatter", title)
 
+        # 剔除 x_col/y_col 缺失行，避免空点
+        df = df.dropna(subset=[x_col, y_col])
+        if df.empty:
+            return _empty_data_placeholder("scatter_chart", f"{x_col}/{y_col}")
         labels = {x_col: x_label or x_col, y_col: y_label or y_col}
         if color_col and color_col in df.columns:
             fig = px.scatter(df, x=x_col, y=y_col, color=color_col, title=title,
@@ -298,7 +376,7 @@ class ChartGenerator:
         if "values_col" not in normalized and len(numeric_cols) >= 1:
             normalized["values_col"] = numeric_cols[-1] if len(numeric_cols) >= 1 else df.columns[-1]
 
-        return func(df, **normalized)
+        return func(df, **_filter_kwargs(func, normalized))
 
     @staticmethod
     def detect_chart_type(data_description: str) -> str:
@@ -342,3 +420,8 @@ def _safe_name(name: str) -> str:
 def _placeholder(chart_type: str, title: str) -> str:
     """当 Plotly 不可用时返回占位文本。"""
     return f"[PLACEHOLDER: {chart_type} - {title}. Install plotly to generate charts.]"
+
+
+def _empty_data_placeholder(chart_type: str, col: str) -> str:
+    """dropna 后无有效数据时返回占位文本，不抛异常。"""
+    return f"[{chart_type}: 列 {col!r} 无有效数值数据（全部缺失）]"

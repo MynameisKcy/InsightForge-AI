@@ -18,5 +18,5 @@ The system passes the raw user query straight into both the analysis pipeline (v
 ## Consequences
 
 - Both rewriters fall back to the original query on LLM failure (mirrors rerank's degradation) - no new hard failure mode.
-- Short-term memory is keyed by `user_id`, not session, so the bridge rewriter's history can leak across sessions. Accepted as a known limitation; candidate for a separate per-session-memory feature.
+- Short-term memory is keyed by `user_id`, not session, so the bridge rewriter's history can leak across sessions. Accepted as a known limitation; candidate for a separate per-session-memory feature. *(Resolved by ADR-0003: session-scoped Session Memory.)*
 - Extra LLM call per analysis (bridge) and per retrieval (expansion). Accepted: this is a personal project optimizing for depth over latency.
