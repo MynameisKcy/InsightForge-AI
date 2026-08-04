@@ -4,6 +4,11 @@ import sys
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
+try:
+    from utils.logger_handler import logger
+except ModuleNotFoundError:
+    from agent.utils.logger_handler import logger
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
@@ -56,12 +61,13 @@ class ReactAgent:
         ctx_token = set_request_context(user_id=user_id, session_id=session_id)
         pe_token = set_progress_emitter(progress_emitter)
         try:
-            yield from self._execute_stream_inner(query, history)
+            yield from self._execute_stream_inner(query, history, user_id, session_id)
         finally:
             reset_progress_emitter(pe_token)
             reset_request_context(ctx_token)
 
-    def _execute_stream_inner(self, query: str, history: list[dict] | None = None):
+    def _execute_stream_inner(self, query: str, history: list[dict] | None = None,
+                              user_id: str = "default", session_id: str = ""):
         # 构建完整上下文：历史消息 + 当前问题
         messages = []
         if history:
@@ -114,6 +120,9 @@ class ReactAgent:
 
         displayed_tool_messages = set()  # 避免重复显示同一工具的状态
 
+        # 追踪最后一次模型调用的 AIMessage，用于抽取实测 input_tokens（ADR-0003 Phase 2）
+        final_ai_msg = None
+
         for chunk in self.agent.stream(input_dict, stream_mode="values", context={"report": False}):
             messages = chunk.get("messages", [])
             if not messages:
@@ -139,9 +148,22 @@ class ReactAgent:
             # 输出 AI 回复内容（过滤内部推理）
             if isinstance(latest, AIMessage) and latest.content:
                 text = latest.content.strip()
+                # 记录最近一次有内容的 AIMessage（最终答案，含完整上下文的 token 用量）
+                final_ai_msg = latest
                 if _is_internal_monologue(text):
                     continue
                 yield text + "\n"
+
+        # 流结束后：把实测 input_tokens 回灌到 Session Memory，供下一轮主动压缩判定
+        if final_ai_msg is not None and session_id:
+            try:
+                from memory.context_budget import extract_input_tokens
+                from memory.short_term import get_session
+                n = extract_input_tokens(final_ai_msg)
+                if n is not None:
+                    get_session(session_id, user_id).record_input_tokens(n)
+            except Exception as e:
+                logger.warning(f"Failed to record input tokens: {e}")
 
 
 if __name__ == '__main__':

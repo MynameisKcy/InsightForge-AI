@@ -208,7 +208,7 @@ class PlannerAgent(BaseAgent):
         # 0.5 查询改写：结合近期对话历史消解指代，使多轮 query（如"分析它的趋势"）
         # 以自包含形式进入规划。改写仅用于规划；原始 query 仍作为对外的标题/标签。
         # 详见 docs/adr/0002-query-rewriting-two-points.md
-        plan_query = self._rewrite_query(query, ctx.user_id)
+        plan_query = self._rewrite_query(query, ctx.user_id, ctx.session_id)
 
         plan_data = self._create_plan(plan_query, history)
         plan = plan_data.get("plan", [])
@@ -311,11 +311,12 @@ class PlannerAgent(BaseAgent):
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
 
-    def _rewrite_query(self, query: str, user_id: str) -> str:
+    def _rewrite_query(self, query: str, user_id: str, session_id: str = "") -> str:
         """结合近期对话历史把 query 改写为自包含形式（消解指代）。
 
         失败时回退原始 query。改写结果仅用于规划，不替换对外 query（标题/标签仍用原文）。
-        多用户隔离：历史按 user_id 取（get_session），改写器模型按 user_id 取。
+        多用户/多会话隔离：历史按 session_id 取（get_session），ctx.session_id 优先、
+        缺失则退回 contextvar current_session_id。改写器模型按 user_id 取。
         详见 docs/adr/0002-query-rewriting-two-points.md
         """
         try:
@@ -323,7 +324,9 @@ class PlannerAgent(BaseAgent):
         except ModuleNotFoundError:
             from agent.agents.query_rewriter import QueryRewriter
         try:
-            history = get_session(user_id).get_context(max_turns=6)
+            from utils.request_context import get_session_id as _get_ctx_session_id
+            sid = session_id or _get_ctx_session_id()
+            history = get_session(sid, user_id).get_context(max_turns=6)
             return QueryRewriter(user_id).rewrite(query, history)
         except Exception as e:
             logger.warning("Query rewrite failed, using original query: %s", e)

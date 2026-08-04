@@ -5,6 +5,21 @@
 面向数据分析师提效与业务人员自助取数：分析师无需手写 SQL 即可完成多表关联与多维分析；业务人员一句话即可取数、出图并生成可导出报告。基于 LangChain + LangGraph，以单一智能客服 Agent 为入口，由 LLM 依据工具描述自主决定直接作答、RAG 问答，或触发完整分析流水线。
 
 ---
+## 界面预览
+
+### 落地页
+
+| | |
+|:---:|:---:|
+| <img src="docs/imgs/index1.png" width="400"> | <img src="docs/imgs/index2.png" width="400"> |
+
+### 工作台
+
+<img src="docs/imgs/api1.png" width="700">
+<img src="docs/imgs/api2.png" width="700">
+<img src="docs/imgs/api3.png" width="700">
+
+---
 
 ## 项目亮点
 

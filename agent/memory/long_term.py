@@ -7,7 +7,7 @@ import os
 import sqlite3
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -53,6 +53,15 @@ class LongTermMemory:
                 CREATE INDEX IF NOT EXISTS idx_memory_user
                 ON memory_summaries(user_id, created_at DESC)
             """)
+            # 向后兼容：旧表无 session_id（ADR-0003：终版摘要按会话归属，Phase 3 写入）
+            try:
+                conn.execute("ALTER TABLE memory_summaries ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memory_session
+                ON memory_summaries(session_id, created_at DESC)
+            """)
             # ── 会话管理表 ──
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -67,6 +76,21 @@ class LongTermMemory:
                 CREATE INDEX IF NOT EXISTS idx_sessions_user
                 ON chat_sessions(user_id, updated_at DESC)
             """)
+            # 向后兼容：旧表无 summary/summarized_up_to（ADR-0003 Session Memory：滚动摘要 + 水印）
+            try:
+                conn.execute("ALTER TABLE chat_sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            try:
+                conn.execute("ALTER TABLE chat_sessions ADD COLUMN summarized_up_to INTEGER NOT NULL DEFAULT -1")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            # 向后兼容：旧表无 finalized_up_to（ADR-0003 Phase 3：终版摘要已覆盖到的最大 turn_index，
+            # 用于闲置 finalize 门控，避免无新轮次时重复 LLM 调用；-1 = 尚未 finalize）
+            try:
+                conn.execute("ALTER TABLE chat_sessions ADD COLUMN finalized_up_to INTEGER NOT NULL DEFAULT -1")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
             # 对话历史表（逐轮存储，关联 session_id）
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS conversation_history (
@@ -94,21 +118,21 @@ class LongTermMemory:
             """)
             conn.commit()
 
-    def save_summary(self, user_id: str, summary: str, turn_count: int = 0):
-        """保存对话摘要。"""
+    def save_summary(self, user_id: str, summary: str, turn_count: int = 0, session_id: str = ""):
+        """保存对话摘要（ADR-0003：终版会话摘要带 session_id，Phase 3 写入；Phase 1 不再由压缩调用）。"""
         with self._get_conn() as conn:
             conn.execute(
-                "INSERT INTO memory_summaries (user_id, summary, turn_count, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, summary, turn_count, datetime.now().isoformat()),
+                "INSERT INTO memory_summaries (user_id, session_id, summary, turn_count, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, session_id, summary, turn_count, datetime.now().isoformat()),
             )
             conn.commit()
-        logger.info(f"Saved summary for user {user_id} ({turn_count} turns)")
+        logger.info(f"Saved summary for user {user_id} session {session_id} ({turn_count} turns)")
 
     def get_recent_summaries(self, user_id: str, limit: int = 5) -> list[dict]:
-        """获取用户最近的对话摘要。"""
+        """获取用户最近的对话摘要（含 session_id，便于按会话归属）。"""
         with self._get_conn() as conn:
             rows = conn.execute(
-                "SELECT summary, turn_count, created_at FROM memory_summaries "
+                "SELECT session_id, summary, turn_count, created_at FROM memory_summaries "
                 "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
             ).fetchall()
@@ -175,6 +199,84 @@ class LongTermMemory:
             )
             conn.commit()
 
+    # ── Session Memory：滚动摘要 + 水印（ADR-0003）──
+
+    def get_session_memory_meta(self, session_id: str) -> tuple[str, int] | None:
+        """返回该会话的 (滚动摘要, 水印 summarized_up_to)；会话不存在返回 None。
+
+        水印 = 已折叠进滚动摘要的最大 turn_index；-1 表示尚无任何轮次被折叠。
+        供 Session Memory 池 miss 时回灌用。
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT summary, summarized_up_to FROM chat_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            wmark = row["summarized_up_to"]
+            return (row["summary"] or "", int(wmark) if wmark is not None else -1)
+
+    def save_session_memory_meta(self, session_id: str, summary: str, summarized_up_to: int):
+        """持久化会话的滚动摘要 + 水印（压缩时写回 chat_sessions）。"""
+        with self._get_conn() as conn:
+            now = datetime.now().isoformat()
+            conn.execute(
+                "UPDATE chat_sessions SET summary = ?, summarized_up_to = ?, updated_at = ? WHERE session_id = ?",
+                (summary, summarized_up_to, now, session_id),
+            )
+            conn.commit()
+
+    # ── 终版会话摘要（ADR-0003 Phase 3）：跨会话召回写入 + 闲置门控 ──
+
+    def get_session_title(self, session_id: str) -> str:
+        """返回会话标题；会话不存在返回空串。"""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT title FROM chat_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return row["title"] if row else ""
+
+    def get_session_max_turn_index(self, session_id: str) -> int:
+        """返回该会话最大的 turn_index；无轮次返回 -1。
+
+        供 finalize 门控：finalized_up_to < max_turn_index 表示有未纳入终版摘要的新轮次。
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(turn_index), -1) AS max_idx FROM conversation_history WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return int(row["max_idx"])
+
+    def mark_session_finalized(self, session_id: str, up_to: int):
+        """记录终版摘要已覆盖到的最大 turn_index（finalize 成功后写）。"""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE chat_sessions SET finalized_up_to = ? WHERE session_id = ?",
+                (up_to, session_id),
+            )
+            conn.commit()
+
+    def get_idle_sessions(self, user_id: str, except_session_id: str = "",
+                          idle_seconds: int = 1800) -> list[dict]:
+        """返回该用户闲置超阈的会话（updated_at < now - idle_seconds），供 piggyback finalize。
+
+        排除 except_session_id（当前会话，用户正在用）。返回 session_id + finalized_up_to。
+        ISO 时间字符串按字典序比较，与时间顺序一致。
+        """
+        cutoff = (datetime.now() - timedelta(seconds=idle_seconds)).isoformat()
+        with self._get_conn() as conn:
+            sql = ("SELECT session_id, finalized_up_to FROM chat_sessions "
+                   "WHERE user_id = ? AND updated_at < ?")
+            params: list = [user_id, cutoff]
+            if except_session_id:
+                sql += " AND session_id != ?"
+                params.append(except_session_id)
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [dict(r) for r in rows]
+
     def get_user_sessions(self, user_id: str, limit: int = 50) -> list[dict]:
         """获取用户的所有会话列表，按最近活跃时间降序排列。"""
         with self._get_conn() as conn:
@@ -212,6 +314,21 @@ class LongTermMemory:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def get_turns_after(self, session_id: str, watermark: int) -> list[dict]:
+        """取会话中 turn_index > 水印 的全部轮次（按 turn_index、id 升序），供 Session Memory 回灌。
+
+        全量轮次仍保留在 conversation_history（source of truth，永不删）；此处只取水印后的
+        工作窗口。turn_index 由 save_conversation_pair 按会话连续分配（0,1,2,...）。
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT role, content, turn_index FROM conversation_history
+                   WHERE session_id = ? AND turn_index > ?
+                   ORDER BY turn_index ASC, id ASC""",
+                (session_id, watermark),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     # ── 对话历史（逐轮存储） ──
 
     def save_turn(self, user_id: str, role: str, content: str, turn_index: int = 0):
@@ -232,7 +349,8 @@ class LongTermMemory:
                 "SELECT COALESCE(MAX(turn_index), -1) AS max_idx FROM conversation_history WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
-            next_idx = (row["max_idx"] or -1) + 1
+            # COALESCE 已把 NULL 兜底为 -1；勿用 `or -1`，turn_index=0 会被误判为 falsy 导致永远不递增
+            next_idx = row["max_idx"] + 1
             now = datetime.now().isoformat()
             conn.execute(
                 "INSERT INTO conversation_history (user_id, session_id, role, content, turn_index, created_at) VALUES (?, ?, ?, ?, ?, ?)",

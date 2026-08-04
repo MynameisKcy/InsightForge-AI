@@ -26,6 +26,8 @@ websockets==15.0.1
 pandas==2.3.3
 numpy==2.2.6
 duckdb==1.5.4
+openpyxl==3.1.5  # Excel(.xlsx/.xlsm) 读取引擎，pandas.read_excel 依赖
+xlrd==2.0.1  # Excel(.xls 老版二进制) 读取引擎，pandas.read_excel 依赖
 sqlglot==30.12.0  # SQL 沙箱 AST 校验（防多语句/文件读/SSRF/DDL 注入）
 SQLAlchemy==2.0.51
 
