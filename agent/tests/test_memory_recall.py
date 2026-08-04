@@ -17,9 +17,11 @@ rerank 够不到 DashScope:用例保持候选数 <= top_n,使 recall 跳过 rera
 import os
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -59,6 +61,7 @@ def _make_memory_store() -> VectorStoreService:
     """构造未初始化的 VectorStoreService,注入 in-memory Chroma(memory collection)。
 
     跳过真实 embed、persist 与 legacy owner 迁移;每次用唯一 collection 名隔离用例。
+    __new__ 跳过 __init__,需手动设 _lock(Fix C:并发串行化锁)。
     """
     vs = VectorStoreService.__new__(VectorStoreService)
     vs.collection_name = "memory"
@@ -67,6 +70,7 @@ def _make_memory_store() -> VectorStoreService:
         embedding_function=_FakeEmbed(),
     )
     vs.spliter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    vs._lock = threading.Lock()
     return vs
 
 
@@ -269,9 +273,33 @@ class MemoryRecallTests(unittest.TestCase):
         self.assertEqual(final, "")
         self.assertFalse(self.memory_store.retrieve_session_memories("x", "alice", k=10))
 
+    def test_recall_section_capped(self):
+        """召回节超 SECTION_CHAR_CAP 时截断（Fix B：约束字符兜底 token 估算偏差）。"""
+        from memory.recall import SECTION_CHAR_CAP
+        sid = self.ltm.create_session("alice", title="长摘要")
+        self.ltm.save_conversation_pair("alice", "q", "a", session_id=sid)
+        self.ltm.save_session_memory_meta(sid, "X" * (SECTION_CHAR_CAP + 800), -1)
+        self.recall.finalize_session(sid, "alice")
+        text = self.recall.recall("q", "alice", top_n=3, coarse_k=5)
+        self.assertLessEqual(len(text), SECTION_CHAR_CAP + 1)  # +1 末尾 …
+        self.assertTrue(text.endswith("…"))
 
-class RecallInjectionTests(unittest.TestCase):
-    """inject_recall：把跨会话召回前置为 system 消息（ADR-0003 Phase 4）。"""
+
+class _FakeRuntime:
+    def __init__(self, context=None):
+        self.context = context if context is not None else {}
+
+
+class _FakeModelRequest:
+    """鸭子类型 ModelRequest：_build_system_prompt 只读 .messages / .runtime.context。"""
+
+    def __init__(self, messages, runtime):
+        self.messages = messages
+        self.runtime = runtime
+
+
+class MiddlewareRecallInjectionTests(unittest.TestCase):
+    """召回注入移进 @dynamic_prompt 中间件（Fix A）：_build_system_prompt 统一管控。"""
 
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
@@ -283,6 +311,97 @@ class RecallInjectionTests(unittest.TestCase):
         self.recall = MemoryRecallService(
             ltm=self.ltm, memory_store=self.memory_store, summarizer=_FakeSummarizer()
         )
+        # session A（销售）终版摘要入库
+        self.sid_a = self.ltm.create_session("alice", title="销售分析")
+        self.ltm.save_conversation_pair("alice", "查山东销售", "山东销售100万", session_id=self.sid_a)
+        self.recall.finalize_session(self.sid_a, "alice")
+        # 设 contextvar（中间件 _recall_for_turn 经 get_user_id/get_session_id 读）
+        from utils.request_context import set_request_context
+        self._token = set_request_context(user_id="alice", session_id="sid_b")
+        # patch get_memory_recall -> 测试 recall service
+        self._patcher = patch("memory.recall.get_memory_recall", return_value=self.recall)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+        from utils.request_context import reset_request_context
+        reset_request_context(self._token)
+        try:
+            os.unlink(self.db_path)
+        except OSError:
+            pass
+
+    def test_normal_mode_appends_recall_e2e(self):
+        """e2e：session A(销售)结束 -> B 问"对比上次销售" -> system prompt 含 A 摘要。"""
+        from agent.tools.middleware import _build_system_prompt
+        req = _FakeModelRequest(
+            [{"role": "user", "content": "对比上次销售"}],
+            _FakeRuntime({"report": False}),
+        )
+        prompt = _build_system_prompt(req)
+        self.assertIn("## 历史会话记忆", prompt)
+        self.assertIn("销售", prompt)  # 命中 A 摘要
+
+    def test_report_mode_excludes_recall(self):
+        """报告模式不注入历史会话记忆（Fix A #1：防泄漏）。"""
+        from agent.tools.middleware import _build_system_prompt
+        req = _FakeModelRequest(
+            [{"role": "user", "content": "生成报告"}],
+            _FakeRuntime({"report": True}),
+        )
+        prompt = _build_system_prompt(req)
+        self.assertNotIn("## 历史会话记忆", prompt)
+
+    def test_recall_cached_within_turn(self):
+        """同轮多次模型调用：runtime.context 缓存，recall 只 embed 一次（Fix A 性能）。"""
+        from agent.tools.middleware import _build_system_prompt
+        calls = []
+        original = self.recall.recall
+
+        def counting(*a, **k):
+            calls.append(1)
+            return original(*a, **k)
+
+        self.recall.recall = counting
+        req = _FakeModelRequest(
+            [{"role": "user", "content": "对比上次销售"}],
+            _FakeRuntime({"report": False}),
+        )
+        _build_system_prompt(req)
+        _build_system_prompt(req)  # 同 request -> 同 runtime.context -> 缓存命中
+        self.assertEqual(len(calls), 1)
+
+    def test_no_recall_when_no_user_context(self):
+        """未设 contextvar（uid=default）时不召回，避免误用 default 用户记忆。"""
+        from utils.request_context import set_request_context, reset_request_context
+        tok = set_request_context(user_id="default", session_id="")
+        try:
+            from agent.tools.middleware import _build_system_prompt
+            req = _FakeModelRequest(
+                [{"role": "user", "content": "x"}],
+                _FakeRuntime({"report": False}),
+            )
+            prompt = _build_system_prompt(req)
+            self.assertNotIn("## 历史会话记忆", prompt)
+        finally:
+            reset_request_context(tok)
+
+
+class MemoryRecallConcurrencyTests(unittest.TestCase):
+    """memory collection 并发访问串行化（Fix C）：finalize 写 + recall 读 不崩不损坏。"""
+
+    def setUp(self):
+        fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(self.db_path)
+        self.ltm = LongTermMemory(db_path=self.db_path)
+        self.memory_store = _make_memory_store()
+        from memory.recall import MemoryRecallService
+        self.recall = MemoryRecallService(
+            ltm=self.ltm, memory_store=self.memory_store, summarizer=_FakeSummarizer()
+        )
+        self.sid = self.ltm.create_session("alice", title="销售")
+        self.ltm.save_conversation_pair("alice", "查销售", "销售100万", session_id=self.sid)
 
     def tearDown(self):
         try:
@@ -290,87 +409,28 @@ class RecallInjectionTests(unittest.TestCase):
         except OSError:
             pass
 
-    def test_inject_recall_prepends_system_message_e2e(self):
-        """e2e 叙事：session A(销售)结束 -> session B 问"对比上次销售" -> 召回命中 A 摘要。"""
-        sid_a = self.ltm.create_session("alice", title="销售分析")
-        self.ltm.save_conversation_pair("alice", "查山东销售", "山东销售100万", session_id=sid_a)
-        self.recall.finalize_session(sid_a, "alice")  # A 结束，终版摘要入库
+    def test_concurrent_finalize_and_recall_serialized(self):
+        """后台 finalize（写）与请求 recall（读）并发：加锁串行，不抛 database locked、终态一致。"""
+        errors = []
 
-        sid_b = self.ltm.create_session("alice", title="库存")
-        # B 问对比上次销售：inject_recall 应前置 A 的摘要为 system 消息
-        ctx = self.recall.inject_recall([], "对比上次销售", "alice", session_id=sid_b)
+        def finalize_loop():
+            try:
+                for _ in range(15):
+                    self.recall.finalize_session(self.sid, "alice")
+            except Exception as e:
+                errors.append(e)
 
-        self.assertEqual(ctx[0]["role"], "system")
-        self.assertIn("## 历史会话记忆", ctx[0]["content"])
-        self.assertIn("销售", ctx[0]["content"])  # 命中 A 的摘要
-
-    def test_inject_recall_no_op_when_no_memories(self):
-        ctx = self.recall.inject_recall([], "任意问题", "alice", session_id="s1")
-        self.assertEqual(ctx, [])  # 无召回，原样返回
-
-    def test_inject_recall_excludes_current_session(self):
-        sid_a = self.ltm.create_session("alice", title="销售")
-        self.ltm.save_conversation_pair("alice", "查销售", "销售100万", session_id=sid_a)
-        self.recall.finalize_session(sid_a, "alice")
-        sid_b = self.ltm.create_session("alice", title="库存")
-        self.ltm.save_conversation_pair("alice", "查库存", "库存50件", session_id=sid_b)
-        self.recall.finalize_session(sid_b, "alice")
-
-        # 在 A 中召回，排除 A -> 只剩 B
-        ctx = self.recall.inject_recall([], "数据", "alice", session_id=sid_a)
-        self.assertEqual(ctx[0]["role"], "system")
-        self.assertNotIn("销售100万", ctx[0]["content"])
-        self.assertIn("库存50件", ctx[0]["content"])
-
-    def test_inject_recall_preserves_existing_context(self):
-        sid = self.ltm.create_session("alice", title="销售")
-        self.ltm.save_conversation_pair("alice", "查销售", "销售100万", session_id=sid)
-        self.recall.finalize_session(sid, "alice")
-
-        existing = [{"role": "user", "content": "之前聊过啥"}, {"role": "assistant", "content": "嗯"}]
-        ctx = self.recall.inject_recall(existing, "销售", "alice", session_id="other")
-        # system 召回节在最前，原有上下文顺次保留
-        self.assertEqual(ctx[0]["role"], "system")
-        self.assertEqual(ctx[1], existing[0])
-        self.assertEqual(ctx[2], existing[1])
-
-
-class _FakeStreamAgent:
-    """伪 create_agent 产物：捕获 stream 入参 input_dict，不产出 chunk。"""
-
-    def __init__(self):
-        self.captured = None
-
-    def stream(self, input_dict, stream_mode="values", context=None):
-        self.captured = input_dict
-        return iter([])
-
-
-class ReactAgentRecallWiringTests(unittest.TestCase):
-    """ReactAgent._execute_stream_inner 透传 recall system 消息到 agent 输入（Phase 4 接线）。"""
-
-    def test_recall_system_message_reaches_agent_input(self):
-        from agent.react_agent import ReactAgent  # 懒导入：仅本用例承担 agent_tools 构造开销
-        r = ReactAgent.__new__(ReactAgent)  # 绕开 create_agent（真实 LLM）
-        fake = _FakeStreamAgent()
-        r.agent = fake
-
-        recall_msg = {"role": "system",
-                      "content": "## 历史会话记忆\n1. [销售分析 | 2026-08-03] 山东销售100万"}
-        history = [recall_msg, {"role": "user", "content": "之前聊过啥"},
-                   {"role": "assistant", "content": "嗯"}]
-
-        list(r._execute_stream_inner("对比上次销售", history=history,
-                                     user_id="alice", session_id=""))
-
-        msgs = fake.captured["messages"]
-        # recall system 消息被透传到 agent 输入
-        self.assertTrue(
-            any(m["role"] == "system" and "历史会话记忆" in m["content"] for m in msgs),
-            "recall system 消息应进入 agent 的 messages 输入",
-        )
-        # 当前 query 作为最后一条 user 消息追加
-        self.assertTrue(any(m["role"] == "user" and m["content"] == "对比上次销售" for m in msgs))
+        t = threading.Thread(target=finalize_loop)
+        t.start()
+        try:
+            for _ in range(15):
+                self.recall.recall("销售", "alice", exclude_session_id="other")
+        except Exception as e:
+            errors.append(e)
+        t.join()
+        self.assertFalse(errors, f"并发访问出错: {errors}")
+        # 终态一致：A 摘要仍可召回
+        self.assertIn("销售", self.recall.recall("销售", "alice", exclude_session_id="other"))
 
 
 if __name__ == "__main__":

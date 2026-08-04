@@ -1,6 +1,7 @@
 import json
 import os.path
 import sys
+import threading
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -68,6 +69,9 @@ class VectorStoreService:
         # 仅默认知识库 collection 做历史 owner 迁移；memory collection 无历史分片，跳过
         if self.collection_name == chroma_conf["collection_name"]:
             self._migrate_legacy_owner()
+        # memory collection 并发访问锁：闲置 finalize（后台线程写）与 recall（请求线程读）
+        # 同一 memory store 单例，串行化避免 chroma/sqlite 并发竞态（ADR-0003 Phase 4 修订）
+        self._lock = threading.Lock()
 
     # ── owner 过滤器 ──
     @staticmethod
@@ -392,36 +396,59 @@ class VectorStoreService:
 
     def add_session_memory(self, user_id: str, session_id: str, summary: str,
                            title: str = "", ended_at: str = "") -> None:
-        """写入/更新一条会话终版摘要到 memory collection（按 session_id upsert）。
+        """写入/更新一条会话终版摘要到 memory collection（按 session_id 原子 upsert）。
 
-        先按 session_id(+owner) 清旧 embedding，再写入新 Document，保证同会话仅一份。
-        空 summary 不写入。
+        用 chromadb Collection.upsert(ids=[mem:{session_id}]) 单次 insert-or-replace，
+        无 delete-then-add 空窗：旧 delete 成功而 add 失败导致摘要静默丢失的风险消除。
+        加锁串行化与 recall 读的并发（同一 memory store 单例）。
         """
         if not summary or not summary.strip():
             return
-        self.delete_session_memory(session_id, user_id)  # upsert：先清旧
-        doc = Document(
-            page_content=summary,
-            metadata={
-                "user_id": user_id,
-                "session_id": session_id,
-                "title": title or "",
-                "ended_at": ended_at or "",
-                "source": f"memory:{session_id}",
-            },
+        col = getattr(self.vector_store, "_collection", None) or getattr(self.vector_store, "collection", None)
+        if col is None:
+            logger.warning("add_session_memory: 无底层 collection")
+            return
+        meta = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "title": title or "",
+            "ended_at": ended_at or "",
+            "source": f"memory:{session_id}",
+        }
+        # 显式预计算 embedding 并连同 documents 一起 upsert：
+        # 直接 col.upsert(documents=...) 会触发 chromadb 自带 embedding_function
+        # （默认 ONNX 远程下载，或与 langchain 注入的不一致），在离线/测试环境 SSL 超时。
+        # 用 langchain 注入的 embedding_function 先 embed，再传 embeddings= 跳过 chromadb 内部 embed，
+        # documents= 仅作原文存储（保留 page_content 供召回展示）。
+        embed_fn = getattr(self.vector_store, "embedding_function", None) or getattr(
+            self.vector_store, "_embedding_function", None
         )
-        try:
-            self.vector_store.add_documents([doc])
-            logger.info(f"Memory recall: upserted summary for session {session_id} (owner={user_id})")
-        except Exception as e:
-            logger.warning(f"add_session_memory failed: {e}")
+        with self._lock:
+            try:
+                if embed_fn is not None:
+                    emb = embed_fn.embed_documents([summary])
+                    col.upsert(
+                        ids=[f"mem:{session_id}"],
+                        embeddings=emb,
+                        documents=[summary],
+                        metadatas=[meta],
+                    )
+                else:
+                    col.upsert(
+                        ids=[f"mem:{session_id}"],
+                        documents=[summary],
+                        metadatas=[meta],
+                    )
+                logger.info(f"Memory recall: upserted summary for session {session_id} (owner={user_id})")
+            except Exception as e:
+                logger.warning(f"add_session_memory failed: {e}")
 
     def retrieve_session_memories(self, query: str, user_id: str | None = None,
                                   k: int = 5, exclude_session_id: str | None = None):
         """召回该用户的历史会话终版摘要（owner 过滤：仅自己，不含公共 system）。
 
         exclude_session_id 给定时排除当前会话（避免召回自己刚 finalize 的摘要）。
-        user_id 为空时全量（兼容场景）。
+        user_id 为空时全量（兼容场景）。加锁与 finalize 写串行化。
         """
         try:
             flt = self._owner_filter(user_id, include_public=False)  # 仅自己
@@ -433,7 +460,8 @@ class VectorStoreService:
             kwargs = {"k": k}
             if flt:
                 kwargs["filter"] = flt
-            return self.vector_store.similarity_search(query, **kwargs)
+            with self._lock:
+                return self.vector_store.similarity_search(query, **kwargs)
         except Exception as e:
             logger.warning(f"retrieve_session_memories failed: {e}")
             return []
@@ -442,14 +470,15 @@ class VectorStoreService:
         """按 session_id(+owner) 删除其终版摘要 embedding（删会话 / upsert 清旧时调用）。
 
         多条件用 $and 显式组合：chromadb delete(where=...) 只接受单一操作符，
-        直接写 {"session_id":..,"user_id":..} 会被拒（与 _where_source_owner 同理）。
+        直接写 {"session_id":..,"user_id":..} 会被拒（与 _where_source_owner 同理）。加锁串行化。
         """
         if user_id:
             where = {"$and": [{"session_id": session_id}, {"user_id": user_id}]}
         else:
             where = {"session_id": session_id}
         try:
-            self.vector_store.delete(where=where)
+            with self._lock:
+                self.vector_store.delete(where=where)
         except Exception as e:
             logger.warning(f"delete_session_memory failed: {e}")
 

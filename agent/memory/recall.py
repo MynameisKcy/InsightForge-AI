@@ -30,6 +30,7 @@ MEMORY_RECALL_COARSE_K = 5       # 粗召回候选数（rerank 前）
 MEMORY_RECALL_TOP_N = 3          # rerank 后保留数
 MEMORY_RERANK_SCORE_THRESHOLD = 0.3  # rerank 分数阈值，低于丢弃
 SESSION_IDLE_SECONDS = 1800      # 闲置 30min 视为可 finalize
+SECTION_CHAR_CAP = 2000          # 召回节硬限长（字符），约束字符兜底 token 估算偏差
 
 
 class MemoryRecallService:
@@ -172,7 +173,12 @@ class MemoryRecallService:
 
     @staticmethod
     def _format_memory_section(docs: list) -> str:
-        """把召回的终版摘要格式化为 "## 历史会话记忆" 节，带标题与日期。"""
+        """把召回的终版摘要格式化为 "## 历史会话记忆" 节，带标题与日期。
+
+        硬限长 SECTION_CHAR_CAP：召回节不计入 Session Memory 的字符兜底 token 估算
+        （实测 input_tokens 路径已含召回，是准的；字符兜底仅首轮/压缩后用、窗口小），
+        限长把兜底路径的偏差硬约束，避免召回膨胀撑爆上下文。
+        """
         lines = ["## 历史会话记忆"]
         for i, d in enumerate(docs, start=1):
             meta = d.metadata or {}
@@ -188,7 +194,10 @@ class MemoryRecallService:
             elif date_text:
                 head += f"[{date_text}] "
             lines.append(head + d.page_content.strip())
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        if len(text) > SECTION_CHAR_CAP:
+            text = text[:SECTION_CHAR_CAP] + "…"
+        return text
 
     def delete_session_memory(self, session_id: str, user_id: str | None = None) -> None:
         """清理某会话的终版摘要 embedding（删会话时调用）。"""
@@ -196,27 +205,6 @@ class MemoryRecallService:
             self.memory_store.delete_session_memory(session_id, user_id)
         except Exception as e:
             logger.warning(f"delete_session_memory failed: {e}")
-
-    # ── 召回注入（ADR-0003 Phase 4）：前置历史会话记忆到聊天上下文 ──
-    def inject_recall(self, mem_context: list[dict], query: str, user_id: str,
-                      session_id: str = "") -> list[dict]:
-        """把跨会话召回的终版摘要作为 system 消息前置到 mem_context；无召回/失败则原样返回。
-
-        供 /api/chat 在调用 ReactAgent 前注入「## 历史会话记忆」节。排除当前会话
-        （其上下文已在 mem_context 的滚动摘要 + 最近轮次里），避免召回自身。
-        ReactAgent._execute_stream_inner 透传 system 角色，故召回节会进入 LLM 输入。
-        """
-        if not query or not user_id:
-            return mem_context
-        try:
-            text = self.recall(query, user_id, exclude_session_id=session_id or None)
-        except Exception as e:
-            logger.warning(f"inject_recall recall failed: {e}")
-            return mem_context
-        if not text:
-            return mem_context
-        logger.info(f"Inject recall for user {user_id} session {session_id} ({len(text)} chars)")
-        return [{"role": "system", "content": text}] + list(mem_context)
 
     # ── 闲置检测：fire-and-forget ──
     def finalize_idle_sessions(self, user_id: str, except_session_id: str = "",
