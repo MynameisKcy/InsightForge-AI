@@ -63,8 +63,12 @@ class MemoryRecallService:
     @property
     def summarizer(self):
         if self._summarizer is None:
-            from memory.summarizer import ConversationSummarizer
-            self._summarizer = ConversationSummarizer()
+            from memory.short_term import _summarizer_factory
+            if _summarizer_factory:
+                self._summarizer = _summarizer_factory()
+            else:
+                from memory.summarizer import ConversationSummarizer
+                self._summarizer = ConversationSummarizer(lambda msgs: "")
         return self._summarizer
 
     # ── 会话结束：写终版摘要 ──
