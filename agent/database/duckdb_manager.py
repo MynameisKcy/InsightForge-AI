@@ -210,8 +210,19 @@ class DuckDBManager:
             # 自动提取并持久化客户数据
             self._extract_and_persist_customers()
         except Exception as e:
-            logger.error(f"Failed to load CSV {csv_path}: {e}")
-            raise
+            # read_csv_auto 默认 UTF-8，遇 GBK/GB18030 等非 UTF-8 中文 CSV 会因
+            # "Invalid unicode" 失败。回退到 pandas 多编码解码（与 load_csv_dataset 一致）。
+            logger.warning(f"_load_csv: read_csv_auto failed ({e}); trying pandas fallback")
+            fallback_err = self._load_csv_via_pandas(csv_path, self.table_name)
+            if fallback_err is not None:
+                logger.error(f"Failed to load CSV {csv_path}: {fallback_err}")
+                raise
+            row_count = self.conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name}"
+            ).fetchone()[0]
+            logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}' (pandas fallback)")
+            self.last_loaded_csv = csv_path
+            self._extract_and_persist_customers()
 
     def _extract_and_persist_customers(self):
         """从已加载的 DuckDB 表中提取唯一客户数据，持久化到 SQLite。"""
