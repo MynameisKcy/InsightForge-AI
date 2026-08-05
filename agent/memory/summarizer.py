@@ -4,6 +4,7 @@ Conversation Summarizer: 使用 LLM 将多轮对话压缩为简短摘要。
 
 import os
 import sys
+from typing import Callable
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -35,14 +36,14 @@ SUMMARY_PROMPT = """你是一个对话摘要生成器。请将以下对话历史
 
 
 class ConversationSummarizer:
-    """使用 LLM 将对话压缩为摘要。"""
+    """使用 LLM 将对话压缩为摘要。
 
-    def __init__(self):
-        try:
-            from agents.base import BaseAgent
-        except ModuleNotFoundError:
-            from agent.agents.base import BaseAgent
-        self.base = BaseAgent()
+    llm_callable 由调用方注入，接受 messages: list[dict] 返回 str。
+    打破了对 agents.base.BaseAgent 的循环依赖（memory → agents → memory）。
+    """
+
+    def __init__(self, llm_callable: Callable[[list[dict]], str]):
+        self._call_llm = llm_callable
 
     def summarize(self, turns: list[dict], previous_summary: str = "") -> str:
         """将 turns 列表压缩为摘要文本。"""
@@ -58,7 +59,7 @@ class ConversationSummarizer:
         messages = [{"role": "user", "content": prompt}]
 
         try:
-            summary = self.base._call_llm(messages)
+            summary = self._call_llm(messages)
             return summary.strip()[:500]  # 限制摘要长度
         except Exception as e:
             logger.warning(f"Conversation summarization failed: {e}")
