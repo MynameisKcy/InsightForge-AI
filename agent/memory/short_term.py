@@ -234,10 +234,25 @@ def _get_ltm():
     return _ltm
 
 
+_summarizer_factory = None
+
+
+def set_summarizer_factory(factory):
+    """设置 summarizer 工厂（由 MemoryService 在初始化时调用）。
+
+    打破 memory → agents 的循环依赖：llm_callable 由上层注入，
+    ConversationSummarizer 不再自行导入 BaseAgent。
+    """
+    global _summarizer_factory
+    _summarizer_factory = factory
+
+
 def _get_summarizer():
     """获取 ConversationSummarizer 实例（无状态，每次新建）。"""
+    if _summarizer_factory:
+        return _summarizer_factory()
     from memory.summarizer import ConversationSummarizer
-    return ConversationSummarizer()
+    return ConversationSummarizer(lambda msgs: "")
 
 
 # 全局会话内存池（按 session_id 索引，LRU）

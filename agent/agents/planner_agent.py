@@ -2,11 +2,9 @@
 Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，调度 Agent 执行。
 """
 
-import json
 import os
 import sys
 import traceback
-from typing import Any
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -16,14 +14,18 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
 
 from agents.base import BaseAgent
 from agents.sql_agent import SQLAgent
-from agents.trend_agent import TrendAgent
-from agents.product_agent import ProductAgent
-from agents.risk_agent import RiskAgent
+from agents.analysis_agent import AnalysisAgent
 from agents.visualization_agent import VisualizationAgent
 from agents.report_agent import ReportAgent
 from agents.export_agent import ExportAgent
+from agents.pipeline_context import PipelineContext
+from analysis.analysis_module import (
+    TrendAnalysisAdapter,
+    ProductAnalysisAdapter,
+    RiskAnalysisAdapter,
+)
 from utils.logger_handler import logger
-from memory.short_term import ConversationMemory, get_session
+from memory.short_term import get_session
 
 try:
     from database.data_resolver import DataResolver
@@ -116,9 +118,9 @@ class PlannerAgent(BaseAgent):
     def __init__(self, user_id=None):
         super().__init__(user_id)   # self.model = 该用户的 LLM（按 user_id 缓存）
         self.sql_agent = SQLAgent()
-        self.trend_agent = TrendAgent()
-        self.product_agent = ProductAgent()
-        self.risk_agent = RiskAgent()
+        self.trend_agent = AnalysisAgent(TrendAnalysisAdapter())
+        self.product_agent = AnalysisAgent(ProductAnalysisAdapter())
+        self.risk_agent = AnalysisAgent(RiskAnalysisAdapter())
         self.viz_agent = VisualizationAgent()
         self.report_agent = ReportAgent()
         self.export_agent = ExportAgent()
@@ -237,67 +239,58 @@ class PlannerAgent(BaseAgent):
         })
 
         # 2. 按计划执行
-        results = {}
-        errors = []
+        pctx = PipelineContext(title=title)
 
         for step in plan:
             agent_name = step.get("agent", "")
             task = step.get("task", query)
             depends = step.get("depends_on", [])
+            step_num = step.get("step", 0)
 
             # 检查依赖是否完成
-            skip = False
-            for dep in depends:
-                dep_key = f"step_{dep}"
-                if dep_key not in results or results[dep_key] is None:
-                    logger.warning(f"Step {step.get('step')} depends on step {dep} which is not ready")
-                    skip = True
-
-            if skip:
+            if not all(d in pctx.completed_steps for d in depends):
+                logger.warning(f"Step {step_num} depends on {depends} which is not ready, skipping")
                 continue
 
-            step_key = f"step_{step.get('step')}"
-            logger.info(f"Executing step {step.get('step')}: {agent_name} - {task}")
+            logger.info(f"Executing step {step_num}: {agent_name} - {task}")
 
-            self._emit_progress("step_start", {"step": step.get("step")})
+            self._emit_progress("step_start", {"step": step_num})
             step_ok = False
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
-                    step_result = handler(task, results, ctx)
-                    results[step_key] = step_result
-                    results[f"{agent_name}_result"] = step_result
+                    handler(task, pctx, ctx)
+                    # 将结果写入 PipelineContext（handler 已通过 pctx 写入）
+                    pctx.completed_steps.add(step_num)
                     step_ok = True
                 else:
-                    errors.append(f"Unknown agent: {agent_name}")
-                    results[step_key] = None
+                    pctx.errors.append(f"Unknown agent: {agent_name}")
             except Exception as e:
-                logger.error(f"Step {step.get('step')} ({agent_name}) failed: {e}")
+                logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
                 logger.error(traceback.format_exc())
-                errors.append(f"Step {step.get('step')} failed: {e}")
-                results[step_key] = None
+                pctx.errors.append(f"Step {step_num} failed: {e}")
             # 仅成功才标记完成；失败（异常或未知 agent）标记 error，
             # 避免 UI 把失败步骤误显示为 ✓（前端 step-progress step_error 分支）
             if step_ok:
-                self._emit_progress("step_done", {"step": step.get("step")})
+                self._emit_progress("step_done", {"step": step_num})
             else:
-                self._emit_progress("step_error", {"step": step.get("step")})
+                self._emit_progress("step_error", {"step": step_num})
 
         # 3. 汇总结果
         return {
             "query": query,
-            "title": title,
+            "title": pctx.title,
             "reasoning": reasoning,
             "plan": plan,
-            "results": results,
-            "errors": errors,
-            "report": results.get("report_result", results.get("report", {})),
-            "exports": results.get("export_result", results.get("export", {})),
+            "results": pctx,
+            "errors": pctx.errors,
+            "report": pctx.report_result or {},
+            "exports": pctx.export_result or {},
             "dataset": {
                 "name": ctx.dataset_name,
                 "csv_path": ctx.csv_path,
             },
-            "success": len(errors) == 0,
+            "success": pctx.success,
         }
 
     def _format_history(self, history: list[dict]) -> str:
@@ -368,151 +361,137 @@ class PlannerAgent(BaseAgent):
         logger.info(f"Planner created plan with {len(plan)} steps: {[s['agent'] for s in plan]}")
 
         # 2. 按计划逐步执行
-        results = {}
-        errors = []
+        pctx = PipelineContext(title=title)
 
         for step in plan:
             agent_name = step.get("agent", "")
             task = step.get("task", query)
             depends = step.get("depends_on", [])
 
+            step_num = step.get("step", 0)
+
             # 检查依赖
-            skip = False
-            for dep in depends:
-                dep_key = f"step_{dep}"
-                if dep_key not in results or results[dep_key] is None:
-                    logger.warning(f"Step {step.get('step')} depends on step {dep} which is not ready")
-                    skip = True
-
-            if skip:
+            if not all(d in pctx.completed_steps for d in depends):
+                logger.warning(f"Step {step_num} depends on {depends} which is not ready, skipping")
                 continue
-
-            step_num = step.get("step")
-            step_key = f"step_{step_num}"
 
             yield ("step_start", {"step": step_num, "agent": agent_name, "task": task})
             yield ("status", f"步骤 {step_num}: {task}...")
 
+            step_ok = False
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
-                    step_result = handler(task, results, ctx)
-                    results[step_key] = step_result
-                    results[f"{agent_name}_result"] = step_result
+                    handler(task, pctx, ctx)
+                    pctx.completed_steps.add(step_num)
+                    step_ok = True
                     yield ("step_done", {"step": step_num, "agent": agent_name})
                 else:
-                    errors.append(f"Unknown agent: {agent_name}")
-                    results[step_key] = None
+                    pctx.errors.append(f"Unknown agent: {agent_name}")
                     yield ("step_done", {"step": step_num, "agent": agent_name})
             except Exception as e:
                 logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
                 logger.error(traceback.format_exc())
-                errors.append(f"Step {step_num} failed: {e}")
-                results[step_key] = None
+                pctx.errors.append(f"Step {step_num} failed: {e}")
                 yield ("step_done", {"step": step_num, "agent": agent_name})
 
         # 3. 输出图表
-        viz_result = results.get("visualization_result", {})
-        charts = viz_result.get("charts", []) if viz_result else []
-        if charts:
-            yield ("charts", charts)
+        if pctx.charts:
+            yield ("charts", pctx.charts)
 
         # 4. 输出导出文件
-        export_result = results.get("export_result", {})
-        export_files = export_result.get("files", []) if export_result else []
-        if export_files:
-            yield ("exports", export_files)
+        if pctx.export_files:
+            yield ("exports", pctx.export_files)
 
         # 5. 输出最终报告
-        report = results.get("report_result", results.get("report", {}))
-        markdown = report.get("markdown", "")
-        if markdown:
-            yield ("report", markdown)
+        if pctx.report_markdown:
+            yield ("report", pctx.report_markdown)
 
         # 6. 完成
         final_result = {
             "query": query,
-            "title": title,
+            "title": pctx.title,
             "plan": plan,
-            "results": results,
-            "errors": errors,
-            "report": report,
-            "exports": export_result,
+            "results": pctx,
+            "errors": pctx.errors,
+            "report": pctx.report_result or {},
+            "exports": pctx.export_result or {},
             "dataset": {
                 "name": ctx.dataset_name,
                 "csv_path": ctx.csv_path,
             },
-            "success": len(errors) == 0,
+            "success": pctx.success,
         }
         yield ("done", final_result)
 
     # ── Agent 执行方法 ──
 
-    def _run_sql(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_sql(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行 SQL 查询（按 ctx.user_id 隔离数据层）。"""
-        return self.sql_agent.run({"task": task, "user_id": ctx.user_id})
+        result = self.sql_agent.run({"task": task, "user_id": ctx.user_id})
+        pctx.sql_result = result
+        # SQLAgent 成功时返回 {"error": None, ...}，失败时 {"error": "msg", ...}。
+        # 必须用 not result.get("error") 判断（key 恒存在，None 表示成功），
+        # 不能用 "error" not in result（恒为 False，导致 dataframe_json 永不赋值）。
+        if not result.get("error"):
+            pctx.dataframe_json = result.get("dataframe_json", "[]")
 
-    def _run_trend(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_trend(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行趋势分析。"""
-        sql_data = prev_results.get("sql_query_result", {})
-        df_json = sql_data.get("dataframe_json", "[]")
-        if not df_json or df_json == "[]":
-            return {"error": "No data from SQL agent for trend analysis"}
-        return self.trend_agent.run({
-            "dataframe_json": df_json,
+        if not pctx.dataframe_json or pctx.dataframe_json == "[]":
+            pctx.trend_result = {"error": "No data from SQL agent for trend analysis"}
+            return
+        pctx.trend_result = self.trend_agent.run({
+            "dataframe_json": pctx.dataframe_json,
             "task": task,
         })
 
-    def _run_product(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_product(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行产品分析。"""
-        sql_data = prev_results.get("sql_query_result", {})
-        df_json = sql_data.get("dataframe_json", "[]")
-        if not df_json or df_json == "[]":
-            return {"error": "No data from SQL agent for product analysis"}
-        return self.product_agent.run({
-            "dataframe_json": df_json,
+        if not pctx.dataframe_json or pctx.dataframe_json == "[]":
+            pctx.product_result = {"error": "No data from SQL agent for product analysis"}
+            return
+        pctx.product_result = self.product_agent.run({
+            "dataframe_json": pctx.dataframe_json,
             "task": task,
         })
 
-    def _run_risk(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_risk(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行风险分析。"""
-        sql_data = prev_results.get("sql_query_result", {})
-        df_json = sql_data.get("dataframe_json", "[]")
-        if not df_json or df_json == "[]":
-            return {"error": "No data from SQL agent for risk analysis"}
-        return self.risk_agent.run({
-            "dataframe_json": df_json,
+        if not pctx.dataframe_json or pctx.dataframe_json == "[]":
+            pctx.risk_result = {"error": "No data from SQL agent for risk analysis"}
+            return
+        pctx.risk_result = self.risk_agent.run({
+            "dataframe_json": pctx.dataframe_json,
             "task": task,
         })
 
-    def _run_visualization(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_visualization(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """生成图表。"""
-        sql_data = prev_results.get("sql_query_result", {})
-        df_json = sql_data.get("dataframe_json", "[]")
         extra = {
-            "trend_summary": prev_results.get("trend_analysis_result", {}),
-            "product_summary": prev_results.get("product_analysis_result", {}),
+            "trend_summary": pctx.trend_result or {},
+            "product_summary": pctx.product_result or {},
         }
-        return self.viz_agent.run({
-            "dataframe_json": df_json,
+        pctx.visualization_result = self.viz_agent.run({
+            "dataframe_json": pctx.dataframe_json,
             "task": task,
             "extra_data": extra,
         })
 
-    def _run_report(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_report(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """生成报告。"""
-        charts = prev_results.get("visualization_result", {}).get("charts", [])
-        return self.report_agent.run({
+        charts = pctx.charts
+        pctx.report_result = self.report_agent.run({
             "task": task,
-            "sql_result": prev_results.get("sql_query_result", {}),
-            "trend_result": prev_results.get("trend_analysis_result", {}),
-            "product_result": prev_results.get("product_analysis_result", {}),
-            "risk_result": prev_results.get("risk_analysis_result", {}),
+            "sql_result": pctx.sql_result or {},
+            "trend_result": pctx.trend_result or {},
+            "product_result": pctx.product_result or {},
+            "risk_result": pctx.risk_result or {},
             "charts": charts,
-            "title": task,
+            "title": pctx.title or task,
         })
 
-    def _run_export(self, task: str, prev_results: dict, ctx: "RequestContext") -> dict:
+    def _run_export(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """导出报告。
 
         导出格式按用户原始请求（ctx.query）解析：用户显式提到 Word/PDF/HTML/Markdown
@@ -520,12 +499,13 @@ class PlannerAgent(BaseAgent):
         提示词宣传的 Word/PDF 永远不会产出（export_agent 本身支持 md/docx/pdf/html，且
         依赖库缺失时优雅降级，见 export_agent._docx_available/_pdf_available）。
         """
-        report = prev_results.get("report_result", {})
+        report = pctx.report_result or {}
         markdown = report.get("markdown", "")
         title = report.get("title", "分析报告")
         if not markdown:
-            return {"error": "No report content to export", "files": []}
-        return self.export_agent.run({
+            pctx.export_result = {"error": "No report content to export", "files": []}
+            return
+        pctx.export_result = self.export_agent.run({
             "markdown": markdown,
             "title": title,
             "formats": self._resolve_export_formats(ctx.query),
