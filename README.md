@@ -40,6 +40,13 @@
 
 ## 为什么不同
 
+<p align="center">
+  <img src="./assets/readme/features.svg" width="100%" alt="InsightForge AI 9 大核心能力">
+</p>
+
+<details>
+<summary><b>展开查看详情</b></summary>
+
 - 🔌 **单入口 + LLM 自主路由** — 15 个工具动态决策，一句话触发全链路分析，无需手动选择分析类型
 - 🛡️ **sqlglot AST 级 SQL 只读沙箱** — 拦截注入与 DDL/DML，`safe_ident` 转义标识符，安全执行用户查询
 - 🗄️ **按用户隔离的内存 DuckDB OLAP** — 支持跨源 JOIN（MySQL / PostgreSQL），多用户数据完全隔离
@@ -50,27 +57,19 @@
 - ⚙️ **配置热重载** — 网页端修改 API Key / 模型名即时生效，免重启；密钥 Fernet 加密本地存储
 - 📡 **SSE 实时进度推送** — 步骤清单实时更新 + 15s 心跳保活，长任务进度透明可见
 
+</details>
+
 ---
 
 ## 如何工作
 
-```
-用户提问 → PlannerAgent 生成执行计划 → 调度执行
-                                          │
-    ┌─────────────────────────────────────┼─────────────────────────────────────┐
-    ▼                                     ▼                                     ▼
-SQLAgent                            AnalysisAgent                      VisualizationAgent
-(DuckDB 多表查询)                    (趋势/分组/异常检测)                  (Plotly 交互图表)
-    │                                     │                                     │
-    └─────────────────────────────────────┼─────────────────────────────────────┘
-                                          ▼
-                                   ReportAgent
-                                   (文本分析报告)
-                                          │
-                                          ▼
-                                   ExportAgent
-                                   (Word/PDF/HTML/MD)
-```
+<p align="center">
+  <img src="./assets/readme/workflow.svg" width="100%" alt="InsightForge AI 分析流水线：用户提问 → PlannerAgent → SQLAgent/AnalysisAgent/VisualizationAgent → ReportAgent → ExportAgent">
+</p>
+
+<p align="center">
+  <img src="./assets/readme/architecture.svg" width="100%" alt="InsightForge AI 四层系统架构：前端层 → API 层 → Agent 层 → 数据层">
+</p>
 
 完整架构文档见 [架构总览](docs/ARCHITECTURE.md) 与 [核心设计深度剖析](docs/DESIGN_DETAILS.md)。
 

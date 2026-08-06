@@ -1,0 +1,233 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="720" viewBox="0 0 1200 720"
+     role="img" aria-labelledby="feat-title feat-desc">
+  <title id="feat-title">InsightForge AI 核心能力</title>
+  <desc id="feat-desc">9 大核心能力：单入口 LLM 自主路由、SQL 只读沙箱、用户隔离 DuckDB OLAP、两阶段 RAG、两级记忆、Schema 语义画像、多格式报告导出、配置热重载、SSE 进度推送</desc>
+
+  <defs>
+    <linearGradient id="fBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B0F19"/>
+      <stop offset="100%" stop-color="#101624"/>
+    </linearGradient>
+    <linearGradient id="fAmber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F0883E"/>
+      <stop offset="100%" stop-color="#E0682A"/>
+    </linearGradient>
+    <linearGradient id="fBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5B9EFF"/>
+      <stop offset="100%" stop-color="#3D7EE8"/>
+    </linearGradient>
+    <linearGradient id="fGreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="fPurple" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="fPink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F472B6"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+    <linearGradient id="fCyan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="720" rx="20" fill="url(#fBg)"/>
+
+  <!-- Section label -->
+  <text x="600" y="42" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+        font-size="16" font-weight="600" fill="#7888A0" text-anchor="middle" letter-spacing="3">
+    KEY CAPABILITIES
+  </text>
+
+  <!-- Row 1: cards 1-3 -->
+  <!-- Card 1: 单入口 LLM 自主路由 -->
+  <g transform="translate(36, 72)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <!-- Icon -->
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#F0883E" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#F0883E" text-anchor="middle">◎</text>
+    <!-- Title -->
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">单入口 LLM 自主路由</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#F0883E" opacity="0.6">Smart Routing</text>
+    <!-- Description -->
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">15 个工具动态决策，LLM 依据工具描述</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">自主选择：直接作答 · RAG 问答 · 全链路</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">分析，一句话触发完整流水线</text>
+    <!-- Tag -->
+    <rect x="24" y="158" width="64" height="18" rx="5" fill="#F0883E" fill-opacity="0.12" stroke="#F0883E" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="56" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#F0883E" text-anchor="middle">ReAct</text>
+  </g>
+
+  <!-- Card 2: SQL 只读沙箱 -->
+  <g transform="translate(420, 72)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#34D399" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#34D399" text-anchor="middle">🛡</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">sqlglot AST 级 SQL 只读沙箱</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#34D399" opacity="0.6">SQL Sandbox</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">AST 解析 + 白名单关键字 + 禁止关键</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">词扫描，拦截 DDL/DML 注入攻击；</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">safe_ident 转义标识符，双重安全保障</text>
+    <rect x="24" y="158" width="48" height="18" rx="5" fill="#34D399" fill-opacity="0.12" stroke="#34D399" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="48" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#34D399" text-anchor="middle">安全</text>
+  </g>
+
+  <!-- Card 3: 用户隔离 DuckDB -->
+  <g transform="translate(804, 72)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#5B9EFF" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#5B9EFF" text-anchor="middle">◫</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">多用户隔离内存 DuckDB OLAP</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#5B9EFF" opacity="0.6">Multi-Tenant OLAP</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">按用户 :memory: 实例隔离，contextvars</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">传播 user_id；支持 postgres_scan /</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">mysql_scan 跨源 JOIN 外部数据库</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#5B9EFF" fill-opacity="0.12" stroke="#5B9EFF" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#5B9EFF" text-anchor="middle">隔离·跨源</text>
+  </g>
+
+  <!-- Row 2: cards 4-6 -->
+  <!-- Card 4: 两阶段 RAG -->
+  <g transform="translate(36, 282)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#A78BFA" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#A78BFA" text-anchor="middle">🔍</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">两阶段 RAG 检索</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#A78BFA" opacity="0.6">Two-Stage Retrieval</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">ChromaDB 粗召 (k=15) → DashScope</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">gte-rerank-v2 精排 (top_n=3, 阈值</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">0.3)；图表知识库 jieba 中文分词</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#A78BFA" fill-opacity="0.12" stroke="#A78BFA" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#A78BFA" text-anchor="middle">粗召+精排</text>
+  </g>
+
+  <!-- Card 5: 两级记忆 -->
+  <g transform="translate(420, 282)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#F472B6" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#F472B6" text-anchor="middle">🧠</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">两级记忆系统</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#F472B6" opacity="0.6">Two-Tier Memory</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">Session 级隔离 + LRU 池化 + 90%</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">上下文预算智能压缩；跨会话语义</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">召回，ChromaDB 存储 + rerank 注入</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#F472B6" fill-opacity="0.12" stroke="#F472B6" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#F472B6" text-anchor="middle">会话+长期</text>
+  </g>
+
+  <!-- Card 6: Schema 语义画像 -->
+  <g transform="translate(804, 282)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#22D3EE" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#22D3EE" text-anchor="middle">◈</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">Schema 语义画像</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#22D3EE" opacity="0.6">Semantic Profiling</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">列级统计 + 宽表检测 + 语义标签，</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">自动注入 SQL 生成提示；脏数据自</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">适应清洗，无需用户预处理数据</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#22D3EE" fill-opacity="0.12" stroke="#22D3EE" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#22D3EE" text-anchor="middle">自适应清洗</text>
+  </g>
+
+  <!-- Row 3: cards 7-9 -->
+  <!-- Card 7: 多格式报告导出 -->
+  <g transform="translate(36, 492)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#34D399" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#34D399" text-anchor="middle">📄</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">多格式报告导出</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#34D399" opacity="0.6">Multi-Format Export</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">Word / Markdown / PDF / HTML 一键</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">导出；Plotly 图表 kaleido 栅格化</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">嵌入，PDF 内置 Windows 中文字体</text>
+    <rect x="24" y="158" width="84" height="18" rx="5" fill="#34D399" fill-opacity="0.12" stroke="#34D399" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="66" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#34D399" text-anchor="middle">4种格式·PNG</text>
+  </g>
+
+  <!-- Card 8: 配置热重载 -->
+  <g transform="translate(420, 492)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#F0883E" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#F0883E" text-anchor="middle">⚙</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">配置热重载</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#F0883E" opacity="0.6">Hot Reload</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">网页端修改 API Key / 模型名即时生</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">效，无需重启服务；Fernet 加密存</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">储，掩码回显；网页配置优先于 .env</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#F0883E" fill-opacity="0.12" stroke="#F0883E" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#F0883E" text-anchor="middle">免重启·加密</text>
+  </g>
+
+  <!-- Card 9: SSE 进度推送 -->
+  <g transform="translate(804, 492)">
+    <rect x="0" y="0" width="360" height="186" rx="14" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="#0D1320" stroke="#5B9EFF" stroke-width="1.5"/>
+    <text x="40" y="47" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="18" fill="#5B9EFF" text-anchor="middle">📡</text>
+    <text x="76" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="16" font-weight="700" fill="#EDF0F5">SSE 实时进度推送</text>
+    <text x="76" y="54" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11" fill="#5B9EFF" opacity="0.6">Streaming Progress</text>
+    <text x="24" y="100" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">FastAPI SSE 流式响应，[STEP] 协议</text>
+    <text x="24" y="122" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">推送步骤清单实时更新；15s 心跳</text>
+    <text x="24" y="144" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" fill="#9AA8B8">保活；跨线程 ProgressEmitter 安全</text>
+    <rect x="24" y="158" width="72" height="18" rx="5" fill="#5B9EFF" fill-opacity="0.12" stroke="#5B9EFF" stroke-width="0.5" stroke-opacity="0.2"/>
+    <text x="60" y="171" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="9" fill="#5B9EFF" text-anchor="middle">步骤+心跳</text>
+  </g>
+</svg>

@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="300" viewBox="0 0 1200 300"
+     role="img" aria-labelledby="wf-title wf-desc">
+  <title id="wf-title">InsightForge AI 分析流水线</title>
+  <desc id="wf-desc">用户提问 → PlannerAgent 生成执行计划 → SQLAgent / AnalysisAgent / VisualizationAgent 并行调度 → ReportAgent 生成报告 → ExportAgent 多格式导出</desc>
+
+  <defs>
+    <linearGradient id="wfBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B0F19"/>
+      <stop offset="100%" stop-color="#101624"/>
+    </linearGradient>
+    <linearGradient id="wfForge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F0883E"/>
+      <stop offset="100%" stop-color="#E0682A"/>
+    </linearGradient>
+    <linearGradient id="wfBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5B9EFF"/>
+      <stop offset="100%" stop-color="#3D7EE8"/>
+    </linearGradient>
+    <linearGradient id="wfGreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="wfPurple" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <marker id="wfArrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#5B9EFF" fill-opacity="0.5"/>
+    </marker>
+    <marker id="wfArrowOrange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#F0883E" fill-opacity="0.5"/>
+    </marker>
+    <filter id="wfGlow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="300" rx="20" fill="url(#wfBg)"/>
+
+  <!-- Section label -->
+  <text x="600" y="38" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+        font-size="16" font-weight="600" fill="#7888A0" text-anchor="middle" letter-spacing="3">
+    ANALYSIS PIPELINE
+  </text>
+
+  <!-- ===== NODE 1: User Input ===== -->
+  <g transform="translate(36, 124)">
+    <rect x="0" y="0" width="148" height="80" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="32" cy="40" r="18" fill="#0D1320" stroke="#5B9EFF" stroke-width="1.5"/>
+    <text x="32" y="46" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16" fill="#5B9EFF" text-anchor="middle">?</text>
+    <text x="64" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="14" font-weight="700" fill="#EDF0F5">用户提问</text>
+    <text x="64" y="54" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">自然语言输入</text>
+    <text x="64" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#5B9EFF" opacity="0.6">"分析销售趋势"</text>
+  </g>
+
+  <!-- Arrow 1→2 -->
+  <line x1="184" y1="164" x2="218" y2="164" stroke="#5B9EFF" stroke-width="1.5" stroke-opacity="0.5" marker-end="url(#wfArrow)"/>
+
+  <!-- ===== NODE 2: PlannerAgent ===== -->
+  <g transform="translate(226, 124)">
+    <rect x="0" y="0" width="148" height="80" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="32" cy="40" r="18" fill="#0D1320" stroke="#F0883E" stroke-width="1.5"/>
+    <text x="32" y="46" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="15" fill="#F0883E" text-anchor="middle">⚙</text>
+    <text x="64" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="14" font-weight="700" fill="#EDF0F5">PlannerAgent</text>
+    <text x="64" y="54" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">生成执行计划</text>
+    <text x="64" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#F0883E" opacity="0.6">JSON 步骤依赖图</text>
+  </g>
+
+  <!-- Arrow 2→3 (branching) -->
+  <path d="M374,150 L394,150 L394,110 L408,110" stroke="#F0883E" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrowOrange)"/>
+  <path d="M374,164 L408,164" stroke="#F0883E" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrowOrange)"/>
+  <path d="M374,178 L394,178 L394,218 L408,218" stroke="#F0883E" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrowOrange)"/>
+
+  <!-- ===== NODE 3: SQLAgent ===== -->
+  <g transform="translate(416, 88)">
+    <rect x="0" y="0" width="148" height="72" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="28" cy="36" r="16" fill="#0D1320" stroke="#5B9EFF" stroke-width="1.5"/>
+    <text x="28" y="42" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14" fill="#5B9EFF" text-anchor="middle">▸</text>
+    <text x="54" y="30" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" font-weight="700" fill="#EDF0F5">SQLAgent</text>
+    <text x="54" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">DuckDB 多表查询</text>
+    <text x="54" y="63" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#5B9EFF" opacity="0.6">生成+执行+纠错</text>
+  </g>
+
+  <!-- ===== NODE 4: AnalysisAgent ===== -->
+  <g transform="translate(416, 164)">
+    <rect x="0" y="0" width="148" height="72" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="28" cy="36" r="16" fill="#0D1320" stroke="#F0883E" stroke-width="1.5"/>
+    <text x="28" y="42" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14" fill="#F0883E" text-anchor="middle">◈</text>
+    <text x="54" y="30" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" font-weight="700" fill="#EDF0F5">AnalysisAgent</text>
+    <text x="54" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">趋势·分组·异常</text>
+    <text x="54" y="63" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#F0883E" opacity="0.6">多维统计分析</text>
+  </g>
+
+  <!-- ===== NODE 5: VisualizationAgent ===== -->
+  <g transform="translate(416, 240)">
+    <rect x="0" y="0" width="148" height="72" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1" opacity="0"/>
+  </g>
+
+  <!-- Actually, let's keep it 3 parallel nodes. Let me adjust - the third node is VisualizationAgent -->
+  <!-- Wait, I already have 3 nodes. Let me restructure. Actually the layout is fine for 2 parallel nodes. Let me add the third. -->
+
+  <!-- Let me adjust: SQLAgent, AnalysisAgent, VisualizationAgent as 3 parallel nodes -->
+  <!-- Current layout: SQL at y=88, Analysis at y=164, Viz at y=240. That's 3 nodes. -->
+
+  <!-- ===== NODE 5: VisualizationAgent ===== -->
+  <g transform="translate(416, 240)">
+    <rect x="0" y="0" width="148" height="72" rx="10" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="28" cy="36" r="16" fill="#0D1320" stroke="#A78BFA" stroke-width="1.5"/>
+    <text x="28" y="42" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" fill="#A78BFA" text-anchor="middle">◫</text>
+    <text x="54" y="30" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="13" font-weight="700" fill="#EDF0F5">Visualization</text>
+    <text x="54" y="48" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">Plotly 交互图表</text>
+    <text x="54" y="63" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#A78BFA" opacity="0.6">HTML+PNG 双输出</text>
+  </g>
+
+  <!-- Arrow 3→4 (merge back) -->
+  <path d="M564,124 L584,124 L584,164 L598,164" stroke="#5B9EFF" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrow)"/>
+  <path d="M564,200 L598,200" stroke="#F0883E" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrowOrange)"/>
+  <path d="M564,276 L584,276 L584,236 L598,236" stroke="#A78BFA" stroke-width="1.5" stroke-opacity="0.5" fill="none" marker-end="url(#wfArrow)"/>
+
+  <!-- ===== NODE 6: ReportAgent ===== -->
+  <g transform="translate(606, 164)">
+    <rect x="0" y="0" width="148" height="80" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="32" cy="40" r="18" fill="#0D1320" stroke="#34D399" stroke-width="1.5"/>
+    <text x="32" y="46" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="15" fill="#34D399" text-anchor="middle">☰</text>
+    <text x="64" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="14" font-weight="700" fill="#EDF0F5">ReportAgent</text>
+    <text x="64" y="54" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">文本分析报告</text>
+    <text x="64" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#34D399" opacity="0.6">数据洞察+结论</text>
+  </g>
+
+  <!-- Arrow 6→7 -->
+  <line x1="754" y1="204" x2="788" y2="204" stroke="#34D399" stroke-width="1.5" stroke-opacity="0.5" marker-end="url(#wfArrow)"/>
+
+  <!-- ===== NODE 7: ExportAgent ===== -->
+  <g transform="translate(796, 164)">
+    <rect x="0" y="0" width="148" height="80" rx="12" fill="#141B2B" stroke="#1E2A3A" stroke-width="1"/>
+    <circle cx="32" cy="40" r="18" fill="#0D1320" stroke="#5B9EFF" stroke-width="1.5"/>
+    <text x="32" y="46" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="14" fill="#5B9EFF" text-anchor="middle">↓</text>
+    <text x="64" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="14" font-weight="700" fill="#EDF0F5">ExportAgent</text>
+    <text x="64" y="54" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">多格式报告导出</text>
+    <text x="64" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#5B9EFF" opacity="0.6">Word·PDF·HTML·MD</text>
+  </g>
+
+  <!-- Arrow 7→output -->
+  <line x1="944" y1="204" x2="978" y2="204" stroke="#5B9EFF" stroke-width="1.5" stroke-opacity="0.5" marker-end="url(#wfArrow)"/>
+
+  <!-- ===== Output ===== -->
+  <g transform="translate(986, 164)">
+    <rect x="0" y="0" width="148" height="80" rx="12" fill="#0D1A14" stroke="#34D399" stroke-width="1" stroke-opacity="0.3"/>
+    <circle cx="32" cy="40" r="18" fill="#0D1320" stroke="#34D399" stroke-width="1.5"/>
+    <text x="32" y="46" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="15" fill="#34D399" text-anchor="middle">✓</text>
+    <text x="64" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="14" font-weight="700" fill="#EDF0F5">分析报告</text>
+    <text x="64" y="54" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="11" fill="#7888A0">图表+数据+结论</text>
+    <text x="64" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="10" fill="#34D399" opacity="0.6">一键下载</text>
+  </g>
+
+  <!-- Leg: Two-mode indicator -->
+  <g transform="translate(36, 230)">
+    <rect x="0" y="0" width="148" height="44" rx="8" fill="#0D1320" stroke="#1E2A3A" stroke-width="1" stroke-dasharray="4,3"/>
+    <text x="74" y="18" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="10" fill="#7888A0" text-anchor="middle">Smart Assistant 模式</text>
+    <text x="74" y="34" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+          font-size="10" fill="#5B9EFF" text-anchor="middle">15 工具 · 对话式 · 流式响应</text>
+  </g>
+
+  <!-- Dashed line from User to Smart Assistant -->
+  <line x1="110" y1="204" x2="110" y2="226" stroke="#5B9EFF" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="4,3"/>
+
+  <!-- Data particle animations -->
+  <circle cx="200" cy="164" r="2" fill="#5B9EFF" opacity="0.6">
+    <animate attributeName="cx" values="188;214" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.6;0.1;0.6" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="780" cy="204" r="2" fill="#34D399" opacity="0.6">
+    <animate attributeName="cx" values="770;798" dur="2.3s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.6;0.1;0.6" dur="2.3s" repeatCount="indefinite"/>
+  </circle>
+</svg>
