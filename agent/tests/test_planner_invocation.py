@@ -23,8 +23,10 @@ if PROJECT_ROOT not in sys.path:
 
 try:
     from agent.agents.planner_agent import PlannerAgent, RequestContext
+    from agent.agents.pipeline_context import PipelineContext
 except ModuleNotFoundError:
     from agents.planner_agent import PlannerAgent, RequestContext
+    from agents.pipeline_context import PipelineContext
 
 
 def _bare_planner():
@@ -79,23 +81,23 @@ class RunExportWiringTests(unittest.TestCase):
 
     def test_passes_query_derived_formats(self):
         ctx = RequestContext(user_id="u1", query="导出为Word和PDF")
-        prev = {"report_result": {"markdown": "# 标题", "title": "报告"}}
-        self.planner._run_export("导出", prev, ctx)
+        pctx = PipelineContext(report_result={"markdown": "# 标题", "title": "报告"})
+        self.planner._run_export("导出", pctx, ctx)
         self.assertEqual(self.recorded["formats"], ["docx", "pdf"])
 
     def test_default_formats_when_query_unspecified(self):
         ctx = RequestContext(user_id="u1", query="生成分析报告")
-        prev = {"report_result": {"markdown": "# 标题", "title": "报告"}}
-        self.planner._run_export("导出", prev, ctx)
+        pctx = PipelineContext(report_result={"markdown": "# 标题", "title": "报告"})
+        self.planner._run_export("导出", pctx, ctx)
         self.assertEqual(self.recorded["formats"], ["md", "html"])
 
     def test_no_markdown_returns_error_without_calling_export(self):
         ctx = RequestContext(user_id="u1", query="导出Word")
-        prev = {"report_result": {"markdown": "", "title": "报告"}}
-        result = self.planner._run_export("导出", prev, ctx)
+        pctx = PipelineContext(report_result={"markdown": "", "title": "报告"})
+        self.planner._run_export("导出", pctx, ctx)
         self.assertNotIn("formats", self.recorded)  # export agent never called
-        self.assertEqual(result["error"], "No report content to export")
-        self.assertEqual(result["files"], [])
+        self.assertEqual(pctx.export_result["error"], "No report content to export")
+        self.assertEqual(pctx.export_result["files"], [])
 
 
 class DefaultPlanTests(unittest.TestCase):

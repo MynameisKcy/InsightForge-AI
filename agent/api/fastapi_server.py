@@ -24,8 +24,13 @@ except ImportError:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """将文本按句子分割，保持分隔符在句尾。支持中英文标点。"""
-    parts = re_module.split(r'(?<=[。！？.!?\n])\s*', text)
+    """将文本按句子分割，保持分隔符在句尾。仅按中文标点 + 换行拆分。
+
+    刻意不拆分英文句号（.）、感叹号（!）、问号（?）——中文输出中这些符号
+    常出现在数字（3.26%）、Markdown 标记（**粗体**）、URL 等非句末语境，
+    按它们拆分会导致换行断裂。
+    """
+    parts = re_module.split(r'(?<=[。！？\n])\s*', text)
     return [p for p in parts if p.strip()]
 
 
@@ -94,11 +99,11 @@ from utils.path_tool import get_abs_path
 
 # ── 记忆系统 & 用户认证 & 数据解析 ──
 try:
-    from memory.short_term import get_session, clear_session, ConversationMemory
-    from memory.long_term import LongTermMemory
+    from memory.short_term import clear_session
+    from memory.service import MemoryService
 except ModuleNotFoundError:
-    from agent.memory.short_term import get_session, clear_session, ConversationMemory
-    from agent.memory.long_term import LongTermMemory
+    from agent.memory.short_term import clear_session
+    from agent.memory.service import MemoryService
 
 try:
     from database.user_db import user_db
@@ -113,7 +118,22 @@ except ModuleNotFoundError:
     from agent.utils.progress_emitter import ProgressEmitter
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
-_long_term_memory = LongTermMemory()
+_memory_service = None  # MemoryService 懒加载单例（需 llm_callable，由首次请求触发）
+
+
+def _get_memory_service(user_id: str = "default") -> MemoryService:
+    """获取 MemoryService 单例（懒加载，按 user_id 的管理模型初始化）。"""
+    global _memory_service
+    if _memory_service is None:
+        from model.factory import get_chat_model
+        llm = get_chat_model(user_id)
+
+        def _llm_call(messages: list[dict]) -> str:
+            from langchain_core.messages import HumanMessage
+            return llm.invoke([HumanMessage(content=m["content"]) for m in messages]).content
+
+        _memory_service = MemoryService(_llm_call)
+    return _memory_service
 
 
 # ── 静态资源禁用浏览器强缓存 ──
@@ -347,41 +367,14 @@ async def api_chat(request: Request, user=Depends(require_auth)):
 
     user_id = user["user_id"]
 
-    # ── 会话管理：先解析/创建 session_id + IDOR 校验（per-session keying 的前提） ──
-    new_session = False
-    if not session_id:
-        title = query[:30] + ("..." if len(query) > 30 else "")
-        session_id = _long_term_memory.create_session(user_id, title=title)
-        new_session = True
-    else:
-        # IDOR 防护：传入的 session 必须属于当前用户，否则拒绝（防写入/读取他人会话）
-        owner = _long_term_memory.get_session_owner(session_id)
-        if owner is None or owner != user_id:
-            return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
-        _long_term_memory.touch_session(session_id)
-
-    # ── 闲置会话终版摘要写入（fire-and-forget，不阻塞当前请求；ADR-0003 Phase 3） ──
-    # 请求进来时 piggyback 检查该 user 其他闲置会话，后台线程异步 finalize（写入 memory
-    # collection 供日后召回）。finalized_up_to 门控避免重复 LLM 调用。
+    # ── 会话管理 + Session Memory（由 MemoryService 外观统一编排）──
     try:
-        from memory.recall import get_memory_recall
-        threading.Thread(
-            target=get_memory_recall().finalize_idle_sessions,
-            args=(user_id,),
-            kwargs={"except_session_id": session_id},
-            daemon=True,
-        ).start()
-    except Exception as e:
-        logger.warning(f"finalize_idle_sessions trigger failed: {e}")
-
-    # ── Session Memory：按 session_id 隔离 + 池 miss 时从 DB 回灌（ADR-0003）──
-    memory = get_session(session_id, user_id)
-    # 获取历史上下文（必须在 add_user_message 之前，避免当前消息重复）
-    # max_turns=None：不按轮数截断，依赖 token 预算压缩（Phase 2）控制窗口大小
-    mem_context = memory.get_context(max_turns=None)
-    memory.add_user_message(query)
-    # 跨会话记忆召回注入已移至 report_prompt_switch @dynamic_prompt 中间件（ADR-0003 Phase 4 修订）：
-    # 召回并入单条 system prompt，报告模式不注入，避免泄漏 + 多 system 消息问题。
+        turn = _get_memory_service(user_id).begin_turn(user_id, session_id, query)
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    session_id = turn.session_id
+    mem_context = turn.mem_context
+    new_session = turn.is_new_session
 
     agent = _get_react_agent(user_id)
 
@@ -439,24 +432,27 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     await asyncio.sleep(0.03)
 
             # ── 检测新生成的图表文件并发送给前端 ──
+            chart_urls = []
             if os.path.isdir(charts_dir):
                 for f in sorted(os.listdir(charts_dir)):
                     if f.endswith(".html"):
                         fpath = os.path.join(charts_dir, f)
                         if fpath not in existing_charts:
                             web_url = _to_web_path(fpath)
+                            chart_urls.append(web_url)
                             yield f"data: [CHART:{web_url}]\n\n"
 
-            # 存入短期 + 长期记忆
+            # 将图表 URL 嵌入 full_response，使历史会话加载时也能恢复图表
+            if chart_urls:
+                full_response += "\n\n" + "\n".join(f"[CHART:{u}]" for u in chart_urls)
+
+            # 存入短期 + 长期记忆（由 MemoryService 外观统一编排）
             cleaned = full_response.strip()
             if cleaned:
-                memory.add_assistant_message(cleaned)
-                try:
-                    _long_term_memory.save_conversation_pair(
-                        user_id, query, cleaned, session_id=session_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to save conversation to long-term memory: {e}")
+                _get_memory_service(user_id).end_turn(
+                    user_id, session_id, query, cleaned,
+                    input_tokens=getattr(agent, '_last_input_tokens', None),
+                )
             yield "data: [DONE]\n\n"
         except Exception as e:
             logger.error(f"Chat streaming error: {e}")
@@ -483,8 +479,11 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
 
     user_id = user["user_id"]
     session_id = body.get("session_id", "").strip()
-    memory = get_session(session_id, user_id)
-    memory.add_user_message(query)
+    try:
+        turn = _get_memory_service(user_id).begin_turn(user_id, session_id, query)
+        session_id = turn.session_id
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
 
     try:
         analyst = _get_planner_agent(user_id)
@@ -494,7 +493,9 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
         report = result.get("report", {})
         summary_text = report.get("markdown", str(result.get("title", "")))
         if summary_text:
-            memory.add_assistant_message(f"[分析结果] {summary_text[:500]}")
+            _get_memory_service(user_id).end_turn(
+                user_id, session_id, query, f"[分析结果] {summary_text[:500]}",
+            )
 
         # 序列化时处理非 JSON 兼容类型 + 转换图表路径为 Web 可访问
         result = _sanitize_result(result)
@@ -561,7 +562,7 @@ async def api_conversation_history(request: Request, limit: int = 20, user=Depen
     返回 user 级跨会话最近 N 轮（混合多会话），保留供兼容/审计。
     """
     user_id = user["user_id"]
-    turns = _long_term_memory.get_last_n_turns(user_id, n=limit)
+    turns = _get_memory_service().ltm.get_last_n_turns(user_id, n=limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
 
@@ -569,7 +570,7 @@ async def api_conversation_history(request: Request, limit: int = 20, user=Depen
 async def api_list_sessions(request: Request, user=Depends(require_auth)):
     """获取用户的所有会话列表（按最近活跃排序）。"""
     user_id = user["user_id"]
-    sessions = _long_term_memory.get_user_sessions(user_id)
+    sessions = _get_memory_service().ltm.get_user_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
@@ -581,10 +582,10 @@ async def api_get_session(request: Request, session_id: str, user=Depends(requir
     """
     user_id = user["user_id"]
     # 归属校验：会话不存在或不属于当前用户一律 404（避免枚举）
-    owner = _long_term_memory.get_session_owner(session_id)
+    owner = _get_memory_service().ltm.get_session_owner(session_id)
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
-    conversation = _long_term_memory.get_session_conversation(session_id)
+    conversation = _get_memory_service().ltm.get_session_conversation(session_id)
     return JSONResponse(content={
         "session_id": session_id,
         "user_id": user_id,
@@ -600,10 +601,10 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     IDOR 防护：校验归属，拒绝删除他人会话。
     """
     user_id = user["user_id"]
-    owner = _long_term_memory.get_session_owner(session_id)
+    owner = _get_memory_service().ltm.get_session_owner(session_id)
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
-    _long_term_memory.delete_session(session_id)
+    _get_memory_service().ltm.delete_session(session_id)
     clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
     # 清理跨会话记忆 embedding（ADR-0003 Phase 3）
     try:
@@ -621,7 +622,7 @@ async def api_rename_session(request: Request, session_id: str, user=Depends(req
     IDOR 防护：校验归属。body: {"title": "新标题"}
     """
     user_id = user["user_id"]
-    owner = _long_term_memory.get_session_owner(session_id)
+    owner = _get_memory_service().ltm.get_session_owner(session_id)
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     try:
@@ -633,7 +634,7 @@ async def api_rename_session(request: Request, session_id: str, user=Depends(req
         return JSONResponse({"ok": False, "error": "标题不能为空"}, status_code=400)
     if len(title) > 60:
         title = title[:60]
-    _long_term_memory.update_session_title(session_id, title)
+    _get_memory_service().ltm.update_session_title(session_id, title)
     return JSONResponse(content={"ok": True, "session_id": session_id, "title": title})
 
 

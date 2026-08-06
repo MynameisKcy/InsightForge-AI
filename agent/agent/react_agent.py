@@ -154,16 +154,16 @@ class ReactAgent:
                     continue
                 yield text + "\n"
 
-        # 流结束后：把实测 input_tokens 回灌到 Session Memory，供下一轮主动压缩判定
+        # 流结束后：提取实测 input_tokens，供调用方经 MemoryService.end_turn() 回灌
+        # Session Memory。不再直接调用 get_session().record_input_tokens()，避免
+        # react_agent 直接依赖 memory 模块（memory → agents 循环依赖已消除）。
+        self._last_input_tokens = None
         if final_ai_msg is not None and session_id:
             try:
                 from memory.context_budget import extract_input_tokens
-                from memory.short_term import get_session
-                n = extract_input_tokens(final_ai_msg)
-                if n is not None:
-                    get_session(session_id, user_id).record_input_tokens(n)
+                self._last_input_tokens = extract_input_tokens(final_ai_msg)
             except Exception as e:
-                logger.warning(f"Failed to record input tokens: {e}")
+                logger.warning(f"Failed to extract input tokens: {e}")
 
 
 if __name__ == '__main__':

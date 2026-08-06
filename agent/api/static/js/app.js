@@ -237,7 +237,23 @@ async function switchSession(sessionId) {
       } else {
         msgs.forEach(m => {
           const role = m.role === 'user' ? 'user' : 'assistant';
-          appendMessage(role, m.content || '');
+          const div = appendMessage(role, m.content || '');
+          // 历史会话消息需要渲染 markdown（与实时流式一致），并给报告类消息追加导出按钮
+          if (role === 'assistant') {
+            const bubble = div.querySelector('.bubble');
+            const rawText = m.content || '';
+            if (bubble) {
+              // 提取图表标记 [CHART:url]，剥离后渲染 markdown，再追加图表 iframe
+              var chartInfo = _extractCharts(rawText);
+              bubble.innerHTML = renderMarkdown(chartInfo.text);
+              _syncRaw(bubble, chartInfo.text);
+              _renderChartIframes(bubble, chartInfo.chartUrls);
+              // 报告类消息：追加导出按钮
+              if (chartInfo.text.length > 50 && /^#{1,3}\s/m.test(chartInfo.text)) {
+                appendExportBar(bubble, chartInfo.text);
+              }
+            }
+          }
         });
       }
       scrollToBottom();
@@ -1258,6 +1274,33 @@ async function deleteFile(name, type) {
     if (item && item.dataset.dsToggle) toggleDsDetail(item.dataset.dsToggle);
   });
 })();
+
+// ── 图表标记解析：从存储文本中提取 [CHART:url] 并渲染为 iframe ──
+// 返回 { text: 剥离标记后的纯文本, chartUrls: 图表 URL 数组 }
+function _extractCharts(text) {
+  var chartUrls = [];
+  var re = /\[CHART:([^\]]+)\]/g;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    var url = m[1].trim();
+    if (url && url.charAt(0) === '/' && !url.startsWith('//')) {
+      chartUrls.push(url);
+    }
+  }
+  var cleaned = text.replace(/\[CHART:[^\]]+\]\n*/g, '').trim();
+  return { text: cleaned, chartUrls: chartUrls };
+}
+
+// 在 bubble 中渲染图表 iframe（chartUrls 为 URL 数组）
+function _renderChartIframes(bubble, chartUrls) {
+  chartUrls.forEach(function(url) {
+    var iframe = document.createElement('iframe');
+    iframe.src = url;
+    iframe.setAttribute('sandbox', 'allow-scripts allow-popups');
+    iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
+    bubble.appendChild(iframe);
+  });
+}
 
 // ── 报告导出：在报告 bubble 末尾追加导出按钮栏 ──
 function appendExportBar(bubble, markdown) {
