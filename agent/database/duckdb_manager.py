@@ -93,10 +93,15 @@ class DuckDBManager:
         self.last_loaded_csv: str | None = None  # 本实例上次加载的 CSV，用于判断是否需要 reload（按 user 隔离，无跨用户竞态）
 
         self.conn = duckdb.connect(database=":memory:")
+        self._profile_cache: dict = {}
 
         if csv_path and os.path.exists(csv_path):
             self._load_csv(csv_path)
         logger.info(f"DuckDBManager initialized (user={user_id}) with table '{self.table_name}'")
+
+    def _invalidate_profile(self, table_name: str) -> None:
+        """表结构变更后清除该表的语义画像缓存，避免 get_enhanced_schema_text 命中 stale profile。"""
+        self._profile_cache.pop(table_name, None)
 
     def _load_csv(self, csv_path: str):
         """Load CSV file into DuckDB as a table.（管理通道，不经查询白名单）"""
@@ -167,8 +172,7 @@ class DuckDBManager:
             validate_table_name(table_name)
             validate_csv_path(csv_path)
             # 删除旧表前先清画像缓存,避免 reload 后 get_enhanced_schema_text 命中 stale profile
-            if hasattr(self, "_profile_cache"):
-                self._profile_cache.pop(table_name, None)
+            self._invalidate_profile(table_name)
             # 删除旧表
             self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
             # 加载新数据（_load_csv 内部会校验 self.table_name，故先同步实例属性）
@@ -228,8 +232,7 @@ class DuckDBManager:
         self.conn.execute(f"CREATE TABLE {tmp} AS SELECT {select_list} FROM {qname}")
         self.conn.execute(f"DROP TABLE {qname}")
         self.conn.execute(f"ALTER TABLE {tmp} RENAME TO {safe_ident(table_name)}")
-        if hasattr(self, "_profile_cache"):
-            self._profile_cache.pop(table_name, None)
+        self._invalidate_profile(table_name)
         logger.info(f"_normalize_table_columns: cleaned {sum(a != b for a, b in zip(cols, new_cols))} column(s) in '{table_name}'")
 
     def load_csv_dataset(self, csv_path: str, table_name: str) -> dict:
@@ -243,8 +246,7 @@ class DuckDBManager:
             if not os.path.exists(csv_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {csv_path}"}
             qname = safe_ident(table_name)
-            if hasattr(self, "_profile_cache"):
-                self._profile_cache.pop(table_name, None)
+            self._invalidate_profile(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             self.conn.execute(
                 f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
@@ -297,8 +299,7 @@ class DuckDBManager:
                 return f"CSV 清洗后无有效数据列：{csv_path}"
             df.columns = _normalize_column_names(df.columns.tolist())
             qname = safe_ident(table_name)
-            if hasattr(self, "_profile_cache"):
-                self._profile_cache.pop(table_name, None)
+            self._invalidate_profile(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             tmp_view = f"__csv_load_{table_name}"
             self.conn.register(tmp_view, df)
@@ -340,8 +341,7 @@ class DuckDBManager:
                 return {"success": False, "row_count": 0, "error": "Excel 清洗后无有效数据列"}
             df.columns = _normalize_column_names(df.columns.tolist())
             qname = safe_ident(table_name)
-            if hasattr(self, "_profile_cache"):
-                self._profile_cache.pop(table_name, None)
+            self._invalidate_profile(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             # 用临时视图名注册 DataFrame，避免与用户表名冲突
             tmp_view = f"__excel_load_{table_name}"
@@ -367,8 +367,7 @@ class DuckDBManager:
             validate_table_name(table_name)
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
-            if hasattr(self, "_profile_cache"):
-                self._profile_cache.pop(table_name, None)
+            self._invalidate_profile(table_name)
             logger.info(f"drop_table: dropped '{table_name}'")
             return True
         except Exception as e:
@@ -436,9 +435,7 @@ class DuckDBManager:
         parts = []
         for table_name in tables:
             validate_table_name(table_name)
-            # 缓存懒初始化 + 懒计算
-            if not hasattr(self, "_profile_cache"):
-                self._profile_cache = {}
+            # 懒计算（缓存已在 __init__ 初始化）
             if table_name not in self._profile_cache:
                 try:
                     self._profile_cache[table_name] = self._compute_table_profile(table_name)
