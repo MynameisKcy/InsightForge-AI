@@ -21,7 +21,7 @@ from utils.path_tool import get_abs_path
 
 _DB_PATH = get_abs_path("database/datasources.db")
 
-# 合法表名/数据集名：字母/下划线开头，仅含字母数字下划线（与 duckdb_manager._TABLE_NAME_RE 一致）
+# 合法表名/数据集名：字母/下划线开头，仅含字母数字下划线（与 safety._TABLE_NAME_RE 一致）
 _TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
