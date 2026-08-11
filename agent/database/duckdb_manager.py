@@ -65,20 +65,6 @@ def _normalize_column_names(names: list[str]) -> list[str]:
     return result
 
 
-def _detect_wide_table(col_names: list[str]) -> tuple[bool, str | None]:
-    """检测是否为宽表(≥5 个 4 位年份列名)。返回 (is_wide, 'YYYY-YYYY'|None)。"""
-    import re
-    year_cols = []
-    for c in col_names:
-        s = str(c).strip()
-        if re.fullmatch(r"(19|20)\d{2}", s):
-            year_cols.append(int(s))
-    if len(year_cols) >= 5:
-        year_cols.sort()
-        return True, f"{year_cols[0]}-{year_cols[-1]}"
-    return False, None
-
-
 class DuckDBManager:
     """Manages a DuckDB in-memory database, loads CSV data, and executes queries.
 
@@ -149,9 +135,9 @@ class DuckDBManager:
 
     def get_schema_text(self) -> str:
         """Return a human-readable schema description."""
-        from database.schema_loader import SchemaLoader
+        from database.schema import get_schema_text as _schema_text
 
-        return SchemaLoader.get_schema_text(self.conn)
+        return _schema_text(self.conn)
 
     def get_table_names(self) -> list[str]:
         """Return list of table names in the database."""
@@ -374,48 +360,13 @@ class DuckDBManager:
             logger.error(f"drop_table failed for '{table_name}': {e}")
             return False
 
-    def _compute_table_profile(self, table_name: str) -> dict:
-        """计算单表语义画像:每列 nunique/取值/数值统计 + 宽表标记。供 schema 文本与缓存使用。"""
-        validate_table_name(table_name)
-        qname = safe_ident(table_name)
-        cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
-        col_names = [c[0] for c in cols]
-        total = self.conn.execute(f"SELECT COUNT(*) FROM {qname}").fetchone()[0]
-        is_wide, wide_range = _detect_wide_table(col_names)
-
-        col_profiles = []
-        for col_name, col_type, *_ in cols:
-            is_numeric = col_type.upper() in ("DOUBLE", "FLOAT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "REAL", "HUGEINT")
-            # nunique + 非空数
-            agg = self.conn.execute(
-                f'SELECT COUNT(DISTINCT "{col_name}"), COUNT("{col_name}") FROM {qname}'
-            ).fetchone()
-            nunique, non_null = int(agg[0]), int(agg[1])
-            entry = {"name": col_name, "dtype": col_type, "nunique": nunique,
-                     "non_null": non_null, "total": total}
-            if is_numeric:
-                if non_null > 0:
-                    mm = self.conn.execute(
-                        f'SELECT MIN("{col_name}"), MAX("{col_name}") FROM {qname} WHERE "{col_name}" IS NOT NULL'
-                    ).fetchone()
-                    entry["min"] = float(mm[0]) if mm[0] is not None else None
-                    entry["max"] = float(mm[1]) if mm[1] is not None else None
-            else:
-                # 低基数分类列:列取值(最多 8 个)
-                if 0 < nunique <= 15:
-                    vals = self.conn.execute(
-                        f'SELECT DISTINCT "{col_name}" FROM {qname} WHERE "{col_name}" IS NOT NULL LIMIT 8'
-                    ).fetchall()
-                    entry["values"] = [str(v[0]) for v in vals]
-            col_profiles.append(entry)
-        return {"columns": col_profiles, "is_wide_table": is_wide,
-                "wide_table_range": wide_range, "row_count": total}
-
     def get_enhanced_schema_text(self) -> str:
         """增强版 schema 文本,含列语义统计(分类列取值/数值 min-max/宽表标记)。
 
         画像经实例级 _profile_cache 缓存,缓存缺失懒计算兜底。
         """
+        from database import schema
+
         tables = self.get_table_names()
         if not tables:
             return "No tables found."
@@ -438,9 +389,9 @@ class DuckDBManager:
             # 懒计算（缓存已在 __init__ 初始化）
             if table_name not in self._profile_cache:
                 try:
-                    self._profile_cache[table_name] = self._compute_table_profile(table_name)
+                    self._profile_cache[table_name] = schema.compute_table_profile(self.conn, table_name)
                 except Exception as e:
-                    logger.warning(f"_compute_table_profile failed for '{table_name}': {e}")
+                    logger.warning(f"compute_table_profile failed for '{table_name}': {e}")
                     self._profile_cache[table_name] = None
             profile = self._profile_cache[table_name]
 
