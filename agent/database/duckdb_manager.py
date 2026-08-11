@@ -4,12 +4,11 @@ DuckDB Manager: Load CSV data into DuckDB and provide query/execution interface.
 
 import os
 import re
-import sqlite3
+import html
+import unicodedata
 import sys
 import duckdb
 import pandas as pd
-import sqlglot
-from sqlglot import exp
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -18,129 +17,52 @@ if PROJECT_ROOT not in sys.path:
 
 from utils.logger_handler import logger
 
-# 客户数据持久化 SQLite 路径
-_CUSTOMER_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "customers.db")
+from database.safety import (
+    assert_read_only,
+    safe_ident,
+    validate_csv_path,
+    validate_table_name,
+)
+from database.customer_profiles import persist_customer_profiles
 
 
-class SecurityError(Exception):
-    """SQL 语句未通过只读沙箱白名单校验时抛出。"""
+# 不可见/干扰字符：零宽、BOM、软连字符、大部分控制字符（保留制表/换行待折叠）
+_INVISIBLE_RE = re.compile(r"[​-‏‪-‮⁠﻿]")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+_WS_RE = re.compile(r"\s+")
 
 
-def safe_ident(name: str) -> str:
-    """转义 DuckDB 标识符，防止 SQL 注入。"""
-    return '"' + name.replace('"', '""') + '"'
+def _normalize_one_column_name(name: str, idx: int) -> str:
+    """清洗单个列名：HTML 实体解码、NBSP/全角归一、去不可见/控制字符、折叠空白。
 
-
-# 查询通道允许的 SQL 语句类型（AST 节点 key）。仅允许只读 SELECT 派生类型，
-# 以及只读 schema 探查语句（SHOW/DESCRIBE/SUMMARIZE）。
-# 注意：EXPLAIN/LOAD/CALL/VACUUM 在 DuckDB 方言下会回退为 'command' 类型，
-# 无法可靠校验内部，故 'command' 不在白名单——这些语句会被拒绝。
-# 管理通道（_load_csv/reload_csv）不经此校验。
-_READ_ONLY_STMT_TYPES = {
-    "select", "union", "intersect", "except", "subquery",
-    "show", "describe", "summarize",
-}
-# 显式拒绝的语句类型 key（DDL/DML/副作用类），双保险：即便上层放行也会拦下。
-_FORBIDDEN_STMT_TYPES = {
-    "create", "insert", "update", "delete", "drop", "alter", "truncate",
-    "copy", "attach", "detach", "call", "set", "pragma", "vacuum",
-    "merge", "replace", "install", "load",
-}
-# 禁用的函数名（规范化：去下划线大写）：任意文件读 / 网络访问 / 文件写入。
-# 这些函数即使在 SELECT 内也会泄露文件内容或触发 SSRF/写盘，故全量禁止。
-# 同时覆盖 sqlglot 的两种解析形态：Anonymous（read_csv_auto）与内置类（ReadCSV）。
-_FORBIDDEN_FUNCTIONS = {
-    # 文件读取
-    "READCSVAUTO", "READCSV", "READJSON", "READJSONAUTO",
-    "READPARQUET", "READBLOB", "READTEXT", "READTEXTAUTO",
-    "READFWF", "READFWFAUTO",
-    # 网络/远程
-    "HTTPFS", "GLOB", "GLOBRECURSIVE",
-    # DuckDB 扩展加载（不应在查询通道出现）
-    "INSTALL", "LOAD",
-    # 写文件（COPY/EXPORT 已在 stmt 层拦截，这里再防函数形态）
-    "EXPORTDATABASE", "EXPORTPARQUET", "EXPORTCSV",
-    # 执行外部
-    "SYSTEM", "SHELL",
-}
-# 合法表名：字母/下划线开头，仅含字母数字下划线。
-_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _normalize_func_name(name: str) -> str:
-    """规范化函数名：大写并去掉下划线，使 read_csv_auto / READCSV / ReadParquet
-    等不同 sqlglot 解析形态（Anonymous vs 内置类）归一到同一可比较串。"""
-    return (name or "").upper().replace("_", "")
-
-
-def _collect_func_names(stmt: exp.Expression) -> set[str]:
-    """收集 SQL AST 中出现的所有函数名（含匿名函数如 read_csv_auto），
-
-    返回规范化后的集合（去掉下划线的大写名），如 {'READCSVAUTO', 'COUNT', 'SUM'}。
-    sqlglot 对 read_csv_auto/read_json 解析为 exp.Anonymous（.name 带 _），
-    对 read_csv/read_parquet 解析为内置类 ReadCSV/ReadParquet（类名无 _），
-    故统一去下划线后比较。
+    用户上传的 Excel/CSV 表头常含 ``&nbsp;`` 等 HTML 实体、非断行空格(U+00A0)、
+    全角字符、零宽字符、BOM 等干扰项，原样进入 DuckDB 列名会导致 SQL 引用困难、
+    图表标签乱码。此处统一归一为干净可读的列名。
     """
-    names: set[str] = set()
-    for f in stmt.find_all(exp.Func):
-        if isinstance(f, exp.Anonymous):
-            names.add(_normalize_func_name(f.name))
+    s = "" if name is None else str(name)
+    s = html.unescape(s)                       # &nbsp; -> \xa0, &amp; -> &, &#160; -> \xa0
+    s = unicodedata.normalize("NFKC", s)       # NBSP->空格、全角->半角
+    s = _INVISIBLE_RE.sub("", s)               # 去零宽/BOM/方向标记
+    s = _CONTROL_RE.sub("", s)                 # 去控制字符
+    s = _WS_RE.sub(" ", s).strip()             # 折叠空白
+    if not s:
+        s = f"column_{idx + 1}"
+    return s
+
+
+def _normalize_column_names(names: list[str]) -> list[str]:
+    """批量清洗列名并去重（重名追加 _2/_3），返回与输入等长的新列名列表。"""
+    cleaned = [_normalize_one_column_name(n, i) for i, n in enumerate(names)]
+    seen: dict[str, int] = {}
+    result: list[str] = []
+    for n in cleaned:
+        if n in seen:
+            seen[n] += 1
+            result.append(f"{n}_{seen[n]}")
         else:
-            names.add(_normalize_func_name(type(f).__name__))
-    return names
-
-
-def _assert_read_only(sql: str) -> None:
-    """查询通道 AST 校验：仅允许只读 SELECT 派生语句，拦截写/DDL/文件/网络函数与多语句。
-
-    使用 sqlglot 将 SQL 解析为 DuckDB 方言 AST，而非字符串关键词扫描，
-    杜绝注释/换行/字符串拼接/函数构造等绕过手段。管理通道（_load_csv 的
-    CREATE TABLE、reload_csv 的 DROP TABLE）通过 self.conn.execute 直调，
-    不经此方法，保持「管理通道 vs 查询通道」边界。
-    """
-    if not sql or not sql.strip():
-        raise SecurityError("空 SQL 语句")
-
-    try:
-        stmts = sqlglot.parse(sql, read="duckdb")
-    except Exception as e:  # ParseError 等
-        raise SecurityError(f"SQL 解析失败，拒绝执行: {type(e).__name__}: {e}")
-
-    # 过滤掉纯空语句（仅注释等），保留真实语句
-    real_stmts = [s for s in stmts if s is not None]
-    if not real_stmts:
-        raise SecurityError("SQL 无有效语句")
-    if len(real_stmts) > 1:
-        # 多语句（如 `SELECT 1; DROP TABLE x`）会解析为多条 AST，一律拒绝，防分号注入
-        raise SecurityError(
-            f"只读沙箱禁止多语句执行（检测到 {len(real_stmts)} 条语句）"
-        )
-
-    stmt = real_stmts[0]
-    stmt_key = stmt.key.lower()
-
-    # 1) 语句类型白名单
-    if stmt_key in _FORBIDDEN_STMT_TYPES:
-        raise SecurityError(f"只读沙箱禁止执行 '{stmt_key.upper()}' 语句")
-    if stmt_key not in _READ_ONLY_STMT_TYPES:
-        raise SecurityError(
-            f"只读沙箱禁止以 '{stmt_key.upper()}' 开头的语句（仅允许只读 SELECT 派生）"
-        )
-
-    # 2) 函数级黑名单：即便语句是 SELECT，也禁止任何文件/网络/写盘函数
-    func_names = _collect_func_names(stmt)
-    bad_funcs = func_names & _FORBIDDEN_FUNCTIONS
-    if bad_funcs:
-        raise SecurityError(
-            f"只读沙箱禁止调用文件/网络/写盘函数: {sorted(bad_funcs)}"
-        )
-
-
-def _validate_table_name(name: str) -> str:
-    """校验表名合法（防 SQL 注入）：仅允许标识符字符。"""
-    if not name or not _TABLE_NAME_RE.match(name):
-        raise SecurityError(f"非法表名: {name!r}（仅允许字母/下划线开头、字母数字下划线）")
-    return name
+            seen[n] = 1
+            result.append(n)
+    return result
 
 
 def _detect_wide_table(col_names: list[str]) -> tuple[bool, str | None]:
@@ -157,24 +79,6 @@ def _detect_wide_table(col_names: list[str]) -> tuple[bool, str | None]:
     return False, None
 
 
-def _validate_csv_path(path: str) -> str:
-    """校验数据文件路径安全：必须在 data 目录下且不含单引号（防 read_csv_auto 注入与路径穿越）。"""
-    if not path:
-        raise SecurityError("空数据文件路径")
-    if "'" in path:
-        raise SecurityError(f"数据文件路径含非法字符: {path!r}")
-    # 路径穿越防护：realpath 必须在 data 目录下
-    try:
-        from utils.path_tool import get_abs_path
-    except ModuleNotFoundError:
-        from agent.utils.path_tool import get_abs_path
-    allowed_root = os.path.realpath(get_abs_path("data"))
-    real = os.path.realpath(path)
-    if not real.startswith(allowed_root + os.sep) and real != allowed_root:
-        raise SecurityError(f"数据文件路径越界: {path!r}")
-    return path
-
-
 class DuckDBManager:
     """Manages a DuckDB in-memory database, loads CSV data, and executes queries.
 
@@ -183,7 +87,7 @@ class DuckDBManager:
     """
 
     def __init__(self, csv_path: str | None = None, table_name: str = "transactions", user_id: str = "default"):
-        _validate_table_name(table_name)
+        validate_table_name(table_name)
         self.user_id = user_id
         self.table_name = table_name
         self.last_loaded_csv: str | None = None  # 本实例上次加载的 CSV，用于判断是否需要 reload（按 user 隔离，无跨用户竞态）
@@ -197,8 +101,8 @@ class DuckDBManager:
     def _load_csv(self, csv_path: str):
         """Load CSV file into DuckDB as a table.（管理通道，不经查询白名单）"""
         try:
-            _validate_table_name(self.table_name)
-            _validate_csv_path(csv_path)
+            validate_table_name(self.table_name)
+            validate_csv_path(csv_path)
             self.conn.execute(
                 f"CREATE TABLE {self.table_name} AS SELECT * FROM read_csv_auto('{csv_path}')"
             )
@@ -208,7 +112,7 @@ class DuckDBManager:
             logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}'")
             self.last_loaded_csv = csv_path
             # 自动提取并持久化客户数据
-            self._extract_and_persist_customers()
+            persist_customer_profiles(self.conn, self.table_name, self.user_id)
         except Exception as e:
             # read_csv_auto 默认 UTF-8，遇 GBK/GB18030 等非 UTF-8 中文 CSV 会因
             # "Invalid unicode" 失败。回退到 pandas 多编码解码（与 load_csv_dataset 一致）。
@@ -222,143 +126,7 @@ class DuckDBManager:
             ).fetchone()[0]
             logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}' (pandas fallback)")
             self.last_loaded_csv = csv_path
-            self._extract_and_persist_customers()
-
-    def _extract_and_persist_customers(self):
-        """从已加载的 DuckDB 表中提取唯一客户数据，持久化到 SQLite。"""
-        try:
-            # 获取表列名（DuckDB information_schema）
-            cols_df = self.conn.execute(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
-                [self.table_name],
-            ).df()
-            if cols_df.empty:
-                return
-            col_names = [c.lower().strip().replace('"', '') for c in cols_df["column_name"].tolist()]
-
-            # 检测客户 ID 列
-            customer_id_col = None
-            for c in col_names:
-                if "customer" in c and "id" in c:
-                    customer_id_col = c
-                    break
-            # 备选：customer 开头的任意列
-            if not customer_id_col:
-                for c in col_names:
-                    if c.startswith("customer"):
-                        customer_id_col = c
-                        break
-            if not customer_id_col:
-                return  # 无客户数据列，跳过
-
-            # 检测其他客户相关列
-            customer_name_col = None
-            for c in col_names:
-                if "customer" in c and "name" in c:
-                    customer_name_col = c
-                    break
-
-            segment_col = None
-            for c in col_names:
-                if c in ("segment", "customer_segment", "cust_segment"):
-                    segment_col = c
-                    break
-
-            city_col = None
-            for c in col_names:
-                if c in ("city", "customer_city"):
-                    city_col = c
-                    break
-
-            region_col = None
-            for c in col_names:
-                if c in ("region", "state", "country"):
-                    region_col = c
-                    break
-
-            # 构建 SELECT 列表
-            select_parts = [f'"{customer_id_col}" AS customer_id']
-            extra_cols = []
-            if customer_name_col:
-                select_parts.append(f'MAX("{customer_name_col}") AS customer_name')
-                extra_cols.append("customer_name")
-            if segment_col:
-                select_parts.append(f'MAX("{segment_col}") AS segment')
-                extra_cols.append("segment")
-            if city_col:
-                select_parts.append(f'MAX("{city_col}") AS city')
-                extra_cols.append("city")
-            if region_col:
-                select_parts.append(f'MAX("{region_col}") AS region')
-                extra_cols.append("region")
-
-            select_sql = ", ".join(select_parts)
-            query = f"""
-                SELECT {select_sql}, COUNT(*) AS order_count
-                FROM {self.table_name}
-                GROUP BY "{customer_id_col}"
-            """
-            df = self.conn.execute(query).df()
-
-            if df.empty:
-                return
-
-            os.makedirs(os.path.dirname(_CUSTOMER_DB_PATH), exist_ok=True)
-            conn = sqlite3.connect(_CUSTOMER_DB_PATH, timeout=30)
-            # WAL 模式提升并发写性能，防 database is locked
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-            except sqlite3.OperationalError:
-                pass
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS customer_profiles (
-                    customer_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    customer_name TEXT,
-                    segment TEXT,
-                    city TEXT,
-                    region TEXT,
-                    order_count INTEGER DEFAULT 0,
-                    first_seen TEXT NOT NULL,
-                    last_seen TEXT NOT NULL,
-                    PRIMARY KEY (customer_id, user_id)
-                )
-            """)
-            # 迁移：旧表无 user_id 列时补列（主键改造较复杂，对存量数据默认归属到 default 用户）
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(customer_profiles)").fetchall()}
-            if "user_id" not in cols:
-                conn.execute(
-                    "ALTER TABLE customer_profiles ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'"
-                )
-                logger.info("Migrated customer_profiles: added user_id column (legacy rows → 'default')")
-            now = pd.Timestamp.now().isoformat()
-            uid = self.user_id or "default"
-            for _, row in df.iterrows():
-                cid = str(row["customer_id"])
-                vals = {
-                    "customer_name": str(row.get("customer_name", "")) if customer_name_col else "",
-                    "segment": str(row.get("segment", "")) if segment_col else "",
-                    "city": str(row.get("city", "")) if city_col else "",
-                    "region": str(row.get("region", "")) if region_col else "",
-                    "order_count": int(row.get("order_count", 0)),
-                }
-                conn.execute("""
-                    INSERT INTO customer_profiles (customer_id, user_id, customer_name, segment, city, region, order_count, first_seen, last_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(customer_id, user_id) DO UPDATE SET
-                        customer_name = excluded.customer_name,
-                        segment = excluded.segment,
-                        city = excluded.city,
-                        region = excluded.region,
-                        order_count = excluded.order_count,
-                        last_seen = excluded.last_seen
-                """, (cid, uid, vals["customer_name"], vals["segment"], vals["city"], vals["region"],
-                      vals["order_count"], now, now))
-            conn.commit()
-            conn.close()
-            logger.info(f"Persisted {len(df)} unique customers from {self.table_name} (user={uid})")
-        except Exception as e:
-            logger.warning(f"Customer extraction skipped (non-critical): {e}")
+            persist_customer_profiles(self.conn, self.table_name, self.user_id)
 
     def execute(self, sql: str) -> duckdb.DuckDBPyRelation:
         """Execute a SQL query and return the DuckDB relation.
@@ -366,7 +134,7 @@ class DuckDBManager:
         查询通道：执行前做只读白名单校验，拦截 DROP/CREATE/INSERT 等写操作。
         管理通道（_load_csv/reload_csv）直接调 self.conn.execute，不经此校验。
         """
-        _assert_read_only(sql)
+        assert_read_only(sql)
         logger.debug(f"Executing SQL: {sql[:200]}...")
         return self.conn.execute(sql)
 
@@ -396,8 +164,8 @@ class DuckDBManager:
         if self.last_loaded_csv == csv_path:
             return True
         try:
-            _validate_table_name(table_name)
-            _validate_csv_path(csv_path)
+            validate_table_name(table_name)
+            validate_csv_path(csv_path)
             # 删除旧表前先清画像缓存,避免 reload 后 get_enhanced_schema_text 命中 stale profile
             if hasattr(self, "_profile_cache"):
                 self._profile_cache.pop(table_name, None)
@@ -412,14 +180,66 @@ class DuckDBManager:
             logger.error(f"DuckDBManager.reload_csv failed: {e}")
             return False
 
+    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """对 pandas 读取的 DataFrame 做结构清理 + 字符串值归一。
+
+        - 丢弃全空行、全空列、跳过开头连续空行（应对合并单元格/空行造成的结构混乱）
+        - object 列做 HTML 实体解码 + NBSP->空格 + 去零宽/BOM（仅显示层杂质，不动真实数值数据）
+        """
+        if df is None or df.empty:
+            return df
+        # 跳过开头连续全空行
+        df = df.dropna(axis=0, how="all").reset_index(drop=True)
+        # 丢弃全空列
+        df = df.dropna(axis=1, how="all")
+        # object 列值归一
+        obj_cols = df.select_dtypes(include=["object"]).columns
+        for c in obj_cols:
+            df[c] = df[c].map(lambda v: self._clean_cell(v) if isinstance(v, str) else v)
+        return df
+
+    @staticmethod
+    def _clean_cell(v: str) -> str:
+        """清洗单个字符串值：HTML 实体解码 + NFKC(全角/NBSP) + 去不可见/控制字符 + 折叠空白。"""
+        s = html.unescape(v)
+        s = unicodedata.normalize("NFKC", s)
+        s = _INVISIBLE_RE.sub("", s)
+        s = _CONTROL_RE.sub("", s)
+        s = _WS_RE.sub(" ", s).strip()
+        return s
+
+    def _normalize_table_columns(self, table_name: str) -> None:
+        """建表后将列名归一化：若任一列名经清洗后变化，则用别名重建表。
+
+        对 read_csv_auto 原生路径与 pandas 路径统一适用。重名已在
+        _normalize_column_names 内追加 _2/_3 处理，别名重建天然避免冲突。
+        """
+        validate_table_name(table_name)
+        qname = safe_ident(table_name)
+        cols = [c[0] for c in self.conn.execute(f"DESCRIBE {qname}").fetchall()]
+        new_cols = _normalize_column_names(cols)
+        if new_cols == cols:
+            return
+        select_list = ", ".join(
+            f"{safe_ident(old)} AS {safe_ident(new)}" for old, new in zip(cols, new_cols)
+        )
+        tmp = safe_ident("__norm_tmp")
+        self.conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+        self.conn.execute(f"CREATE TABLE {tmp} AS SELECT {select_list} FROM {qname}")
+        self.conn.execute(f"DROP TABLE {qname}")
+        self.conn.execute(f"ALTER TABLE {tmp} RENAME TO {safe_ident(table_name)}")
+        if hasattr(self, "_profile_cache"):
+            self._profile_cache.pop(table_name, None)
+        logger.info(f"_normalize_table_columns: cleaned {sum(a != b for a, b in zip(cols, new_cols))} column(s) in '{table_name}'")
+
     def load_csv_dataset(self, csv_path: str, table_name: str) -> dict:
         """加载 CSV 文件到指定表（管理通道，不经只读校验）。
 
         若表已存在则先 DROP 再重建。返回 {"success": bool, "row_count": int, "error": str|None}。
         """
         try:
-            _validate_table_name(table_name)
-            _validate_csv_path(csv_path)
+            validate_table_name(table_name)
+            validate_csv_path(csv_path)
             if not os.path.exists(csv_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {csv_path}"}
             qname = safe_ident(table_name)
@@ -429,10 +249,13 @@ class DuckDBManager:
             self.conn.execute(
                 f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
             )
+            # 列名归一：read_csv_auto 原生路径无 DataFrame，用别名重建清洗列名
+            self._normalize_table_columns(table_name)
             row_count = self.conn.execute(
                 f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]
             logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path}")
+            persist_customer_profiles(self.conn, table_name, self.user_id)
             return {"success": True, "row_count": row_count, "error": None}
         except Exception as e:
             # 回退：DuckDB read_csv_auto 默认 UTF-8，遇 GBK/GB18030 等非 UTF-8 中文 CSV
@@ -445,6 +268,7 @@ class DuckDBManager:
                     f"SELECT COUNT(*) FROM {safe_ident(table_name)}"
                 ).fetchone()[0]
                 logger.info(f"load_csv_dataset: loaded {row_count} rows into '{table_name}' from {csv_path} (pandas fallback)")
+                persist_customer_profiles(self.conn, table_name, self.user_id)
                 return {"success": True, "row_count": row_count, "error": None}
             logger.error(f"load_csv_dataset failed for '{table_name}': {fallback_err}")
             return {"success": False, "row_count": 0, "error": fallback_err}
@@ -467,6 +291,11 @@ class DuckDBManager:
                 return f"无法解码 CSV（已尝试 GBK/GB18030/UTF-8/UTF-16）：{csv_path}"
             if len(df.columns) == 0:
                 return f"CSV 文件无有效数据列：{csv_path}"
+            # 结构清理（去全空行列/前导空行）+ 字符串值归一
+            df = self._clean_dataframe(df)
+            if df is None or len(df.columns) == 0:
+                return f"CSV 清洗后无有效数据列：{csv_path}"
+            df.columns = _normalize_column_names(df.columns.tolist())
             qname = safe_ident(table_name)
             if hasattr(self, "_profile_cache"):
                 self._profile_cache.pop(table_name, None)
@@ -492,8 +321,8 @@ class DuckDBManager:
         再通过 con.register() 注册后建表，零扩展依赖、无需联网。
         """
         try:
-            _validate_table_name(table_name)
-            _validate_csv_path(excel_path)
+            validate_table_name(table_name)
+            validate_csv_path(excel_path)
             if not os.path.exists(excel_path):
                 return {"success": False, "row_count": 0, "error": f"文件不存在: {excel_path}"}
 
@@ -505,6 +334,11 @@ class DuckDBManager:
             if df is None or len(df.columns) == 0:
                 return {"success": False, "row_count": 0, "error": "Excel 文件无有效数据列"}
 
+            # 结构清理（去全空行列/前导空行）+ 字符串值归一；列名归一
+            df = self._clean_dataframe(df)
+            if df is None or len(df.columns) == 0:
+                return {"success": False, "row_count": 0, "error": "Excel 清洗后无有效数据列"}
+            df.columns = _normalize_column_names(df.columns.tolist())
             qname = safe_ident(table_name)
             if hasattr(self, "_profile_cache"):
                 self._profile_cache.pop(table_name, None)
@@ -521,6 +355,7 @@ class DuckDBManager:
                 f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]
             logger.info(f"load_excel_dataset: loaded {row_count} rows into '{table_name}' from {excel_path}")
+            persist_customer_profiles(self.conn, table_name, self.user_id)
             return {"success": True, "row_count": row_count, "error": None}
         except Exception as e:
             logger.error(f"load_excel_dataset failed for '{table_name}': {e}")
@@ -529,7 +364,7 @@ class DuckDBManager:
     def drop_table(self, table_name: str) -> bool:
         """删除指定表（管理通道，不经只读校验）。返回是否成功。"""
         try:
-            _validate_table_name(table_name)
+            validate_table_name(table_name)
             qname = safe_ident(table_name)
             self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             if hasattr(self, "_profile_cache"):
@@ -542,7 +377,7 @@ class DuckDBManager:
 
     def _compute_table_profile(self, table_name: str) -> dict:
         """计算单表语义画像:每列 nunique/取值/数值统计 + 宽表标记。供 schema 文本与缓存使用。"""
-        _validate_table_name(table_name)
+        validate_table_name(table_name)
         qname = safe_ident(table_name)
         cols = self.conn.execute(f"DESCRIBE {qname}").fetchall()
         col_names = [c[0] for c in cols]
@@ -600,7 +435,7 @@ class DuckDBManager:
 
         parts = []
         for table_name in tables:
-            _validate_table_name(table_name)
+            validate_table_name(table_name)
             # 缓存懒初始化 + 懒计算
             if not hasattr(self, "_profile_cache"):
                 self._profile_cache = {}
@@ -827,63 +662,3 @@ def close_duckdb(user_id: str = "default") -> None:
     inst = _duckdb_instances.pop(user_id, None)
     if inst:
         inst.close()
-
-
-def get_customer_overview(user_id: str, top_n: int = 10) -> list[dict]:
-    """查询指定用户持久化的客户数据概况：按订单数排名返回 TOP N 客户。
-
-    user_id 必填：只返回该用户上传数据集中提取的客户，跨用户隔离。
-    """
-    try:
-        if not os.path.exists(_CUSTOMER_DB_PATH):
-            return []
-        conn = sqlite3.connect(_CUSTOMER_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """SELECT customer_id, customer_name, segment, city, region, order_count,
-                      first_seen, last_seen
-               FROM customer_profiles
-               WHERE user_id = ?
-               ORDER BY order_count DESC
-               LIMIT ?""",
-            (user_id or "default", top_n),
-        ).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        logger.warning(f"get_customer_overview failed (user={user_id}): {e}")
-        return []
-
-
-def get_customer_count(user_id: str) -> dict:
-    """获取指定用户持久化客户数据的统计信息（跨用户隔离）。"""
-    try:
-        if not os.path.exists(_CUSTOMER_DB_PATH):
-            return {"total_customers": 0, "by_city": [], "by_segment": []}
-        conn = sqlite3.connect(_CUSTOMER_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        uid = user_id or "default"
-
-        total = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ?", (uid,)
-        ).fetchone()["cnt"]
-
-        by_city = conn.execute(
-            "SELECT city, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND city != '' GROUP BY city ORDER BY cnt DESC LIMIT 10",
-            (uid,),
-        ).fetchall()
-
-        by_segment = conn.execute(
-            "SELECT segment, COUNT(*) AS cnt FROM customer_profiles WHERE user_id = ? AND segment != '' GROUP BY segment ORDER BY cnt DESC",
-            (uid,),
-        ).fetchall()
-
-        conn.close()
-        return {
-            "total_customers": total,
-            "by_city": [dict(r) for r in by_city],
-            "by_segment": [dict(r) for r in by_segment],
-        }
-    except Exception as e:
-        logger.warning(f"get_customer_count failed (user={user_id}): {e}")
-        return {"total_customers": 0, "by_city": [], "by_segment": []}

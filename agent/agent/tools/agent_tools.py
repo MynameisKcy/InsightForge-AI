@@ -105,7 +105,7 @@ def invalidate_analyst(user_id: str | None = None) -> None:
         _analyst_cache.pop(user_id or "default", None)
 
 
-@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→产品分析→可视化图表→报告）。系统会自动生成图表并嵌入对话，无需你自行绘图。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'找出利润最高的产品'、'可视化各月销售额对比'、'画一幅趋势图'")
+@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比分析→可视化图表→报告）。系统会自动生成图表并嵌入对话，无需你自行绘图。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'各区人口分布对比'、'可视化路口流量变化'、'画一幅趋势图'")
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:
@@ -134,10 +134,12 @@ def run_full_analysis(query: str) -> str:
 def get_data_overview() -> str:
     """返回所有数据集的概况信息，自动适配当前数据集的实际列名。"""
     try:
-        from database.duckdb_manager import init_duckdb, safe_ident
+        from database.duckdb_manager import init_duckdb
+        from database.safety import safe_ident
         from utils.request_context import get_user_id
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb, safe_ident
+        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.safety import safe_ident
         from utils.request_context import get_user_id
 
     try:
@@ -170,7 +172,7 @@ def get_data_overview() -> str:
         return f"数据查询失败: {str(e)}"
 
 
-@tool(description="针对特定产品类别或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个产品类别利润最高'、'最近几个月销售额是否下降'")
+@tool(description="针对特定分组或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个地区人口最多'、'最近几期数值是否下降'")
 def quick_data_insight(query: str) -> str:
     """快速数据分析，返回关键洞察。"""
     try:
@@ -248,9 +250,9 @@ def get_chart_insights(query: str) -> str:
 def get_customer_overview_tool(top_n: int = 10) -> str:
     """查询已持久化的客户数据，返回 TOP N 客户概况（仅当前用户）。"""
     try:
-        from database.duckdb_manager import get_customer_overview
+        from database.customer_profiles import get_customer_overview
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import get_customer_overview
+        from agent.database.customer_profiles import get_customer_overview
     try:
         from utils.request_context import get_user_id
         uid = get_user_id()
@@ -281,9 +283,9 @@ def get_customer_overview_tool(top_n: int = 10) -> str:
 def get_customer_stats_tool() -> str:
     """获取客户数据统计汇总（仅当前用户）。"""
     try:
-        from database.duckdb_manager import get_customer_count
+        from database.customer_profiles import get_customer_count
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import get_customer_count
+        from agent.database.customer_profiles import get_customer_count
     try:
         from utils.request_context import get_user_id
         uid = get_user_id()

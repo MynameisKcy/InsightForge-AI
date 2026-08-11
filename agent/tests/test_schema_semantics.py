@@ -112,7 +112,7 @@ def test_load_csv_clears_profile_cache():
     import os
     import tempfile
 
-    # _validate_csv_path 要求文件在 data/ 目录下,用同一解析获取可写目录
+    # validate_csv_path 要求文件在 data/ 目录下,用同一解析获取可写目录
     try:
         from utils.path_tool import get_abs_path
     except ModuleNotFoundError:
@@ -162,7 +162,7 @@ def test_reload_csv_clears_profile_cache():
     import os
     import tempfile
 
-    # _validate_csv_path 要求文件在 data/ 目录下
+    # validate_csv_path 要求文件在 data/ 目录下
     try:
         from utils.path_tool import get_abs_path
     except ModuleNotFoundError:

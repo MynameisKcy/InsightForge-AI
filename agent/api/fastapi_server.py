@@ -714,9 +714,11 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
 
     # 加载到 DuckDB
     try:
-        from database.duckdb_manager import init_duckdb, safe_ident
+        from database.duckdb_manager import init_duckdb
+        from database.safety import safe_ident
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb, safe_ident
+        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.safety import safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -848,9 +850,11 @@ async def get_dataset_schema(request: Request, name: str, user=Depends(require_a
 
     # 从 DuckDB 获取实时 schema
     try:
-        from database.duckdb_manager import init_duckdb, safe_ident
+        from database.duckdb_manager import init_duckdb
+        from database.safety import safe_ident
     except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb, safe_ident
+        from agent.database.duckdb_manager import init_duckdb
+        from agent.database.safety import safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)

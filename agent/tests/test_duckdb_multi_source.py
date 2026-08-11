@@ -13,7 +13,7 @@ for p in (PROJECT_ROOT, PROJECT_PARENT):
 
 class TestDuckDBMultiSource(unittest.TestCase):
     def setUp(self):
-        # 使用 data/datasets 目录，满足 _validate_csv_path 路径穿越防护
+        # 使用 data/datasets 目录，满足 validate_csv_path 路径穿越防护
         from utils.path_tool import get_abs_path
         self.tmp_dir = get_abs_path("data/datasets")
         os.makedirs(self.tmp_dir, exist_ok=True)
@@ -80,19 +80,20 @@ class TestDuckDBMultiSource(unittest.TestCase):
         db.close()
 
     def test_safe_ident(self):
-        from database.duckdb_manager import safe_ident
+        from database.safety import safe_ident
         self.assertEqual(safe_ident("normal"), '"normal"')
         self.assertEqual(safe_ident('has"quote'), '"has""quote"')
 
     def test_customer_isolation_by_user(self):
         """客户数据按 user_id 隔离：A 上传的客户对 B 不可见。"""
-        import database.duckdb_manager as dmod
-        from database.duckdb_manager import DuckDBManager, get_customer_overview, get_customer_count
+        import database.customer_profiles as cmod
+        from database.duckdb_manager import DuckDBManager
+        from database.customer_profiles import get_customer_overview, get_customer_count
 
         # 用临时 customers.db，避免污染真实库
-        orig_path = dmod._CUSTOMER_DB_PATH
+        orig_path = cmod._CUSTOMER_DB_PATH
         tmp_cust = os.path.join(self.tmp_dir, "test_customers.db")
-        dmod._CUSTOMER_DB_PATH = tmp_cust
+        cmod._CUSTOMER_DB_PATH = tmp_cust
         try:
             csv_a = self._make_csv("cust_a.csv", [
                 {"customer_id": "C1", "customer_name": "Alice", "city": "BJ"},
@@ -101,7 +102,7 @@ class TestDuckDBMultiSource(unittest.TestCase):
             csv_b = self._make_csv("cust_b.csv", [
                 {"customer_id": "C1", "customer_name": "Carol", "city": "GZ"},
             ])
-            # 通过构造函数触发 _load_csv → _extract_and_persist_customers
+            # 通过构造函数触发 _load_csv → persist_customer_profiles
             db_a = DuckDBManager(csv_path=csv_a, table_name="cust_table_a", user_id="userA")
             db_a.close()
 
@@ -128,7 +129,38 @@ class TestDuckDBMultiSource(unittest.TestCase):
             # 不存在的用户返回 0
             self.assertEqual(get_customer_count("userX")["total_customers"], 0)
         finally:
-            dmod._CUSTOMER_DB_PATH = orig_path
+            cmod._CUSTOMER_DB_PATH = orig_path
+            for f in (tmp_cust, tmp_cust + "-wal", tmp_cust + "-shm"):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+
+    def test_upload_csv_populates_profiles(self):
+        """上传路径(load_csv_dataset)也应触发客户画像持久化——回归 1/4 路径 bug。"""
+        import database.customer_profiles as cmod
+        from database.duckdb_manager import DuckDBManager
+        from database.customer_profiles import get_customer_count
+
+        orig_path = cmod._CUSTOMER_DB_PATH
+        tmp_cust = os.path.join(self.tmp_dir, "test_customers_upload.db")
+        cmod._CUSTOMER_DB_PATH = tmp_cust
+        try:
+            csv_path = self._make_csv("cust_upload.csv", [
+                {"customer_id": "U1", "customer_name": "Zoe", "city": "BJ"},
+                {"customer_id": "U2", "customer_name": "Ian", "city": "SH"},
+                {"customer_id": "U1", "customer_name": "Zoe", "city": "BJ"},
+            ])
+            db = DuckDBManager(user_id="userUpload")
+            try:
+                result = db.load_csv_dataset(csv_path, "cust_upload_table")
+                self.assertTrue(result["success"])
+                # 上传路径必须落库(修复前这里为 0)
+                self.assertEqual(get_customer_count("userUpload")["total_customers"], 2)
+            finally:
+                db.close()
+        finally:
+            cmod._CUSTOMER_DB_PATH = orig_path
             for f in (tmp_cust, tmp_cust + "-wal", tmp_cust + "-shm"):
                 try:
                     os.remove(f)

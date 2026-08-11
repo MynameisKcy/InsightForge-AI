@@ -21,7 +21,7 @@ A single unit of a Plan, dispatched to one Specialized Agent. Identified positio
 _Avoid_: "task" (reserved for the natural-language instruction a Step carries)
 
 **Specialized Agent (子agent)**:
-A stage of the Analysis Pipeline that does one job - SQL query, trend/product/risk analysis, visualization, report, or export. Each is a `BaseAgent` subclass orchestrated by the PlannerAgent via `prev_results`; it is not a tool the Smart Assistant calls directly.
+A stage of the Analysis Pipeline that does one job - SQL query, trend/product/risk analysis, visualization, report, or export. Each is a `BaseAgent` subclass orchestrated by the PlannerAgent via a typed `PipelineContext` (not the retired `prev_results` dict); it is not a tool the Smart Assistant calls directly. The trend/product/risk stages share a single `AnalysisAgent` class injected with an `AnalysisModule` adapter.
 _Avoid_: "sub-agent tool", "tool" (tools are atomic reactive capabilities picked by the Smart Assistant; Specialized Agents are planned pipeline stages)
 
 **Session**:
@@ -35,3 +35,7 @@ _Avoid_: "short-term memory" (time-based and fuzzy - short relative to what?), "
 **Long-Term Memory**:
 User-scoped memory a Session can recall across sessions - the cross-session tier, deliberately separate from the session-scoped Session Memory. Built from the user's past-session summaries and retrieved by relevance to the current query; never shared across users.
 _Avoid_: confusing it with a Session's own persisted summary (that is session-scoped, part of Session Memory)
+
+**SQL Safety (查询通道安全)**:
+The read-only enforcement guarding every query the SQL Agent runs through `DuckDBManager.execute`: an sqlglot-AST whitelist (SELECT / SHOW / DESCRIBE / SUMMARIZE only) plus a function blacklist (no file-read / network / write functions), rejecting multi-statement and DDL/DML. Lives in `database/safety.py`, alongside identifier quoting (`safe_ident`) and table-name / file-path validation. The management channel (the `_load_csv` / `load_csv_dataset` build-table paths) bypasses it by calling `conn.execute` directly — only the read-only query channel goes through SQL Safety.
+_Avoid_: "SQL validator" (it is a read-only sandbox, not a linter); "the sandbox" alone (SQL Safety also covers identifier and path validation, not just the AST check).
