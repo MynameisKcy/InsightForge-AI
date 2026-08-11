@@ -8,7 +8,8 @@ for p in (PROJECT_ROOT, PROJECT_PARENT):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from database.duckdb_manager import DuckDBManager, _detect_wide_table
+from database.duckdb_manager import DuckDBManager
+from database.schema import detect_wide_table, compute_table_profile
 import pandas as pd
 
 
@@ -16,7 +17,7 @@ def test_detect_wide_table_year_columns():
     """≥5 个 4 位年份列名 -> 检测为宽表,返回年份范围。"""
     cols = ["Country Name", "Country Code", "Indicator Name", "Indicator Code",
             "1960", "1961", "1962", "1963", "1964", "2002", "2025"]
-    is_wide, rng = _detect_wide_table(cols)
+    is_wide, rng = detect_wide_table(cols)
     assert is_wide is True
     assert rng == "1960-2025"
 
@@ -24,7 +25,7 @@ def test_detect_wide_table_year_columns():
 def test_detect_wide_table_not_wide():
     """普通表(无足够年份列)不判为宽表。"""
     cols = ["Month", "Revenue", "2020"]
-    is_wide, rng = _detect_wide_table(cols)
+    is_wide, rng = detect_wide_table(cols)
     assert is_wide is False
     assert rng is None
 
@@ -46,7 +47,7 @@ def test_compute_table_profile_low_cardinality_values():
         "2002": [97.5, 103.4, float("nan")],
     })
     mgr = _make_mgr_with_table("wb_test", df)
-    profile = mgr._compute_table_profile("wb_test")
+    profile = compute_table_profile(mgr.conn,"wb_test")
     col_by_name = {c["name"]: c for c in profile["columns"]}
     # Indicator Name 仅 1 唯一值,应列出取值
     assert col_by_name["Indicator Name"]["nunique"] == 1
@@ -61,7 +62,7 @@ def test_compute_table_profile_high_cardinality_omits_values():
     """高基数分类列(nunique>15)只标 nunique,不列取值。"""
     df = pd.DataFrame({"id": [str(i) for i in range(20)], "val": [float(i) for i in range(20)]})
     mgr = _make_mgr_with_table("hc_test", df)
-    profile = mgr._compute_table_profile("hc_test")
+    profile = compute_table_profile(mgr.conn,"hc_test")
     col_by_name = {c["name"]: c for c in profile["columns"]}
     assert col_by_name["id"]["nunique"] == 20
     assert "values" not in col_by_name["id"] or col_by_name["id"].get("values") is None
@@ -86,12 +87,13 @@ def test_enhanced_schema_text_uses_cache(monkeypatch):
     """第二次调用应命中缓存,不重算(用调用计数验证)。"""
     df = pd.DataFrame({"Country Name": ["A", "B"], "val": [1.0, 2.0]})
     mgr = _make_mgr_with_table("cache_test", df)
+    from database import schema
     call_count = {"n": 0}
-    orig = mgr._compute_table_profile
-    def counting(table_name):
+    orig = schema.compute_table_profile
+    def counting(conn, table_name):
         call_count["n"] += 1
-        return orig(table_name)
-    monkeypatch.setattr(mgr, "_compute_table_profile", counting)
+        return orig(conn, table_name)
+    monkeypatch.setattr(schema, "compute_table_profile", counting)
     mgr.get_enhanced_schema_text()
     mgr.get_enhanced_schema_text()
     assert call_count["n"] == 1  # 第二次走缓存
