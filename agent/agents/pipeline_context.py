@@ -1,15 +1,11 @@
 """
 PipelineContext: 类型化管道数据流，替代 prev_results 字典抓取袋。
 
-每个代理阶段通过类型化字段读写，而非通过无类型的 dict。提供共享的
-DataFrame 反序列化，消除 4 个代理中重复的 pd.read_json 模式。
+每个代理阶段通过类型化字段读写，而非通过无类型的 dict。
 """
 
 from dataclasses import dataclass, field
-from io import StringIO
 from typing import Optional
-
-import pandas as pd
 
 
 @dataclass
@@ -38,17 +34,6 @@ class PipelineContext:
     completed_steps: set[int] = field(default_factory=set)
 
     # ── 共享方法 ──
-
-    @property
-    def dataframe(self) -> pd.DataFrame:
-        """共享 DataFrame 反序列化。
-
-        消除 Trend/Product/Risk/Visualization 四个代理中重复的
-        pd.read_json(StringIO(df_json), orient="records") 模式。
-        """
-        if not self.dataframe_json or self.dataframe_json == "[]":
-            return pd.DataFrame()
-        return pd.read_json(StringIO(self.dataframe_json), orient="records")
 
     @property
     def success(self) -> bool:
