@@ -64,58 +64,19 @@ class RagSummarizerService(object):
         return self.vector_store.similarity_search(query, user_id=user_id, k=self.retrieve_k)
 
     def _rerank(self, query: str, docs: list[Document]) -> list[Document]:
-        """用 DashScope gte-rerank 对粗召回结果精排，取 top_n 并丢弃低分文档。
+        """用 DashScope gte-rerank 精排，取 top_n 并丢弃低分文档；委托 rag.rerank.rerank_docs。
 
-        降级策略：rerank 调用失败时回退为粗召回结果的前 top_n 条，保证可用性。
+        候选 <= rerank_top_n 时直接截断返回，不触达 rerank_model 等配置（既有契约：
+        测试据此在不配置 rerank_model 时断言不调 DashScope）。
         """
         if not docs:
             return []
-        # 候选数已不多于 top_n 时无需 rerank
         if len(docs) <= self.rerank_top_n:
-            return docs[: self.rerank_top_n]
-        try:
-            from dashscope import TextReRank
-            import os as _os
-            resp = TextReRank.call(
-                model=self.rerank_model,
-                query=query,
-                documents=[d.page_content for d in docs],
-                top_n=self.rerank_top_n,
-                return_documents=False,
-                api_key=_os.getenv("DASHSCOPE_API_KEY"),
-            )
-            # 健壮性：先判 HTTP 状态与 output 是否为空（403/AccessDenied 时 output=None）
-            status = getattr(resp, "status_code", None)
-            output = getattr(resp, "output", None)
-            if status != 200 or not output or not output.get("results"):
-                code = getattr(resp, "code", "")
-                message = getattr(resp, "message", "")
-                logger.warning(
-                    "rerank 调用未返回有效结果 (status=%s code=%s msg=%s)，回退粗召回前 %d 条",
-                    status, code, message, self.rerank_top_n,
-                )
-                return docs[: self.rerank_top_n]
-            results = output.get("results", [])
-            reranked: list[Document] = []
-            for item in results:
-                idx = item.get("index")
-                score = item.get("relevance_score", 0)
-                if idx is None or idx < 0 or idx >= len(docs):
-                    continue
-                if score < self.rerank_score_threshold:
-                    continue
-                doc = docs[idx]
-                # 把 rerank 分数写入 metadata，便于调试展示
-                doc.metadata["rerank_score"] = score
-                reranked.append(doc)
-            logger.info(
-                "rerank: 粗召回 %d 条 -> 精排 %d 条 (阈值 %.2f)",
-                len(docs), len(reranked), self.rerank_score_threshold,
-            )
-            return reranked if reranked else docs[: self.rerank_top_n]
-        except Exception as e:
-            logger.error("rerank 调用失败，回退粗召回: %s", str(e))
-            return docs[: self.rerank_top_n]
+            return docs[:self.rerank_top_n]
+        from rag.rerank import rerank_docs
+        return rerank_docs(
+            query, docs, self.rerank_top_n, self.rerank_model, self.rerank_score_threshold
+        )
 
     def _expand_queries(self, query: str, user_id: str | None = None) -> list[str]:
         """多查询扩展：返回原始 query + N 条改写。无改写器/失败时回退 [原始 query]。"""

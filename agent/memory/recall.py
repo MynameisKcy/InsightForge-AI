@@ -136,44 +136,14 @@ class MemoryRecallService:
         return self._format_memory_section(docs)
 
     def _rerank(self, query: str, docs: list, top_n: int) -> list:
-        """gte-rerank-v2 精排；候选 <= top_n 时早退不调 DashScope；失败回退粗召回前 top_n。
+        """gte-rerank-v2 精排；委托 rag.rerank.rerank_docs（与 rag_service 共享同一实现）。
 
-        与 rag_service._rerank 同构：gte-rerank 对部分 Key 返回 403，gte-rerank-v2 普遍可用；
-        先判 status_code==200 与 output 非空，否则回退。
+        候选 <= top_n 早退、任意失败回退粗召回前 top_n（语义见 rag.rerank.rerank_docs）。
         """
-        if not docs or len(docs) <= top_n:
-            return docs[:top_n]
-        try:
-            from dashscope import TextReRank
-            import os as _os
-            resp = TextReRank.call(
-                model="gte-rerank-v2",
-                query=query,
-                documents=[d.page_content for d in docs],
-                top_n=top_n,
-                return_documents=False,
-                api_key=_os.getenv("DASHSCOPE_API_KEY"),
-            )
-            status = getattr(resp, "status_code", None)
-            output = getattr(resp, "output", None)
-            if status != 200 or not output or not output.get("results"):
-                logger.warning(f"memory rerank no valid result (status={status}); fallback coarse")
-                return docs[:top_n]
-            reranked = []
-            for item in output.get("results", []):
-                idx = item.get("index")
-                score = item.get("relevance_score", 0)
-                if idx is None or idx < 0 or idx >= len(docs):
-                    continue
-                if score < MEMORY_RERANK_SCORE_THRESHOLD:
-                    continue
-                d = docs[idx]
-                d.metadata["rerank_score"] = score
-                reranked.append(d)
-            return reranked if reranked else docs[:top_n]
-        except Exception as e:
-            logger.warning(f"memory rerank failed, fallback coarse: {e}")
-            return docs[:top_n]
+        from rag.rerank import rerank_docs
+        return rerank_docs(
+            query, docs, top_n, "gte-rerank-v2", MEMORY_RERANK_SCORE_THRESHOLD
+        )
 
     @staticmethod
     def _format_memory_section(docs: list) -> str:
