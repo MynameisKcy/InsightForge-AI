@@ -154,7 +154,37 @@ class MemoryService:
             except Exception as e:
                 logger.warning(f"Failed to record input tokens: {e}")
 
+    # ── 会话生命周期（admin / read）── 拉到外观上 ──
+
+    def list_sessions(self, user_id: str) -> list[dict]:
+        """返回用户的所有会话列表（按最近活跃排序）。"""
+        return self._ltm.get_user_sessions(user_id)
+
+    def get_conversation_history(self, user_id: str, limit: int = 20) -> list[dict]:
+        """返回用户级跨会话最近 N 轮（遗留兼容端点用）。"""
+        return self._ltm.get_last_n_turns(user_id, n=limit)
+
+    def get_session(self, user_id: str, session_id: str) -> list[dict]:
+        """返回指定会话的完整对话历史；不存在或不属于该用户则 raise PermissionError。"""
+        self._assert_owner(session_id, user_id)
+        return self._ltm.get_session_conversation(session_id)
+
+    def rename_session(self, user_id: str, session_id: str, title: str) -> None:
+        """重命名会话标题；不存在或不属于该用户则 raise PermissionError。"""
+        self._assert_owner(session_id, user_id)
+        self._ltm.update_session_title(session_id, title)
+
     # ── 内部方法 ──
+
+    def _assert_owner(self, session_id: str, user_id: str) -> None:
+        """IDOR 归属校验的唯一归处：会话不存在或不属于该用户一律拒绝。
+
+        与 begin_turn 一致，raise PermissionError；调用方据此返回 404
+        （"不存在"与"无权"统一 404，避免会话 ID 枚举）。
+        """
+        owner = self._ltm.get_session_owner(session_id)
+        if owner is None or owner != user_id:
+            raise PermissionError("会话不存在或无权访问")
 
     def _trigger_idle_finalize(self, user_id: str, except_session_id: str) -> None:
         """触发闲置会话终版摘要写入（fire-and-forget 后台线程）。"""
