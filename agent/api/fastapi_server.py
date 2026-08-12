@@ -99,10 +99,8 @@ from utils.path_tool import get_abs_path
 
 # ── 记忆系统 & 用户认证 & 数据解析 ──
 try:
-    from memory.short_term import clear_session
     from memory.service import MemoryService
 except ModuleNotFoundError:
-    from agent.memory.short_term import clear_session
     from agent.memory.service import MemoryService
 
 try:
@@ -556,13 +554,9 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
 
 @app.get("/api/conversation/history")
 async def api_conversation_history(request: Request, limit: int = 20, user=Depends(require_auth)):
-    """获取用户历史会话记录（长期记忆）。
-
-    遗留端点（ADR-0003 后前端改用 /api/sessions + /api/sessions/{id} 按会话加载）：
-    返回 user 级跨会话最近 N 轮（混合多会话），保留供兼容/审计。
-    """
+    """获取用户历史会话记录（长期记忆）。遗留兼容端点（ADR-0003 后前端改用 /api/sessions）。"""
     user_id = user["user_id"]
-    turns = _get_memory_service().ltm.get_last_n_turns(user_id, n=limit)
+    turns = _get_memory_service().get_conversation_history(user_id, limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
 
@@ -570,22 +564,18 @@ async def api_conversation_history(request: Request, limit: int = 20, user=Depen
 async def api_list_sessions(request: Request, user=Depends(require_auth)):
     """获取用户的所有会话列表（按最近活跃排序）。"""
     user_id = user["user_id"]
-    sessions = _get_memory_service().ltm.get_user_sessions(user_id)
+    sessions = _get_memory_service().list_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
 @app.get("/api/sessions/{session_id}")
 async def api_get_session(request: Request, session_id: str, user=Depends(require_auth)):
-    """获取指定会话的完整对话历史。
-
-    IDOR 防护：校验该会话归属当前用户，拒绝读取他人会话。
-    """
+    """获取指定会话的完整对话历史。IDOR 由外观 _assert_owner 统一处理。"""
     user_id = user["user_id"]
-    # 归属校验：会话不存在或不属于当前用户一律 404（避免枚举）
-    owner = _get_memory_service().ltm.get_session_owner(session_id)
-    if owner is None or owner != user_id:
+    try:
+        conversation = _get_memory_service().get_session(user_id, session_id)
+    except PermissionError:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
-    conversation = _get_memory_service().ltm.get_session_conversation(session_id)
     return JSONResponse(content={
         "session_id": session_id,
         "user_id": user_id,
@@ -596,35 +586,19 @@ async def api_get_session(request: Request, session_id: str, user=Depends(requir
 
 @app.delete("/api/sessions/{session_id}")
 async def api_delete_session(request: Request, session_id: str, user=Depends(require_auth)):
-    """删除指定会话及其全部对话历史。
-
-    IDOR 防护：校验归属，拒绝删除他人会话。
-    """
+    """删除指定会话及其全部记忆（LTM + Session Memory + 跨会话 embedding）。IDOR 由外观处理。"""
     user_id = user["user_id"]
-    owner = _get_memory_service().ltm.get_session_owner(session_id)
-    if owner is None or owner != user_id:
-        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
-    _get_memory_service().ltm.delete_session(session_id)
-    clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
-    # 清理跨会话记忆 embedding（ADR-0003 Phase 3）
     try:
-        from memory.recall import get_memory_recall
-        get_memory_recall().delete_session_memory(session_id, user_id)
-    except Exception as e:
-        logger.warning(f"delete session memory embedding failed: {e}")
+        _get_memory_service().delete_session(user_id, session_id)
+    except PermissionError:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 
 @app.patch("/api/sessions/{session_id}")
 async def api_rename_session(request: Request, session_id: str, user=Depends(require_auth)):
-    """重命名会话标题。
-
-    IDOR 防护：校验归属。body: {"title": "新标题"}
-    """
+    """重命名会话标题。body: {"title": "新标题"}；IDOR 由外观 _assert_owner 处理。"""
     user_id = user["user_id"]
-    owner = _get_memory_service().ltm.get_session_owner(session_id)
-    if owner is None or owner != user_id:
-        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     try:
         body = await request.json()
     except Exception:
@@ -634,7 +608,10 @@ async def api_rename_session(request: Request, session_id: str, user=Depends(req
         return JSONResponse({"ok": False, "error": "标题不能为空"}, status_code=400)
     if len(title) > 60:
         title = title[:60]
-    _get_memory_service().ltm.update_session_title(session_id, title)
+    try:
+        _get_memory_service().rename_session(user_id, session_id, title)
+    except PermissionError:
+        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     return JSONResponse(content={"ok": True, "session_id": session_id, "title": title})
 
 

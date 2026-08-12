@@ -61,11 +61,6 @@ class MemoryService:
         # ConversationSummarizer 使用上层注入的 llm_callable，不再自行导入 BaseAgent。
         set_summarizer_factory(lambda: ConversationSummarizer(llm_callable))
 
-    @property
-    def ltm(self) -> LongTermMemory:
-        """暴露 LongTermMemory 供非 chat 端点使用（会话列表、历史、删除等）。"""
-        return self._ltm
-
     # ── 公开接口 ──
 
     def begin_turn(
