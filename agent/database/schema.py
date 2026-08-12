@@ -37,10 +37,11 @@ def compute_table_profile(conn, table_name: str) -> dict:
 
     col_profiles = []
     for col_name, col_type, *_ in cols:
+        qcol = safe_ident(col_name)
         is_numeric = col_type.upper() in ("DOUBLE", "FLOAT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "REAL", "HUGEINT")
         # nunique + 非空数
         agg = conn.execute(
-            f'SELECT COUNT(DISTINCT "{col_name}"), COUNT("{col_name}") FROM {qname}'
+            f'SELECT COUNT(DISTINCT {qcol}), COUNT({qcol}) FROM {qname}'
         ).fetchone()
         nunique, non_null = int(agg[0]), int(agg[1])
         entry = {"name": col_name, "dtype": col_type, "nunique": nunique,
@@ -48,7 +49,7 @@ def compute_table_profile(conn, table_name: str) -> dict:
         if is_numeric:
             if non_null > 0:
                 mm = conn.execute(
-                    f'SELECT MIN("{col_name}"), MAX("{col_name}") FROM {qname} WHERE "{col_name}" IS NOT NULL'
+                    f'SELECT MIN({qcol}), MAX({qcol}) FROM {qname} WHERE {qcol} IS NOT NULL'
                 ).fetchone()
                 entry["min"] = float(mm[0]) if mm[0] is not None else None
                 entry["max"] = float(mm[1]) if mm[1] is not None else None
@@ -56,7 +57,7 @@ def compute_table_profile(conn, table_name: str) -> dict:
             # 低基数分类列:列取值(最多 8 个)
             if 0 < nunique <= 15:
                 vals = conn.execute(
-                    f'SELECT DISTINCT "{col_name}" FROM {qname} WHERE "{col_name}" IS NOT NULL LIMIT 8'
+                    f'SELECT DISTINCT {qcol} FROM {qname} WHERE {qcol} IS NOT NULL LIMIT 8'
                 ).fetchall()
                 entry["values"] = [str(v[0]) for v in vals]
         col_profiles.append(entry)
@@ -72,7 +73,7 @@ def get_schema_text(conn) -> str:
     parts = []
     for (table_name,) in tables:
         validate_table_name(table_name)
-        cols = conn.execute(f"DESCRIBE {table_name}").fetchall()
+        cols = conn.execute(f"DESCRIBE {safe_ident(table_name)}").fetchall()
         col_lines = [f"  - {col_name} ({col_type})" for col_name, col_type, *_ in cols]
         parts.append(f"Table: {table_name}\n" + "\n".join(col_lines))
     return "\n\n".join(parts)
