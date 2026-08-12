@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from memory.long_term import LongTermMemory
-from memory.short_term import get_session, set_summarizer_factory
+from memory.short_term import clear_session, get_session, set_summarizer_factory
 from memory.recall import get_memory_recall, MemoryRecallService
 from memory.summarizer import ConversationSummarizer
 from utils.logger_handler import logger
@@ -173,6 +173,21 @@ class MemoryService:
         """重命名会话标题；不存在或不属于该用户则 raise PermissionError。"""
         self._assert_owner(session_id, user_id)
         self._ltm.update_session_title(session_id, title)
+
+    def delete_session(self, user_id: str, session_id: str) -> None:
+        """删除会话及其全部记忆（跨 3 层）。
+
+        IDOR 校验先于任何删除；通过后依次：
+        LTM 删除会话 → short_term 释放池内 Session Memory → recall 清理跨会话 embedding。
+        recall 失败仅记日志，不回滚（与现状一致）。
+        """
+        self._assert_owner(session_id, user_id)
+        self._ltm.delete_session(session_id)
+        clear_session(session_id)  # 释放池内 Session Memory 缓存（ADR-0003）
+        try:
+            self._recall.delete_session_memory(session_id, user_id)
+        except Exception as e:
+            logger.warning(f"delete session memory embedding failed: {e}")
 
     # ── 内部方法 ──
 
