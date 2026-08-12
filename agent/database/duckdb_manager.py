@@ -91,14 +91,15 @@ class DuckDBManager:
 
     def _load_csv(self, csv_path: str):
         """Load CSV file into DuckDB as a table.（管理通道，不经查询白名单）"""
+        qname = safe_ident(self.table_name)
         try:
             validate_table_name(self.table_name)
             validate_csv_path(csv_path)
             self.conn.execute(
-                f"CREATE TABLE {self.table_name} AS SELECT * FROM read_csv_auto('{csv_path}')"
+                f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
             )
             row_count = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self.table_name}"
+                f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]
             logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}'")
             self.last_loaded_csv = csv_path
@@ -113,7 +114,7 @@ class DuckDBManager:
                 logger.error(f"Failed to load CSV {csv_path}: {fallback_err}")
                 raise
             row_count = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self.table_name}"
+                f"SELECT COUNT(*) FROM {qname}"
             ).fetchone()[0]
             logger.info(f"Loaded {row_count} rows from {csv_path} into table '{self.table_name}' (pandas fallback)")
             self.last_loaded_csv = csv_path
@@ -157,10 +158,11 @@ class DuckDBManager:
         try:
             validate_table_name(table_name)
             validate_csv_path(csv_path)
+            qname = safe_ident(table_name)
             # 删除旧表前先清画像缓存,避免 reload 后 get_enhanced_schema_text 命中 stale profile
             self._invalidate_profile(table_name)
             # 删除旧表
-            self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+            self.conn.execute(f"DROP TABLE IF EXISTS {qname}")
             # 加载新数据（_load_csv 内部会校验 self.table_name，故先同步实例属性）
             self.table_name = table_name
             self._load_csv(csv_path)
