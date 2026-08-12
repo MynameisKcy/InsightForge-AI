@@ -48,17 +48,17 @@ class SessionMemoryTests(unittest.TestCase):
 
         # 注入测试依赖(整段替换,绕开内部 import,规避双模块陷阱)
         self._orig_get_ltm = short_term_mod._get_ltm
-        self._orig_get_summarizer = short_term_mod._get_summarizer
+        self._orig_get_summarizer = short_term_mod.get_summarizer
         self._fake_summarizer = _FakeSummarizer()
         short_term_mod._get_ltm = lambda: self.ltm
-        short_term_mod._get_summarizer = lambda: self._fake_summarizer
+        short_term_mod.get_summarizer = lambda: self._fake_summarizer
 
         # 清空全局池,隔离用例
         short_term_mod._session_pool.clear()
 
     def tearDown(self):
         short_term_mod._get_ltm = self._orig_get_ltm
-        short_term_mod._get_summarizer = self._orig_get_summarizer
+        short_term_mod.get_summarizer = self._orig_get_summarizer
         short_term_mod._session_pool.clear()
         try:
             os.unlink(self.db_path)

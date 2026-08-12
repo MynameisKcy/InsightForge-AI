@@ -60,7 +60,8 @@ class ConversationMemory:
                 from memory.context_budget import get_context_window
                 self._context_window = get_context_window(self.user_id)
             except Exception:
-                self._context_window = 32768
+                from memory.context_budget import get_context_window_for_name
+                self._context_window = get_context_window_for_name("")
         return self._context_window
 
     def record_input_tokens(self, n: int | None):
@@ -152,7 +153,7 @@ class ConversationMemory:
             fold_turns, keep_turns = self._split_oldest_turns(fold_count)
             if not fold_turns:
                 return
-            new_summary = _get_summarizer().summarize(fold_turns, self.summary)
+            new_summary = get_summarizer().summarize(fold_turns, self.summary)
             new_watermark = self.summarized_up_to + fold_count
             self.summary = new_summary
             self.summarized_up_to = new_watermark
@@ -247,7 +248,7 @@ def set_summarizer_factory(factory):
     _summarizer_factory = factory
 
 
-def _get_summarizer():
+def get_summarizer():
     """获取 ConversationSummarizer 实例（无状态，每次新建）。"""
     if _summarizer_factory:
         return _summarizer_factory()
