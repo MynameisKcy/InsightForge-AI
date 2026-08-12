@@ -159,6 +159,19 @@ def test_load_csv_clears_profile_cache():
                 os.unlink(p)
 
 
+def test_compute_table_profile_handles_quote_in_column_name():
+    """列名含双引号(脏 CSV 头)时,compute_table_profile 须用 safe_ident 转义,不注入/报错。"""
+    df = pd.DataFrame({'we"ird': [1, 2], 'normal': ['a', 'b']})
+    mgr = DuckDBManager(user_id="test_schema_qcol")
+    mgr.conn.register("__load", df)
+    mgr.conn.execute('CREATE TABLE "qcol_test" AS SELECT * FROM __load')
+    mgr.conn.unregister("__load")
+    profile = compute_table_profile(mgr.conn, "qcol_test")
+    col = {c["name"]: c for c in profile["columns"]}
+    assert 'we"ird' in col
+    assert col['we"ird']["min"] == 1 and col['we"ird']["max"] == 2  # 数值列走 MIN/MAX 泄漏行
+
+
 def test_reload_csv_clears_profile_cache():
     """reload_csv 重建同名表应清旧画像缓存,避免 stale profile。"""
     import os
