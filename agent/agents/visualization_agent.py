@@ -42,14 +42,14 @@ CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分�
 ## 要求
 输出 JSON 格式的图表列表：
 [
-  {{"chart_type": "line", "title": "月度销售趋势", "x_col": "Month", "y_col": "total_revenue", "x_label": "月份", "y_label": "总营收(元)", "reason": "展示销售趋势"}},
+  {{"chart_type": "line", "title": "趋势变化", "x_col": "Month", "y_col": "total_revenue", "x_label": "月份", "y_label": "度量值", "reason": "展示随时间的变化趋势"}},
   ...
 ]
 
 最多生成 4 张最重要的图表。每张图表指定：
 - chart_type, title
 - x_col, y_col（或 names_col/values_col）：必须用上面"数据概况"里出现的实际列名
-- x_label, y_label：人类可读的中文轴标签，依列语义命名（如 total_revenue -> "总营收(元)"、Month -> "月份"、product_name -> "产品"）
+- x_label, y_label：人类可读的中文轴标签，依列语义命名（如 total_revenue -> "总收入"、population -> "人口数"、Month -> "月份"、region -> "地区"）
 - reason
 轴的范围与刻度格式由系统按数据自动处理，你只需给出语义化标签。
 只输出 JSON 数组，不要有其他文字。
@@ -61,8 +61,8 @@ class VisualizationAgent(BaseAgent):
 
     name = "visualization_agent"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model=None):
+        super().__init__(model=model)
         self.chart_generator = ChartGenerator()
 
     def run(self, input_data: dict) -> dict:
@@ -99,7 +99,15 @@ class VisualizationAgent(BaseAgent):
                 chart_specs = self._auto_charts(df, task)
 
         # 生成图表
+        # 启动单一 kaleido sync server 渲染本批所有 PNG（复用 chromium scope，
+        # 避免 fig.write_image 逐次新建 scope 在第 2 次挂起）。server 进程内常驻，
+        # 不在此 stop（见 charts.stop_png_batch 注释）。
         charts = []
+        try:
+            from visualization.charts import start_png_batch
+        except ImportError:
+            from agent.visualization.charts import start_png_batch
+        start_png_batch()
         for spec in chart_specs:
             try:
                 chart_path = self._generate_chart(df, spec, extra_data)
@@ -107,6 +115,8 @@ class VisualizationAgent(BaseAgent):
                     "path": chart_path,
                     "title": spec.get("title", "Chart"),
                     "type": spec.get("chart_type", "bar"),
+                    # 同名 PNG（kaleido 渲染），供报告导出嵌入栅格图；无则为 None
+                    "png_path": ChartGenerator.chart_png_path(chart_path),
                 }
                 charts.append(chart_entry)
 
@@ -131,6 +141,7 @@ class VisualizationAgent(BaseAgent):
                     "path": f"[Error: {e}]",
                     "title": spec.get("title", "Chart"),
                     "type": spec.get("chart_type", "bar"),
+                    "png_path": None,
                 })
 
         return {"charts": charts, "error": None}

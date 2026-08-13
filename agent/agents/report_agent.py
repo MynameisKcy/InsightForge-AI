@@ -29,12 +29,12 @@ except ImportError:
 REPORT_TEMPLATE_PATH = get_abs_path("templates/report_template.md")
 
 
-EXECUTIVE_SUMMARY_PROMPT = """你是一个高级商业分析师。请根据以下所有分析结果生成一段 3-5 句的执行摘要。
+EXECUTIVE_SUMMARY_PROMPT = """你是一个高级数据分析师。请根据以下所有分析结果生成一段 3-5 句的执行摘要。
 
 ## 趋势分析
 {trend_summary}
 
-## 产品分析
+## 分组对比分析
 {product_summary}
 
 ## 风险分析
@@ -46,7 +46,7 @@ EXECUTIVE_SUMMARY_PROMPT = """你是一个高级商业分析师。请根据以�
 """
 
 
-CONCLUSION_PROMPT = """你是一个高级商业分析师。请根据以下分析结果生成 2-3 句的结论。
+CONCLUSION_PROMPT = """你是一个高级数据分析师。请根据以下分析结果生成 2-3 句的结论。
 
 ## 分析数据
 {data_summary}
@@ -62,8 +62,8 @@ class ReportAgent(BaseAgent):
 
     name = "report_agent"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, model=None):
+        super().__init__(model=model)
         self._template = None
         if _jinja2_available and os.path.exists(REPORT_TEMPLATE_PATH):
             with open(REPORT_TEMPLATE_PATH, "r", encoding="utf-8") as f:
@@ -129,16 +129,20 @@ class ReportAgent(BaseAgent):
         risk = kwargs.get("risk_result", {})
         charts = kwargs.get("charts", [])
 
-        # 解析图表路径
+        # 解析图表路径：优先 PNG（导出/报告预览用栅格图），无则回退 HTML（交互式）
         trend_chart = ""
         product_chart = ""
         risk_chart = ""
         for c in charts:
             ctype = c.get("type", "")
+            # png_path 优先；无 PNG 时回退交互式 HTML path
+            img_ref = _chart_web_url(c.get("png_path")) or _chart_web_url(c.get("path", ""))
+            if not img_ref:
+                continue
             if ctype in ("line", "trend") and not trend_chart:
-                trend_chart = c.get("path", "")
+                trend_chart = img_ref
             elif ctype in ("bar", "pie") and not product_chart:
-                product_chart = c.get("path", "")
+                product_chart = img_ref
 
         # 异常月份详情
         anomaly_months = trend.get("anomaly_months", [])
@@ -175,10 +179,17 @@ class ReportAgent(BaseAgent):
             "top_products": safe_list(product, "top_products")[:10],
             "category_summary": safe_list(product, "category_summary")[:10],
             "product_chart": product_chart,
+            # 分组对比分析的维度/度量元数据，供模板用真实列名渲染表头
+            "dimension_col": product.get("dimension_col") or "",
+            "category_col": product.get("category_col") or "",
+            "measure_col": product.get("measure_col") or "total_revenue",
+            "dimension_label": product.get("dimension_label") or "项",
+            "category_label": product.get("category_label") or "类别",
+            "measure_label": product.get("measure_label") or "度量值",
             "risk_level": risk.get("risk_level", "N/A"),
             "risk_assessment": risk.get("risk_assessment", ""),
             "key_risks": safe_list(risk, "key_risks"),
-            "revenue_anomalies": risk.get("revenue_anomalies"),
+            "measure_anomalies": risk.get("measure_anomalies"),
             "recommendations": self._format_recommendations(trend, product, risk, kwargs.get("task", "")),
             "conclusion": kwargs.get("conclusion", ""),
         }
@@ -195,7 +206,7 @@ class ReportAgent(BaseAgent):
 
         recs = product.get("recommendations", [])
         if isinstance(recs, str) and recs:
-            parts.append(f"产品建议: {recs}")
+            parts.append(f"分组对比建议: {recs}")
         elif isinstance(recs, list):
             for r in recs:
                 parts.append(f"- {r}")
@@ -250,7 +261,7 @@ class ReportAgent(BaseAgent):
             logger.warning(f"Conclusion generation failed: {e}")
             direction = trend.get("direction", "")
             if direction:
-                return f"整体业务呈{direction}趋势，建议持续关注关键指标变化，及时调整策略。"
+                return f"整体呈{direction}趋势，建议持续关注关键指标变化，及时调整策略。"
             return "数据分析已完成，建议根据各项分析结果制定相应策略。"
 
     def _render_report(self, data: dict) -> str:
@@ -276,6 +287,24 @@ class ReportAgent(BaseAgent):
             f.write(markdown)
         logger.info(f"Report saved to {filepath}")
         return filepath
+
+
+def _chart_web_url(path: str | None) -> str | None:
+    """把图表文件路径转为 Web 可访问 URL（/reports/charts/<basename>）。
+
+    报告 markdown 嵌入 Web URL 而非 FS 绝对路径：前端 renderMarkdown 的 safeUrl
+    白名单放行 / 开头相对路径，FS 路径会被拒绝（报告 bubble 不显示图）。
+    占位符文本（[Error: ...] / [PLACEHOLDER: ...] 等非图表路径）返回 None。
+    """
+    if not path or not isinstance(path, str):
+        return None
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("/reports/charts/"):
+        return normalized
+    idx = normalized.find("/reports/charts/")
+    if idx >= 0:
+        return normalized[idx:]
+    return None
 
 
 def _basic_markdown_report(data: dict) -> str:
@@ -319,7 +348,7 @@ def _basic_markdown_report(data: dict) -> str:
     lines.extend([
         "---",
         "",
-        "## 三、产品分析",
+        "## 三、分组对比分析",
         "",
         str(data.get('product_insight', '')),
         "",
@@ -327,17 +356,19 @@ def _basic_markdown_report(data: dict) -> str:
 
     top_products = data.get("top_products", [])
     if top_products:
-        lines.append("### TOP 产品")
+        dim_col = data.get("dimension_col")
+        meas_col = data.get("measure_col", "total_revenue")
+        meas_label = data.get("measure_label", "度量值")
+        lines.append("### TOP 项")
         lines.append("")
         for i, p in enumerate(top_products[:10], 1):
-            name = p.get("Product_Description", p.get("product", "Unknown"))
-            rev = p.get("total_revenue", "N/A")
-            qty = p.get("total_quantity", "N/A")
-            lines.append(f"{i}. {name} - 收入: {rev}, 销量: {qty}")
+            name = p.get(dim_col, "Unknown") if dim_col else "Unknown"
+            val = p.get(meas_col, "N/A")
+            lines.append(f"{i}. {name} - {meas_label}: {val}")
         lines.append("")
 
     if data.get("product_chart"):
-        lines.append(f"![产品分析图]({data['product_chart']})")
+        lines.append(f"![分组对比图]({data['product_chart']})")
         lines.append("")
 
     lines.extend([

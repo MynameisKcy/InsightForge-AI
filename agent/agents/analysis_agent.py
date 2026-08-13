@@ -32,8 +32,8 @@ class AnalysisAgent(BaseAgent):
 
     name = "analysis_agent"
 
-    def __init__(self, analyzer: AnalysisModule):
-        super().__init__()
+    def __init__(self, analyzer: AnalysisModule, model=None):
+        super().__init__(model=model)
         self.analyzer = analyzer
 
     def run(self, input_data: dict) -> dict:
@@ -91,8 +91,8 @@ class AnalysisAgent(BaseAgent):
             "key_findings": [],
             "recommendation": "",
             "recommendations": [],
-            "top_product_analysis": "",
-            "low_profit_analysis": "",
+            "top_item_analysis": "",
+            "low_performer_analysis": "",
             "risk_assessment": "",
             "key_risks": [],
             "mitigation": [],
