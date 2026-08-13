@@ -70,7 +70,7 @@ class AnalysisAgent(BaseAgent):
             result.update(insight)
         except Exception as e:
             logger.warning(f"LLM insight generation failed: {e}")
-            self._apply_insight_fallback(result)
+            self.analyzer.apply_insight_fallback(result)
 
         return result
 
@@ -82,21 +82,3 @@ class AnalysisAgent(BaseAgent):
         messages = [{"role": "user", "content": prompt}]
         response = self._call_llm(messages)
         return self._parse_json(response)
-
-    def _apply_insight_fallback(self, result: dict) -> None:
-        """LLM 洞察生成失败时的降级处理。"""
-        # 各分析类型的默认字段不同，设置安全的空值
-        defaults = {
-            "insight": result.get("trend_summary", ""),
-            "key_findings": [],
-            "recommendation": "",
-            "recommendations": [],
-            "top_item_analysis": "",
-            "low_performer_analysis": "",
-            "risk_assessment": "",
-            "key_risks": [],
-            "mitigation": [],
-        }
-        for key, default in defaults.items():
-            if key not in result:
-                result[key] = default
