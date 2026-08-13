@@ -33,6 +33,55 @@ except ImportError:
 
 CHART_OUTPUT_DIR = "reports/charts"
 
+# 静态 PNG 导出参数（供报告 Word/PDF/MD/HTML 嵌入栅格图；kaleido 渲染）
+# 宽度略大于交互图高度配套，scale=2 提升导出清晰度
+CHART_PNG_WIDTH = 900
+CHART_PNG_HEIGHT = 500
+CHART_PNG_SCALE = 2
+
+# 延迟导入 kaleido（Plotly 静态图导出引擎，图表 -> PNG 供报告嵌入）。
+# 重要：不能用 Plotly 的 fig.write_image() —— 它每次调用都新建 kaleido scope，
+# 同进程第 2 次调用会挂起（被 watchdog 强杀）。改用持久 sync server 复用单一
+# chromium scope。server 一旦启动即随进程生命周期常驻、不再 stop：kaleido 的
+# stop_sync_server 在解释器退出时触发 GIL 致命错误，故常驻更稳，且后续图表复用
+# 热 scope（首张约 3s 冷启，其后约 0.1s/张）。
+_kaleido_available = True
+try:
+    import kaleido
+except ImportError:
+    _kaleido_available = False
+    logger.warning("kaleido not installed. Chart PNG export disabled (reports will lack embedded charts).")
+
+_png_server_started = False
+
+
+def _ensure_png_server() -> None:
+    """启动 kaleido sync server（幂等）。保持单个 chromium scope 热复用，
+    避免 fig.write_image 逐次新建 scope 在第 2 次调用挂起。"""
+    global _png_server_started
+    if not _kaleido_available or _png_server_started:
+        return
+    try:
+        kaleido.start_sync_server(silence_warnings=True)
+        _png_server_started = True
+    except Exception as e:
+        logger.warning(f"kaleido sync server start failed: {e}")
+
+
+def start_png_batch() -> None:
+    """显式启动 PNG 批次（幂等）。VisualizationAgent.run() 图表循环前调用，
+    使首批图表共享热 scope（首张约 3s 冷启，其后约 0.1s/张）。"""
+    _ensure_png_server()
+
+
+def stop_png_batch() -> None:
+    """No-op：不主动 stop kaleido server。
+
+    stop_sync_server 在解释器退出时触发 GIL 致命错误，故 server 随进程常驻、
+    由 OS 在进程结束时回收 chromium。调用安全但无效果，保留以稳定接口。
+    """
+    return
+
 # Cobalt 系配色，与 app sci-tech 主题一致：主色 cobalt，辅以 cyan/violet/green/amber/rose
 PALETTE = ["#3b82f6", "#22d3ee", "#a78bfa", "#34d399", "#fbbf24", "#fb7185"]
 
@@ -396,7 +445,11 @@ class ChartGenerator:
 
 
 def _save_chart(fig, base_name: str) -> str:
-    """保存图表为 HTML 文件，返回文件路径。"""
+    """保存图表为 HTML 文件，返回文件路径。
+
+    同时 best-effort 写一份同名 PNG（供报告导出嵌入栅格图，kaleido 渲染）。
+    kaleido 缺失/失败时仅写 HTML，不影响交互式图表与主流程。
+    """
     output_dir = _ensure_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{base_name}_{timestamp}.html"
@@ -404,10 +457,42 @@ def _save_chart(fig, base_name: str) -> str:
     try:
         fig.write_html(filepath)
         logger.info(f"Chart saved: {filepath}")
-        return filepath
     except Exception as e:
         logger.error(f"Failed to save chart: {e}")
         return f"[Chart generation failed: {e}]"
+
+    # best-effort 写 PNG（导出报告用）。失败仅告警，不阻断。
+    # 用 sync server 复用 scope，避免 fig.write_image 第 2 次挂起。
+    if _kaleido_available:
+        try:
+            _ensure_png_server()
+            png_path = _chart_png_path(filepath)
+            opts = {"width": CHART_PNG_WIDTH, "height": CHART_PNG_HEIGHT,
+                    "scale": CHART_PNG_SCALE, "format": "png"}
+            kaleido.write_fig_sync(fig, png_path, opts)
+            logger.info(f"Chart PNG saved: {png_path}")
+        except Exception as e:
+            # kaleido 渲染失败：导出层优雅降级为文字占位，不崩 Word
+            logger.warning(f"Chart PNG export skipped (kaleido?): {e}")
+    return filepath
+
+
+def _chart_png_path(html_path: str) -> str:
+    """由 HTML 图表路径推导同名 PNG 路径（仅推导字符串，不保证存在）。"""
+    if not html_path:
+        return ""
+    return os.path.splitext(html_path)[0] + ".png"
+
+
+def chart_png_path(html_path: str) -> str | None:
+    """返回 HTML 图表对应的 PNG 文件路径；PNG 不存在则 None。
+
+    用于报告导出层判断是否可嵌入栅格图。占位符文本（非 .html 路径）直接返回 None。
+    """
+    if not html_path or not html_path.lower().endswith(".html"):
+        return None
+    png = _chart_png_path(html_path)
+    return png if os.path.exists(png) else None
 
 
 def _safe_name(name: str) -> str:

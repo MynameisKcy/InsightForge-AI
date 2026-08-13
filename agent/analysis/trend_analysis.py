@@ -1,5 +1,5 @@
 """
-Trend Analysis: 销售趋势、利润趋势、同比环比、增长率、时间序列分析
+Trend Analysis: 数值趋势、时序变化、同比环比、增长率、时间序列分析（领域中立）
 """
 
 import pandas as pd

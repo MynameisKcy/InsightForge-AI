@@ -35,28 +35,32 @@
 
 ---
 
-## 三、产品分析
+## 三、分组对比分析
 
 {{ product_insight }}
 
-### TOP 产品
+{% if top_products %}
+### TOP 项
 
-| 排名 | 产品 | 总收入 | 销量 | 订单数 |
-|------|------|--------|------|--------|
+| 排名 | {{ dimension_label }} | {{ measure_label }} |
+|------|------|--------|
 {% for p in top_products %}
-| {{ loop.index }} | {{ p.Product_Description or p.product }} | {{ p.total_revenue }} | {{ p.total_quantity }} | {{ p.order_count }} |
+| {{ loop.index }} | {{ p[dimension_col] }} | {{ p[measure_col] }} |
 {% endfor %}
+{% endif %}
 
-### 类别分析
+{% if category_summary %}
+### 分组占比
 
-| 类别 | 总收入 | 收入占比 | 销量 | 产品数 |
-|------|--------|----------|------|--------|
+| {{ category_label }} | {{ measure_label }} | 占比 |
+|------|--------|------|
 {% for c in category_summary %}
-| {{ c.Product_Category or c.category }} | {{ c.total_revenue }} | {{ c.revenue_pct }}% | {{ c.total_quantity }} | {{ c.product_variety }} |
+| {{ c[category_col] }} | {{ c[measure_col] }} | {{ c.revenue_pct }}% |
 {% endfor %}
+{% endif %}
 
 {% if product_chart %}
-![产品分析图]({{ product_chart }})
+![分组对比图]({{ product_chart }})
 {% endif %}
 
 ---
@@ -74,10 +78,10 @@
 {% endfor %}
 {% endif %}
 
-{% if revenue_anomalies %}
-### 收入异常月份
-{% for a in revenue_anomalies.anomaly_months %}
-- 月份 {{ a.month }}: 收入 {{ a.revenue }} (IQR异常: {{ a.iqr_flag }}, Z-score异常: {{ a.zscore_flag }})
+{% if measure_anomalies %}
+### 度量异常时段
+{% for a in measure_anomalies.anomaly_months %}
+- {{ a.month }}: 值 {{ a.value }} (IQR异常: {{ a.iqr_flag }}, Z-score异常: {{ a.zscore_flag }})
 {% endfor %}
 {% endif %}
 
@@ -95,4 +99,4 @@
 
 ---
 
-*本报告由 AI Data Analyst Multi-Agent System 自动生成*
+*本报告由 InsightForge AI 多智能体数据分析系统自动生成*

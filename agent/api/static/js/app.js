@@ -406,6 +406,7 @@ async function streamChat(text, bubble) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let fullText = '';
+  let errorRendered = false; // [ERROR] 已渲染则不覆盖为"空响应"
   let thinking = true; // 默认为思考状态
   let statusEl = null; // 思考状态 DOM 元素
 
@@ -483,6 +484,7 @@ async function streamChat(text, bubble) {
 
     if (data.startsWith('[ERROR]')) {
       bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(data.slice(7))}</span>`;
+      errorRendered = true;
       if (statusEl) statusEl.style.display = 'none';
       return true;
     }
@@ -599,7 +601,7 @@ async function streamChat(text, bubble) {
   // 处理完成后的状态
   if (statusEl) statusEl.style.display = 'none';
 
-  if (!fullText.trim()) {
+  if (!fullText.trim() && !errorRendered) {
     bubble.innerHTML = '收到空响应，请重试。';
     if (statusEl) statusEl.style.display = 'none';
   }
