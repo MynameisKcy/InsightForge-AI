@@ -105,6 +105,9 @@ def _build_chat_model(user_id: str | None = None):
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=model_name, api_key=api_key or None,
                           base_url=base_url, streaming=True)
+    # 未设 base_url -> ChatTongyi（DashScope）：传入用户 key，空则回退到 DASHSCOPE_API_KEY 环境变量
+    if api_key:
+        return ChatTongyi(model=model_name, dashscope_api_key=api_key)
     return ChatTongyi(model=model_name)
 
 

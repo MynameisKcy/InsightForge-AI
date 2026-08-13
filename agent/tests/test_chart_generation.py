@@ -139,3 +139,40 @@ def test_drop_summary_rows_keeps_normal_data():
     ])
     cleaned = ChartGenerator._drop_summary_rows(df, cat_col="城市", values_col="值")
     assert len(cleaned) == 3
+
+
+def test_chart_generates_png_sibling():
+    """每张图表除 HTML 外应产出同名 PNG（kaleido），供报告导出嵌入栅格图。
+
+    回归：_save_chart 曾在改用 write_fig_sync 时漏定义 png_path，致 PNG 静默不生成
+    （NameError 被 except 吞掉，HTML 仍写出，测试只查 HTML 路径故未被发现）。
+    """
+    try:
+        import kaleido  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("kaleido not installed, PNG generation unavailable")
+
+    from visualization.charts import chart_png_path
+    df = pd.DataFrame({"m": [1, 2, 3, 4], "v": [10, 30, 20, 40]})
+    created = []
+    try:
+        html = ChartGenerator.line_chart(df, x_col="m", y_col="v", title="png_regress")
+        assert html.lower().endswith(".html") and os.path.exists(html)
+        created.append(html)
+        png = chart_png_path(html)
+        assert png is not None, "chart_png_path 未找到同名 PNG（PNG 未生成）"
+        assert os.path.exists(png), f"PNG 文件不存在: {png}"
+        created.append(png)
+        # 第二张图验证 sync server 复用不挂起（fig.write_image 旧路径第 2 次会挂）
+        html2 = ChartGenerator.bar_chart(df, x_col="m", y_col="v", title="png_regress2")
+        created.append(html2)
+        png2 = chart_png_path(html2)
+        assert png2 is not None and os.path.exists(png2)
+        created.append(png2)
+    finally:
+        for f in created:
+            try:
+                os.remove(f)
+            except OSError:
+                pass

@@ -306,12 +306,11 @@ body {
 .chat-container {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-lg) var(--space-xl);
+  overflow-x: hidden;             /* gate: wide tables/code scroll inside their bubble, not the whole column */
+  padding: var(--space-lg) var(--page-gutter);
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-  max-width: 56rem;
-  margin: 0 auto;
   width: 100%;
   position: relative;
 }
@@ -320,7 +319,7 @@ body {
 .message {
   display: flex;
   gap: var(--space-sm);
-  max-width: 85%;
+  max-width: min(88%, 54rem);   /* wider, edge-hugging measure (was 85% of a narrow centred column) */
   animation: fadeIn var(--dur-base) var(--ease-out);
 }
 .message.user { align-self: flex-end; flex-direction: row-reverse; }

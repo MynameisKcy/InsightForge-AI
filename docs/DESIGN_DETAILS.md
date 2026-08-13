@@ -2,7 +2,7 @@
 
 ## 1. 子代理编排：静态 `_agent_map` 与顺序派发
 
-子代理采用**静态注册**：在 `PlannerAgent.__init__` 中直接实例化 7 个子代理，并统一把它们的 `.model` 指向当前用户的 LLM，使整条流水线共享同一份按 `user_id` 隔离的模型配置（`planner_agent.py:116-130`）。
+子代理采用**静态注册**：在 `PlannerAgent.__init__` 中实例化各阶段代理并统一把它们的 `.model` 指向当前用户的 LLM，使整条流水线共享同一份按 `user_id` 隔离的模型配置（`planner_agent.py:118-132`）。其中 Trend / Product / Risk 三阶段已收敛为**同一个 `AnalysisAgent` 类**注入不同 `AnalysisModule` 适配器（`AnalysisAgent(TrendAnalysisAdapter())` 等，`planner_agent.py:121-123`），适配器封装各类型的列选择与计算、复用 `analysis/` 下纯计算类（`TrendAnalysis` / `ProductAnalysis` / `AnomalyDetection`），消除三个复制粘贴 Agent。旧 `TrendAgent` 类仍被 `quick_data_insight` @tool 使用（`agent_tools.py:201`），`ProductAgent` / `RiskAgent` 已无活跃调用方。`product_analysis` 阶段已泛化为领域中立的**分组对比分析**：销售数据（含 price+qty 列）走"收入=单价×数量"快路径，人口/流量/运营等走"维度×度量"通用路径（按类别列分组、对数值列求和），不再对非销售数据强行 qty×price；`_detect_columns` 的 price/qty 仅按名列匹配，`build_product_summary` 输出 `dimension_col`/`measure_col`/`*_label` 元数据供报告渲染数据驱动表头（详见 CHANGELOG v0.4「流水线领域中性化」）。
 
 ```python
 self._agent_map = {
@@ -15,24 +15,19 @@ self._agent_map = {
     "export":           self._run_export,
 }
 ```
-> `planner_agent.py:134-141`。另有 `DocumentReportAgent` **不在** `_agent_map` 中，仅由 `document_report` 工具按需懒加载调用（`agent_tools.py:377`）。
+> `_agent_map` 的键（handler 名）未变（`planner_agent.py:134-141`）；`trend` / `product` / `risk` 三个 handler 底层改用 `AnalysisAgent(adapter)`。另有 `DocumentReportAgent` **不在** `_agent_map` 中，仅由 `document_report` 工具按需懒加载调用。
 
-**派发循环**（`planner_agent.py:243-301`）是单线程顺序 `for step in plan:`，每个 `handler(task, results, ctx)` 同步调用。结果同时写入两个键，供下游按名取用：
-
-```python
-results[step_key] = step_result                # "step_N"
-results[f"{agent_name}_result"] = step_result  # 如 "sql_query_result"
-```
+**派发循环**（`planner_agent.py:242-288` / `:364-415`）是单线程顺序 `for step in plan:`，每个 `handler(task, pctx, ctx)` 同步调用、返回 `None`，结果写入**类型化 `PipelineContext`** dataclass（`agents/pipeline_context.py`）的槽位（`pctx.sql_result` / `pctx.trend_result` / `pctx.product_result` / `pctx.risk_result` / `pctx.visualization_result` / `pctx.report_result` / `pctx.export_result`），取代旧的 `prev_results` 字典与 `step_N` / `agent_name_result` 双键。最终返回的 `"results"` 直接持有 `PipelineContext` 实例本身（`planner_agent.py:285, 415`）。
 
 **依赖与容错语义**（关键，需准确理解）：
 
-- `depends_on` 仅做"依赖的 `step_N` 是否存在且非 None"检查；若依赖未就绪，该步直接 `continue` **跳过**，不排队、不等待、不重试（`planner_agent.py:248-257`）。
-- 单步抛异常 -> 记入 `errors`、该步置 `None`、发出 `step_error` 进度；下游依赖该步的会被跳过（`planner_agent.py:274-278`）。
+- `depends_on` 现检查 `all(d in pctx.completed_steps for d in depends)`（`completed_steps: set[int]`，`planner_agent.py:251`）；若依赖未就绪，该步直接 `continue` **跳过**，不排队、不等待、不重试。成功后 `pctx.completed_steps.add(step_num)`（`:264`）。
+- 单步抛异常时记入 `pctx.errors`、发出 `step_error` 进度；下游依赖该步的会被跳过（`planner_agent.py:274-278`）。
 - **没有并行执行**：即便 `trend` 与 `product` 都只依赖 `sql_query`，也只能串行跑。
-- **没有跨代理重试 / fallback**：唯一的重试是 `SQLAgent._fix_sql` 的错误回灌重生成（最多 2 次重试 = 3 次尝试，`sql_agent.py:88-114`）。
-- `success = len(errors) == 0`（`planner_agent.py:300`）。
+- **没有跨代理重试 / fallback**：唯一的重试是 `SQLAgent._fix_sql` 的错误回灌重生成（最多 2 次重试 = 3 次尝试）。
+- `pctx.success`（`pipeline_context.py:54`）综合 `errors` 与各槽位判定。
 
-**通信契约**：`SQLAgent` 产出的 `dataframe_json`（records-orient JSON 字符串）是主数据载体，经 `sql_query_result` 键流入 `Trend`/`Product`/`Risk`/`Viz`；`ReportAgent` 聚合全部 `*_result`（`planner_agent.py:502-510`）。
+**通信契约**：`SQLAgent` 产出的 `dataframe_json`（records-orient JSON 字符串）是主数据载体，写入 `pctx.dataframe_json`（`planner_agent.py:437`）后流入 `Trend` / `Product` / `Risk` / `Viz`；各阶段结果写入对应 `pctx.*_result` 槽位，`ReportAgent` 聚合全部槽位。`PipelineContext` 另暴露便利属性 `charts` / `report_markdown` / `export_files`（`pipeline_context.py:58-72`）供 `run_stream` 取用。
 
 ## 2. NL->SQL 只读沙箱（AST 级，非进程隔离）
 
@@ -67,20 +62,20 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 > 注意：`_duckdb_instances` 是**无上限的普通 dict**（无 LRU / TTL / 容量上限），高用户 churn 下存在内存增长风险，仅 `close_duckdb(user_id)` 可手动清理。
 
-## 4. 记忆系统：两层结构与当前限制
+## 4. 记忆系统：两级记忆（ADR-0003，Session 级 + User 级）
 
-记忆是**扁平两层**设计，无工作 / 情景 / 语义的进一步分层：
+记忆为**两级**设计（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)），由 `MemoryService` 外观（`memory/service.py`）统一编排为 `begin_turn()` / `end_turn()` 两方法，调用方不再直接操作底层模块：
 
-- **短期记忆**（`memory/short_term.py`）：进程内 dict `_session_pool`，每会话保留 `MAX_TURNS = 30` 轮（1 轮 = 1 问 + 1 答）。超过阈值时 `_maybe_compress`（`:54-76`）取最早的 30 轮，调 `ConversationSummarizer`（LLM 摘要，失败回退主题抽取）写入 `self.summary`，再把摘要落盘到长期记忆。
-- **长期记忆**（`memory/long_term.py`）：SQLite `database/memory.db`，三张表--`memory_summaries`（滚动摘要）、`chat_sessions`、`conversation_history`（每轮问答）。检索为**纯 SQL 按时间倒序**（`ORDER BY created_at DESC`），无向量、无语义检索。
-
-**注入方式**：`/api/chat` 在追加用户消息前取 `memory.get_context(max_turns=10)`（`fastapi_server.py:352`），作为 `history` 传入 `execute_stream`（`:387`）；`get_context` 在 `summary` 非空时前置一条 `[历史对话摘要]` 系统消息（`short_term.py:40-45`）。
+- **Session Memory**（`memory/short_term.py`）：按 `session_id` 隔离（不再按 `user_id`），进程内 LRU 池 `_session_pool`，miss 时从 SQLite `conversation_history` **回灌**（`_ensure_hydrated`）。压缩不再用固定 30 轮，改为 **90% 上下文预算触发**：`_maybe_compress` 经 `usage_metadata` 的 `input_tokens` 判定（字符兜底 80%），折半折叠并写入 `summarized_up_to` **水印**持久化到 `chat_sessions` 表。`MAX_TURNS=30` 现仅作非聊天路径（如共指改写 `get_context(max_turns=6)`）的默认截断。
+- **Long-Term Memory**（`memory/long_term.py`）：SQLite `database/memory.db`（`memory_summaries` / `chat_sessions` / `conversation_history`，已加 `session_id` 列）+ **跨会话召回** `MemoryRecallService`（`memory/recall.py`）：终版会话摘要写入 ChromaDB `memory` collection（shared-collection + `user_id` owner 过滤，`include_public=False`），按相关性检索 + `gte-rerank-v2` 精排。闲置会话（`SESSION_IDLE_SECONDS`）的终版摘要 piggyback 到下次请求后台生成。
+- **召回注入**：经 `dynamic_prompt` 中间件（`report_prompt_switch` -> `_build_system_prompt`）在**正常模式**把跨会话召回注入系统提示（报告模式不注入）并限长；upsert 原子串行化。
+- **循环依赖打破**：`ConversationSummarizer` 改为构造时注入 `llm_callable`（不再 `import BaseAgent`），`MemoryService` 经 `set_summarizer_factory` 注入按 `user_id` 构造的 summarizer，消除 `memory` -> `agents` -> `memory` 环。
 
 > ⚠️ **当前限制（经核验）**：
-> - 长期记忆的滚动摘要 `get_recent_summaries` / `get_user_history` 在聊天链路中**未被调用**--摘要写入了 SQLite 却不回灌 prompt，实际只有进程内 `self.summary` 到达模型。
-> - 短期记忆仅按 `user_id` 索引（`short_term.py:95-99`），**不区分 `session_id`**，同一用户切换会话会共享滚动摘要与轮次缓冲。
-> - 长期记忆无 TTL / 遗忘机制，`conversation_history` 无限增长。
-> - 分析桥 `QueryRewriter` 现读取短期记忆 `get_session(user_id).get_context(max_turns=6)`（`planner_agent.py:326`）用于消解指代--这是流水线首次接入记忆；但 `ConversationMemory` 类名仍仅 import 未直接使用，长期记忆摘要依旧不回灌。
+> - `MemoryService` 为进程级单例（`fastapi_server._get_memory_service`），summarizer 的 LLM 在首次调用时按首个 `user_id` 构造并缓存，后续不同用户的摘要压缩复用同一 LLM（会话**数据**仍按 user/session 隔离，仅摘要模型的配置隔离不成立）。
+> - `PipelineContext.dataframe` 共享反序列化属性已定义但未启用，`AnalysisAgent` 仍各自 `pd.read_json`。
+> - `planner_agent._rewrite_query` 与 `middleware._recall_for_turn` 仍直连 `memory.short_term` / `memory.recall` 子模块，未走 `MemoryService`。
+> - 长期记忆无 TTL / 遗忘机制，`conversation_history` 持续增长。
 
 ## 5. RAG 两阶段检索
 
@@ -147,7 +142,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 **① 分析桥 `QueryRewriter`**（`agents/query_rewriter.py`，在 `PlannerAgent.run` 的 `_create_plan` 之前调用，`planner_agent.py:211,314-330`）
 
-- 结合短期记忆 `get_session(user_id).get_context(max_turns=6)`（`:326`）将当前 query 改写为**自包含**形式，消解代词/指代（"它/这个/上个月/刚才说的产品"），使多轮 query（如"分析它的趋势"）以无歧义形式进入规划。
+- 结合短期记忆 `get_session(session_id, user_id).get_context(max_turns=6)`（`planner_agent.py:322`）将当前 query 改写为**自包含**形式，消解代词/指代（"它/这个/上个月/刚才说的产品"），使多轮 query（如"分析它的趋势"）以无歧义形式进入规划。
 - 改写结果**仅用于规划**；对外标题/标签仍用原始 query。
 - 复用 `get_chat_model(user_id)` 的按用户隔离 LLM；失败/无历史回退原始 query，不引入新硬失败。代价：每次分析多一次 LLM 调用（相对多分钟流水线可忽略）。
 
@@ -157,4 +152,4 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 - rerank 仍用**原始 query** 打分（`:154`）--扩召回、保精度（rerank 只能排序粗召回已返回的结果，无法找回粗召回没取到的相关文档；故改写扩召回与 rerank 保精度不重复）。
 - 失败回退 `[原始 query]`，检索行为退化为现状。
 
-> 已知限制（ADR-0002）：短期记忆按 `user_id` 而非 `session_id` 索引，分析桥改写的历史可能跨会话泄漏（与 [§4](#4-记忆系统两层结构与当前限制) 短期记忆限制同源）。
+> 该限制（ADR-0002 原述：短期记忆按 `user_id` 而非 `session_id` 索引，分析桥改写历史可能跨会话泄漏）**已由 ADR-0003 解决**：Session Memory 现按 `session_id` 隔离（见 §4）。

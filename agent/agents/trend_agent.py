@@ -19,7 +19,7 @@ from analysis.trend_analysis import TrendAnalysis
 from utils.logger_handler import logger
 
 
-TREND_INSIGHT_PROMPT = """你是一个数据分析师，请基于以下趋势分析数据生成简洁的商业洞察。
+TREND_INSIGHT_PROMPT = """你是一个数据分析师，请基于以下趋势分析数据生成简洁的数据洞察。
 
 ## 数据
 {data_json}

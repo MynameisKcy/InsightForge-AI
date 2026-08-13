@@ -1,5 +1,63 @@
 # 版本更新记录
 
+### v0.5（2026-08-06）
+
+> 相对 v0.4 的主要更新。
+
+**报告导出图表修复（Word 崩溃 + 三格式无图）**
+- 根因：图表为 Plotly 交互式 `.html`，报告嵌入其 FS 路径 `![图](…/foo.html)`。Word `add_picture` 对 HTML 抛 `UnrecognizedImageError` 致整条导出失败；PDF 硬编码「图表见 HTML 版报告」占位；HTML/MD 的 `<img>`/`![]()` 指向 HTML 文件无法渲染。
+- `visualization/charts.py`：`_save_chart` 写 HTML 后 best-effort 用 kaleido 生成同名 `.png`（失败仅告警，不阻断图表生成）；新增 `chart_png_path(html_path)` 查同名 PNG。**关键**：不用 Plotly 的 `fig.write_image()`（同进程第 2 次调用新建 scope 会挂起），改用 `kaleido.start_sync_server` + `write_fig_sync` 复用单一 chromium scope；server 进程内常驻不 stop（`stop_sync_server` 在解释器退出触发 GIL 致命错误），`start_png_batch`/`stop_png_batch`（no-op）暴露批次语义。
+- `agents/visualization_agent.py`：chart entry 增 `png_path` 字段，经 `PipelineContext.charts` 贯通至 ReportAgent。
+- `agents/report_agent.py`：`_build_report_data` 嵌入 PNG 的 Web URL（`/reports/charts/foo.png`）替代 FS 路径，报告 bubble 亦能渲染图（前端 `safeUrl` 放行 `/` 开头）；新增 `_chart_web_url`。
+- `agents/export_agent.py`：新增 `_resolve_chart_image`（Web URL/FS/`.html` 同名 PNG 解析）/`_png_data_uri`/`_scaled_image`（Pillow 保比缩放）。Word `add_picture` 包 try/except 不再崩；PDF 嵌入 `reportlab.Image` 替代占位文字；HTML/MD 内联 base64 data URI（自包含可离线）。
+- `requirements.txt`：新增 `kaleido`、`Pillow`。
+- 新增 `tests/test_export_images.py`（10 用例：解析器各分支 + 四格式嵌图 + Word 不崩）。
+
+**README 美化**
+- 参照 beautify-github-readme 重写：shields.io 徽章组、目录锚点、`<details>` 折叠安装步骤与文档列表、居中截图布局、emoji 章节标题、页脚签名。
+
+### v0.4（2026-08-05）
+
+> 相对 v0.3 的主要更新。结论基于源码与提交记录核验。
+
+**两级记忆（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)，四阶段已落地）**
+- Session Memory 按 `session_id` 隔离 + LRU 池 + DB 回灌（miss 时从 `conversation_history` 重建）+ `summarized_up_to` 水印；压缩由固定 30 轮改为 **90% 上下文预算触发**（`usage_metadata` + 字符兜底 80%，折半折叠）。
+- Long-Term Memory 新增跨会话召回：终版会话摘要写入 ChromaDB `memory` collection（shared-collection + `user_id` owner 过滤，`include_public=False`），按相关性检索 + `gte-rerank-v2` 精排。
+- 闲置会话终版摘要（`SESSION_IDLE_SECONDS`）piggyback 到下次请求；召回注入移入 `dynamic_prompt` 中间件（正常模式注入、报告模式不注入）并限长；upsert 原子串行化。
+- `MemoryService` 外观（`memory/service.py`）将分散在 fastapi_server / react_agent / planner_agent / middleware 的记忆操作收敛为 `begin_turn()` / `end_turn()`，编排 Session Memory + Long-Term Memory + Recall 三层。
+- 打破 `memory ↔ agents` 循环依赖：`ConversationSummarizer` 改为注入 `llm_callable`，不再导入 `BaseAgent`；`MemoryService` 经 `set_summarizer_factory` 注入按 `user_id` 构造的 summarizer。
+
+**管道架构重构**
+- 统一 `AnalysisAgent` + `AnalysisModule` Protocol（`analysis/analysis_module.py`）：趋势 / 产品 / 风险三阶段收敛为单个 `AnalysisAgent` + 三个适配器（`TrendAnalysisAdapter` / `ProductAnalysisAdapter` / `RiskAnalysisAdapter`），复用既有 `TrendAnalysis` / `ProductAnalysis` / `AnomalyDetection` 计算类，消除三个复制粘贴 Agent。
+- `PipelineContext`（`agents/pipeline_context.py`）类型化 dataclass 替代 `prev_results` 字典抓取袋：handler 改写 `pctx.*_result` 类型化槽位，`completed_steps: set[int]` 依赖门控，便利属性 `charts` / `report_markdown` / `export_files`。`step_N` / `agent_name_result` 键整体移除。
+- 注：`TrendAgent` 类保留，仍被 `quick_data_insight` @tool 使用；`ProductAgent` / `RiskAgent` 已无活跃调用方。
+
+**流水线领域中性化（不再锁死销售场景）**
+- `product_analysis` 阶段语义改为**分组对比分析**（领域中立）：销售数据（含 price+qty 列）走“收入=单价×数量”快路径，人口/流量/运营等任意数据走通用路径（按类别维度分组、对数值度量列求和），不再对非销售数据强行 qty×price。`_detect_columns` 的 price/qty 改为仅按名列匹配（不再数值兜底误乘）；`build_product_summary` 输出 `dimension_col`/`measure_col`/`*_label` 元数据供报告渲染表头。
+- `AnomalyDetection` 度量列自适应（无 price/qty 时取首选数值列），输出键 `revenue_anomalies`→`measure_anomalies`、异常项 `revenue`→`value`；方法 `detect_revenue_anomalies`→`detect_measure_anomalies`、`detect_category_loss`→`detect_low_performers`、`detect_location_anomalies`→`detect_group_anomalies`。
+- 报告模板 `report_template.md` 与 `_basic_markdown_report` 改用数据驱动表头（`{{ dimension_label }}`/`{{ measure_label }}`/`p[dimension_col]`），不再硬编码“产品/总收入/销量”；空结果段加 `{% if %}` 守卫。报告/可视化/规划器/工具提示词去销售化（“商业分析师”→“数据分析师”、“商业洞察”→“数据洞察”，示例跨销售+人口+流量）。
+- 内部标识符（agent key `product_analysis`、槽 `product_result`、类名 `ProductAnalysis`/`ProductAnalysisAdapter`）保留以最小化 churn，仅用户可见标签改为“分组对比分析”。
+- 新增 `tests/test_domain_neutral.py`（7 用例：人口/流量数据分组对比 + 风险度量异常 + 计划路由）。
+
+**报告导出**
+- 新增 `POST /api/report/export` 端点 + `ExportAgent`，支持 Word / MD / PDF / HTML 下载。
+- PDF 注册 Windows 中文字体 + 渲染表格 + 图片占位，修复中文乱码与表格丢失；前端报告流结束后渲染导出按钮。历史会话消息现与实时流式一致地渲染 markdown / 图表 / 导出按钮。
+
+**Schema 语义画像**
+- `_compute_table_profile` 计算列语义统计 + 宽表检测；`get_enhanced_schema_text` 输出列语义统计 + 宽表标记 + 实例级 `_profile_cache`；重建同名表时清缓存防 stale profile。
+
+**健壮性**
+- Trend：入口选数值列、全文本列直接返回提示；`build_trend_summary` 对非数值列 `coerce` 防御。
+- 图表：pie / bar 画图前剔除汇总行（全省 / 总计等），避免汇总混入各市对比占大头。
+- CSV 解码：`load_csv_dataset` 与管理通道 `_load_csv` 在 `read_csv_auto` 失败时均回退 pandas 按 GBK / GB18030 / UTF-8 解码，修复非 UTF-8 中文 CSV 上传报错。
+
+**数据集命名**
+- 数据集保留中文原名 `display_name`，侧边栏显示原名 + 批量上传映射；`DataResolver` 按原名定位（用户输入"山东"命中"山东省..."）。
+
+**工程**
+- 测试套件扩充至 **216 passed / 29 文件**（新增两级记忆 / 召回、导出端点与 Agent、Schema 画像、AnalysisAgent / PipelineContext、display_name、上下文预算等用例）。
+- 已知实现落差（待跟进）：`PipelineContext.dataframe` 共享反序列化属性已定义但未启用（`AnalysisAgent` 仍自行 `pd.read_json`）；`MemoryService` 为进程级单例，summarizer 的 LLM 固定为首个 `user_id`（多用户配置隔离差距，会话数据仍按 user/session 隔离）。
+
 ### v0.3（2026-07-30）
 
 > 相对 v0.2 的主要更新。结论基于源码与提交记录核验。

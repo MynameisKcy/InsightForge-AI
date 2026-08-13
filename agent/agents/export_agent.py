@@ -5,6 +5,7 @@ Export Agent: Markdown → Word/PDF/HTML/Markdown 导出。
 import os
 import re
 import sys
+import base64
 from datetime import datetime
 from typing import Any
 
@@ -35,6 +36,7 @@ try:
     from reportlab.lib.units import mm
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.platypus import Table, TableStyle
+    from reportlab.platypus import Image as RLImage
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_CENTER
     from reportlab.pdfbase import pdfmetrics
@@ -136,15 +138,68 @@ class ExportAgent(BaseAgent):
             logger.warning(f"Unknown export format: {fmt}")
             return None
 
+    # ── 图表图片解析（Plotly 图表为交互式 HTML，导出需栅格 PNG）──
+
+    def _resolve_chart_image(self, ref: str) -> str | None:
+        """把 markdown 图片引用解析为本地 PNG 文件路径；无法解析返回 None。
+
+        ref 可能是 Web URL（/reports/charts/foo.png|.html）、FS 绝对路径、或占位符文本。
+        .html 引用会查找同名 .png（kaleido 在图表生成时产出的栅格图）。
+        """
+        if not ref:
+            return None
+        local = ref
+        if ref.startswith("/reports/"):
+            local = get_abs_path(ref.lstrip("/"))
+        if not local or not os.path.exists(local):
+            return None
+        low = local.lower()
+        if low.endswith(".png"):
+            return local
+        if low.endswith(".html"):
+            png = os.path.splitext(local)[0] + ".png"
+            return png if os.path.exists(png) else None
+        return None
+
+    def _png_data_uri(self, png_path: str) -> str:
+        """PNG 文件 -> base64 data URI（供 HTML/MD 自包含嵌入）。"""
+        with open(png_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+
+    def _scaled_image(self, png_path: str, max_w_mm: float = 160, max_h_mm: float = 110):
+        """reportlab Image 流对象，按原始宽高保比缩放到 max_w×max_h 框内。"""
+        from PIL import Image as PILImage
+        with PILImage.open(png_path) as im:
+            iw, ih = im.size
+        max_w = max_w_mm * mm
+        max_h = max_h_mm * mm
+        scale = min(max_w / iw, max_h / ih)
+        return RLImage(png_path, width=iw * scale, height=ih * scale)
+
     def _export_markdown(self, markdown: str, title: str) -> str:
-        """导出为 .md 文件（直接写入）。"""
+        """导出为 .md 文件（图表图片内联为 base64 data URI，自包含可离线查看）。"""
         output_dir = _ensure_export_dir("markdown")
         filename = _make_filename(title, "md")
         filepath = os.path.join(output_dir, filename)
+        content = self._inline_images_as_data_uri(markdown)
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(markdown)
+            f.write(content)
         logger.info(f"Markdown exported to {filepath}")
         return filepath
+
+    def _inline_images_as_data_uri(self, markdown: str) -> str:
+        """把 markdown 图表图片引用替换为 base64 data URI；无法解析的保留原样。"""
+        def repl(m):
+            alt, ref = m.group(1), m.group(2)
+            png = self._resolve_chart_image(ref)
+            if png:
+                try:
+                    return f"![{alt}]({self._png_data_uri(png)})"
+                except Exception as e:
+                    logger.warning(f"MD image inline failed ({png}): {e}")
+            return m.group(0)
+        return re.sub(r"!\[(.*?)\]\((.*?)\)", repl, markdown)
 
     def _export_docx(self, markdown: str, title: str) -> str | None:
         """导出为 Word (.docx) 文件。"""
@@ -186,11 +241,18 @@ class ExportAgent(BaseAgent):
                 self._add_docx_table(doc, table_lines)
             # 图片引用
             elif line.startswith("!["):
-                match = re.match(r"!\[.*?\]\((.*?)\)", line)
+                match = re.match(r"!\[(.*?)\]\((.*?)\)", line.strip())
                 if match:
-                    img_path = match.group(1)
-                    if os.path.exists(img_path):
-                        doc.add_picture(img_path, width=Inches(5.5))
+                    alt, ref = match.group(1), match.group(2)
+                    png = self._resolve_chart_image(ref)
+                    if png:
+                        try:
+                            doc.add_picture(png, width=Inches(5.5))
+                        except Exception as e:
+                            logger.warning(f"docx add_picture failed ({png}): {e}")
+                            doc.add_paragraph(f"（图表：{alt or '图'}，无法嵌入）")
+                    else:
+                        doc.add_paragraph(f"（图表：{alt or '图'}）")
             # 普通段落
             else:
                 # 移除 Markdown 标记
@@ -298,7 +360,19 @@ class ExportAgent(BaseAgent):
             elif line.startswith("---"):
                 story.append(Spacer(1, 4*mm))
             elif line.startswith("!["):
-                story.append(Paragraph("（图表见 HTML 版报告）", body_style))
+                match = re.match(r"!\[(.*?)\]\((.*?)\)", line.strip())
+                if match:
+                    alt, ref = match.group(1), match.group(2)
+                    png = self._resolve_chart_image(ref)
+                    if png:
+                        try:
+                            story.append(self._scaled_image(png))
+                            story.append(Spacer(1, 4 * mm))
+                        except Exception as e:
+                            logger.warning(f"pdf image failed ({png}): {e}")
+                            story.append(Paragraph(f"（图表：{alt or '图'}，无法嵌入）", body_style))
+                    else:
+                        story.append(Paragraph(f"（图表：{alt or '图'}）", body_style))
             elif line.startswith("|"):
                 table_lines = []
                 while i < len(lines) and lines[i].strip().startswith("|"):
@@ -444,7 +518,17 @@ class ExportAgent(BaseAgent):
                 match = re.match(r"!\[(.*?)\]\((.*?)\)", stripped)
                 if match:
                     alt, src = match.group(1), match.group(2)
-                    html_lines.append(f'<img src="{src}" alt="{alt}">')
+                    png = self._resolve_chart_image(src)
+                    if png:
+                        try:
+                            src = self._png_data_uri(png)
+                        except Exception as e:
+                            logger.warning(f"html image data-uri failed ({png}): {e}")
+                            src = ""
+                    if src:
+                        html_lines.append(f'<img src="{src}" alt="{self._html_clean(alt)}">')
+                    else:
+                        html_lines.append(f"<p>（图表：{alt or '图'}）</p>")
             # 分隔线
             elif stripped == "---":
                 html_lines.append("<hr>")

@@ -14,7 +14,7 @@ InsightForge-AI/
     ├── .env / .env.example        # 本地密钥（gitignored）/ 模板
     ├── requirements.txt
     ├── api/
-    │   ├── fastapi_server.py      # 唯一入口（1254 行）：SSE + REST + 鉴权
+    │   ├── fastapi_server.py      # 唯一入口（1335 行）：SSE + REST + 鉴权
     │   ├── auth.py                # require_auth + TTL 令牌缓存
     │   └── static/                # 静态前端：index.html(登录) app.html(工作台)
     │       ├── js/  app.js auth.js icons.js landing.js
@@ -24,13 +24,14 @@ InsightForge-AI/
     │   └── tools/  agent_tools.py(15 @tool)  middleware.py(3 中间件)
     ├── agents/                    # 数据分析流水线
     │   ├── base.py  planner_agent.py  sql_agent.py
-    │   ├── trend_agent.py  product_agent.py  risk_agent.py
+    │   ├── analysis_agent.py  pipeline_context.py     # 统一分析 Agent + 类型化管道上下文(替 prev_results)
+    │   ├── trend_agent.py  product_agent.py  risk_agent.py   # 旧三类(TrendAgent 仍被 quick_data_insight 用;product/risk 已孤儿)
     │   ├── visualization_agent.py  report_agent.py
     │   ├── document_report_agent.py  export_agent.py  query_rewriter.py
-    ├── analysis/                  # 纯算法：trend / product / anomaly_detection
+    ├── analysis/                  # 纯算法：trend / product / anomaly_detection / analysis_module(Protocol+适配器)
     ├── visualization/ charts.py   # Plotly 图表生成器
     ├── rag/  rag_service.py  vector_store.py  chart_knowledge.py  retrieval_query_rewriter.py
-    ├── memory/  short_term.py  long_term.py  summarizer.py
+    ├── memory/  short_term.py  long_term.py  summarizer.py  recall.py  service.py  context_budget.py
     ├── model/  factory.py         # 按用户 LLM/Embedding 缓存 + 热重载
     ├── database/                  # duckdb_manager / user_db / user_settings_db
     │   │                          #   datasources_db / data_resolver / schema_loader
@@ -44,7 +45,7 @@ InsightForge-AI/
     ├── chroma_db/                 # 向量库持久化
     ├── reports/  charts/          # 生成的报告与图表（挂载到 /reports）
     ├── logs/                      # 按日 .log（无轮转）
-    └── tests/                     # 20 个测试文件
+    └── tests/                     # 29 个测试文件（216 用例）
 ```
 
 > 说明：`agent/agent/` 是两层嵌套的命名空间包（`agent/` 与 `agent/agent/` 均无 `__init__.py`），靠命名空间包机制 + 全仓 `try: from agent.x / except: from x` 双导入模式解析，已通过测试验证可运行。
