@@ -27,10 +27,14 @@ class AnalysisModule(Protocol):
         """分析 DataFrame，返回结构化结果字典。"""
         ...
 
+    def apply_insight_fallback(self, result: dict) -> None:
+        """LLM 洞察失败时，用本适配器的输出键补安全默认值（契约归适配器，不泄漏到他类）。"""
+        ...
+
 
 # ── 趋势分析适配器 ──
 
-TREND_INSIGHT_PROMPT = """你是一个数据分析师，请基于以下趋势分析数据生成简洁的商业洞察。
+TREND_INSIGHT_PROMPT = """你是一个数据分析师，请基于以下趋势分析数据生成简洁的数据洞察。
 
 ## 数据
 {data_json}
@@ -81,19 +85,24 @@ class TrendAnalysisAdapter:
             df, value_col=picked_value, month_col=picked_month
         )
 
+    def apply_insight_fallback(self, result: dict) -> None:
+        result.setdefault("insight", result.get("trend_summary", ""))
+        result.setdefault("key_findings", [])
+        result.setdefault("recommendation", "")
+
 
 # ── 产品分析适配器 ──
 
-PRODUCT_INSIGHT_PROMPT = """你是一个产品分析专家，请基于以下产品分析数据生成商业洞察。
+PRODUCT_INSIGHT_PROMPT = """你是一个数据分析专家，请基于以下分组对比分析数据生成数据洞察。
 
 ## 数据
 {data_json}
 
 ## 要求
-1. 指出 TOP 产品及其表现。
-2. 分析低利润产品的原因猜测。
-3. 给出产品优化建议。
-4. 输出 JSON 格式：{{"insight": "文本总结", "top_product_analysis": "分析", "low_profit_analysis": "分析", "recommendations": ["建议1", "建议2"]}}
+1. 指出 TOP 项及其表现。
+2. 分析表现较弱项的原因。
+3. 给出可落地的优化建议。
+4. 输出 JSON 格式：{{"insight": "文本总结", "top_item_analysis": "分析", "low_performer_analysis": "分析", "recommendations": ["建议1", "建议2"]}}
 """
 
 
@@ -106,6 +115,12 @@ class ProductAnalysisAdapter:
         if df.empty:
             return {"error": "Empty dataset"}
         return ProductAnalysis.build_product_summary(df, top_n=5)
+
+    def apply_insight_fallback(self, result: dict) -> None:
+        result.setdefault("insight", "")
+        result.setdefault("top_item_analysis", "")
+        result.setdefault("low_performer_analysis", "")
+        result.setdefault("recommendations", [])
 
 
 # ── 风险分析适配器 ──
@@ -132,3 +147,8 @@ class RiskAnalysisAdapter:
         if df.empty:
             return {"error": "Empty dataset"}
         return AnomalyDetection.build_risk_summary(df)
+
+    def apply_insight_fallback(self, result: dict) -> None:
+        result.setdefault("risk_assessment", "")
+        result.setdefault("key_risks", [])
+        result.setdefault("mitigation", [])
