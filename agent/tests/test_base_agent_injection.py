@@ -29,5 +29,18 @@ class ModelInjectionTests(unittest.TestCase):
         self.assertIs(ReportAgent(model=fake).model, fake)
 
 
+class PlannerInjectionTests(unittest.TestCase):
+    def test_subagents_share_planner_model(self):
+        """reach-around 已删：子 Agent 经构造注入得到 planner 的模型（同一对象）。"""
+        from agents.planner_agent import PlannerAgent
+        with patch("agents.base.get_chat_model", return_value="USER_MODEL"):
+            planner = PlannerAgent(user_id="u1")
+        self.assertEqual(planner.model, "USER_MODEL")
+        for sub in (planner.sql_agent, planner.trend_agent, planner.product_agent,
+                    planner.risk_agent, planner.viz_agent, planner.report_agent,
+                    planner.export_agent):
+            self.assertIs(sub.model, planner.model)
+
+
 if __name__ == "__main__":
     unittest.main()
