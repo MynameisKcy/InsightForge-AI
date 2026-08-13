@@ -20,10 +20,7 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from agent.utils.config_handler import model_context_conf
-except ModuleNotFoundError:
-    from utils.config_handler import model_context_conf
+from utils.config_handler import model_context_conf
 
 # 配置缺失时的兜底默认（与 model_context.yml 对齐）
 _DEFAULT_CONTEXT_WINDOW = 32768
