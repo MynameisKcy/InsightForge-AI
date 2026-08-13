@@ -58,37 +58,39 @@ class RequestContext:
         self.query = query
 
 
-PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题，制定分析计划。
+PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题与数据特点，制定分析计划。
+
+分析场景不限于销售/零售，也涵盖人口分布、交通流量、运营指标、财务等任意数据。请根据用户实际数据与问题选择合适的分析类型，不要默认套用"产品/销量/利润"等商业概念。
 
 ## 可用的分析能力
 1. sql_query: 查询数据库获取数据（必须第一步）
-2. trend_analysis: 趋势分析（月度销售/利润趋势，增长率，异常月份）
-3. product_analysis: 产品分析（TOP产品，低利润产品，类别分析）
-4. risk_analysis: 风险分析（异常检测，区域异常，类别亏损）
+2. trend_analysis: 趋势分析（数值随时间的变化趋势，增长率，异常时段）
+3. product_analysis: 分组对比分析（按维度分组对比度量，TOP 项、分布占比、低表现项）
+4. risk_analysis: 风险分析（度量异常检测、分组异常、低表现分组）
 5. visualization: 生成图表（趋势图、柱状图、饼图、热力图、散点图）
 6. report: 生成 Markdown 分析报告
 7. export: 导出报告为 Word/PDF/HTML
 
 ## 规则
 1. sql_query 必须是计划中的第一步，因为所有后续分析都依赖数据。
-2. 根据用户问题选择合适的分析类型。
-3. 趋势分析和产品分析通常都需要。
+2. 根据用户问题与数据特点选择合适的分析类型，不必每类都加。
+3. 趋势分析适合含时间列的数据；分组对比分析适合按类别维度对比度量。
 4. 风险分析在用户提到"异常"、"风险"、"下降"、"问题"时加入。
 5. 图表生成和报告生成通常放在最后。
 6. 输出标准 JSON 格式的执行计划。
 
 ## 用户常见问题类型
 - "销售额趋势" → sql + trend + visualization + report
-- "哪个产品卖得最好" → sql + product + visualization + report
-- "分析利润下降原因" → sql + trend + product + risk + visualization + report
+- "各区人口分布" → sql + product + visualization + report
+- "分析某指标下降原因" → sql + trend + product + risk + visualization + report
 - "生成分析报告" → sql + trend + product + risk + visualization + report + export
-- "各区域表现如何" → sql + product + risk + report
+- "各分组表现如何" → sql + product + risk + report
 
 ## 输出格式
 {
   "plan": [
     {"step": 1, "agent": "sql_query", "task": "查询某某数据", "depends_on": []},
-    {"step": 2, "agent": "trend_analysis", "task": "分析月度趋势", "depends_on": [1]},
+    {"step": 2, "agent": "trend_analysis", "task": "分析趋势", "depends_on": [1]},
     ...
   ],
   "reasoning": "为什么这样安排",
@@ -102,7 +104,7 @@ PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器�
 AGENT_LABELS = {
     "sql_query": "SQL 查询",
     "trend_analysis": "趋势分析",
-    "product_analysis": "产品分析",
+    "product_analysis": "分组对比分析",
     "risk_analysis": "风险分析",
     "visualization": "图表生成",
     "report": "生成报告",
@@ -117,19 +119,14 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self, user_id=None):
         super().__init__(user_id)   # self.model = 该用户的 LLM（按 user_id 缓存）
-        self.sql_agent = SQLAgent()
-        self.trend_agent = AnalysisAgent(TrendAnalysisAdapter())
-        self.product_agent = AnalysisAgent(ProductAnalysisAdapter())
-        self.risk_agent = AnalysisAgent(RiskAnalysisAdapter())
-        self.viz_agent = VisualizationAgent()
-        self.report_agent = ReportAgent()
-        self.export_agent = ExportAgent()
-        # 子 Agent 默认按「默认配置」构建模型；这里统一指向本用户的模型，
-        # 实现整条流水线按 user_id 隔离 LLM 配置（避免改每个子 Agent 的构造签名）。
-        _model = self.model
-        for _ag in (self.sql_agent, self.trend_agent, self.product_agent,
-                    self.risk_agent, self.viz_agent, self.report_agent, self.export_agent):
-            _ag.model = _model
+        _model = self.model  # 本用户的 LLM；构造期注入每个子 Agent，实现整条流水线 user_id 隔离
+        self.sql_agent = SQLAgent(model=_model)
+        self.trend_agent = AnalysisAgent(TrendAnalysisAdapter(), model=_model)
+        self.product_agent = AnalysisAgent(ProductAnalysisAdapter(), model=_model)
+        self.risk_agent = AnalysisAgent(RiskAnalysisAdapter(), model=_model)
+        self.viz_agent = VisualizationAgent(model=_model)
+        self.report_agent = ReportAgent(model=_model)
+        self.export_agent = ExportAgent(model=_model)
         # 不再保存请求级状态（_current_csv_path/_current_dataset_name/_last_loaded_csv），
         # 改为每次请求用 RequestContext 局部变量下传，避免多用户并发竞态。
 
@@ -558,8 +555,10 @@ class PlannerAgent(BaseAgent):
             plan.append({"step": step, "agent": "trend_analysis", "task": "趋势分析", "depends_on": [1]})
             step += 1
 
-        if any(w in query_lower for w in ["产品", "product", "top", "卖", "销量", "利润"]):
-            plan.append({"step": step, "agent": "product_analysis", "task": "产品分析", "depends_on": [1]})
+        if any(w in query_lower for w in ["产品", "product", "top", "卖", "销量", "利润",
+                                           "分布", "占比", "对比", "排名", "人口", "流量",
+                                           "区域", "分组", "类别", "哪个", "哪些"]):
+            plan.append({"step": step, "agent": "product_analysis", "task": "分组对比分析", "depends_on": [1]})
             step += 1
 
         if any(w in query_lower for w in ["风险", "risk", "异常", "anomaly", "问题", "下降"]):
@@ -574,11 +573,11 @@ class PlannerAgent(BaseAgent):
             plan.append({"step": step, "agent": "report", "task": "生成分析报告", "depends_on": [1]})
             step += 1
 
-        # 确保至少有 trend + product + report 作为最完整的分析
+        # 确保至少有 trend + 分组对比 + report 作为最完整的分析
         if len(plan) <= 1:
             plan.extend([
                 {"step": 2, "agent": "trend_analysis", "task": "趋势分析", "depends_on": [1]},
-                {"step": 3, "agent": "product_analysis", "task": "产品分析", "depends_on": [1]},
+                {"step": 3, "agent": "product_analysis", "task": "分组对比分析", "depends_on": [1]},
                 {"step": 4, "agent": "visualization", "task": "图表生成", "depends_on": [2, 3]},
                 {"step": 5, "agent": "report", "task": "生成分析报告", "depends_on": [4]},
             ])
