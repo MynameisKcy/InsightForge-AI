@@ -17,12 +17,8 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from agent.model.factory import get_chat_model
-    from agent.utils.logger_handler import logger
-except ModuleNotFoundError:
-    from model.factory import get_chat_model
-    from utils.logger_handler import logger
+from model.factory import get_chat_model
+from utils.logger_handler import logger
 
 
 REWRITE_SYSTEM_PROMPT = """你是一个查询改写器。给定用户的当前问题与最近的对话历史，将当前问题改写为一个自包含的数据分析需求——消解其中的代词与指代（如"它/这个/那个/上个月/刚才说的产品"等），使改写后的问题脱离对话上下文也能被独立理解。
