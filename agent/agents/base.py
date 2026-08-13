@@ -20,9 +20,9 @@ class BaseAgent:
 
     name: str = "base"
 
-    def __init__(self, user_id=None):
-        # 模型按 user_id 解析：多用户各自用自己的 LLM 配置（见 factory.get_chat_model）
-        self.model = get_chat_model(user_id)
+    def __init__(self, user_id=None, model=None):
+        # 模型优先用注入（测试/上层注入同一实例）；未注入则按 user_id 解析（factory 缓存）。
+        self.model = model if model is not None else get_chat_model(user_id)
 
     def _call_llm(self, messages: list[dict]) -> str:
         """调用 LLM 并返回文本结果。"""

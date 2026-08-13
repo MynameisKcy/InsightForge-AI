@@ -33,6 +33,8 @@ SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用�
 8. **只生成 SELECT 查询** —— 禁止生成 DROP/CREATE/INSERT/UPDATE/DELETE/ATTACH/ALTER/TRUNCATE 等任何写操作或 DDL 语句。
 9. **跨表查询时请使用标准 SQL JOIN** —— 系统支持跨数据集关联分析。
 
+10. **列名已自动清洗**（HTML 实体/不可见字符/全角已归一），可直接使用 Schema 中的列名。若列名语义不明确，依据 Schema 提供的列统计（取值 values / nunique / min-max）推断该列含义（维度列还是度量列），**不要要求用户清洗或重传数据**。
+
 ## 数据库 Schema
 {schema}
 
@@ -42,6 +44,7 @@ SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用�
 - 如果 Schema 中有 "Product Name" 列，请用双引号引用为 "Product Name"。
 - 不要假设存在 Schema 中未出现的列名。
 - 如果用户的问题涉及多个表，请使用 JOIN 关联查询。
+- 列名含义不清时，结合列取值与统计推断（取值为月份/年龄段/类别则是维度列，含 min-max 数值则是度量列）。
 
 请根据用户需求生成 SQL："""
 
@@ -51,8 +54,8 @@ class SQLAgent(BaseAgent):
 
     name = "sql_agent"
 
-    def __init__(self, csv_path: str | None = None, user_id: str = "default"):
-        super().__init__()
+    def __init__(self, csv_path: str | None = None, user_id: str = "default", model=None):
+        super().__init__(model=model)
         # 不在构造时绑定全局单例 db；改为按 user_id 获取独立实例，保证多用户隔离。
         # 保留 csv_path 参数仅为向后兼容；实际数据层隔离由 user_id 决定。
         self._default_user_id = user_id
