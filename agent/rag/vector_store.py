@@ -13,20 +13,12 @@ from langchain_core.vectorstores import VectorStore
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-try:
-    from agent.utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
-    from agent.utils.file_handler import text_loader, pdf_loader, docx_loader, markdown_loader
-    from agent.utils.logger_handler import logger
-    from agent.utils.path_tool import get_abs_path
-    from agent.utils.config_handler import chroma_conf
-    from agent.model.factory import get_embed_model
-except ModuleNotFoundError:
-    from utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
-    from utils.file_handler import text_loader, pdf_loader, docx_loader, markdown_loader
-    from utils.logger_handler import logger
-    from utils.path_tool import get_abs_path
-    from utils.config_handler import chroma_conf
-    from model.factory import get_embed_model
+from utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
+from utils.file_handler import text_loader, pdf_loader, docx_loader, markdown_loader
+from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
+from utils.config_handler import chroma_conf
+from model.factory import get_embed_model
 
 
 # 公共 / 历史 owner：迁移前无 user_id 的分片统一归属 system，作为对所有用户可见的公共知识。

@@ -17,12 +17,8 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from agent.model.factory import get_chat_model
-    from agent.utils.logger_handler import logger
-except ModuleNotFoundError:
-    from model.factory import get_chat_model
-    from utils.logger_handler import logger
+from model.factory import get_chat_model
+from utils.logger_handler import logger
 
 
 EXPAND_SYSTEM_PROMPT = """你是一个检索查询扩展器。给定一个检索查询，生成 3 条语义相关但表述不同的改写，用于向量检索召回更多相关文档。

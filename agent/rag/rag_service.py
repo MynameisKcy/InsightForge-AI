@@ -16,23 +16,13 @@ from langchain_core.output_parsers import StrOutputParser
 
 from langchain_core.prompts import PromptTemplate
 
-try:
-    from agent.rag.vector_store import VectorStoreService
-    from agent.rag.retrieval_query_rewriter import RetrievalQueryRewriter
-    from agent.utils.prompt_loader import load_rag_prompts
-    from agent.utils.config_handler import rag_conf
-    from agent.model.factory import get_chat_model
-except ModuleNotFoundError:
-    from rag.vector_store import VectorStoreService
-    from rag.retrieval_query_rewriter import RetrievalQueryRewriter
-    from utils.prompt_loader import load_rag_prompts
-    from utils.config_handler import rag_conf
-    from model.factory import get_chat_model
+from rag.vector_store import VectorStoreService
+from rag.retrieval_query_rewriter import RetrievalQueryRewriter
+from utils.prompt_loader import load_rag_prompts
+from utils.config_handler import rag_conf
+from model.factory import get_chat_model
 
-try:
-    from utils.logger_handler import logger
-except ModuleNotFoundError:
-    from agent.utils.logger_handler import logger
+from utils.logger_handler import logger
 
 
 class RagSummarizerService(object):
