@@ -27,15 +27,8 @@ from analysis.analysis_module import (
 from utils.logger_handler import logger
 from memory.short_term import get_session
 
-try:
-    from database.data_resolver import DataResolver
-except ModuleNotFoundError:
-    from agent.database.data_resolver import DataResolver
-
-try:
-    from utils.progress_emitter import get_progress_emitter
-except ModuleNotFoundError:
-    from agent.utils.progress_emitter import get_progress_emitter
+from database.data_resolver import DataResolver
+from utils.progress_emitter import get_progress_emitter
 
 
 class RequestContext:
@@ -166,10 +159,7 @@ class PlannerAgent(BaseAgent):
 
         # 确保该 user 的 DuckDB 实例加载了本次所需 CSV（实例内部按 last_loaded_csv 判重）
         if csv_path and os.path.exists(csv_path):
-            try:
-                from database.duckdb_manager import init_duckdb
-            except ModuleNotFoundError:
-                from agent.database.duckdb_manager import init_duckdb
+            from database.duckdb_manager import init_duckdb
             init_duckdb(csv_path=csv_path, user_id=user_id)
 
         if dataset_name:
@@ -309,10 +299,7 @@ class PlannerAgent(BaseAgent):
         缺失则退回 contextvar current_session_id。改写器模型按 user_id 取。
         详见 docs/adr/0002-query-rewriting-two-points.md
         """
-        try:
-            from agents.query_rewriter import QueryRewriter
-        except ModuleNotFoundError:
-            from agent.agents.query_rewriter import QueryRewriter
+        from agents.query_rewriter import QueryRewriter
         try:
             from utils.request_context import get_session_id as _get_ctx_session_id
             sid = session_id or _get_ctx_session_id()

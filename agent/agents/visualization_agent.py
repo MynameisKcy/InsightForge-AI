@@ -17,11 +17,7 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
 from agents.base import BaseAgent
 from visualization.charts import ChartGenerator
 from utils.logger_handler import logger
-
-try:
-    from rag.chart_knowledge import chart_knowledge
-except ModuleNotFoundError:
-    from agent.rag.chart_knowledge import chart_knowledge
+from rag.chart_knowledge import chart_knowledge
 
 
 CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分析结果，决定应该生成哪些图表。
@@ -103,10 +99,7 @@ class VisualizationAgent(BaseAgent):
         # 避免 fig.write_image 逐次新建 scope 在第 2 次挂起）。server 进程内常驻，
         # 不在此 stop（见 charts.stop_png_batch 注释）。
         charts = []
-        try:
-            from visualization.charts import start_png_batch
-        except ImportError:
-            from agent.visualization.charts import start_png_batch
+        from visualization.charts import start_png_batch
         start_png_batch()
         for spec in chart_specs:
             try:

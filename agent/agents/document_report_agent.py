@@ -12,13 +12,8 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
         sys.path.insert(0, path)
 
 from agents.base import BaseAgent
-
-try:
-    from agent.utils.file_handler import pdf_loader, docx_loader, text_loader, markdown_loader
-    from agent.utils.prompt_loader import load_document_report_prompts
-except ModuleNotFoundError:
-    from utils.file_handler import pdf_loader, docx_loader, text_loader, markdown_loader
-    from utils.prompt_loader import load_document_report_prompts
+from utils.file_handler import pdf_loader, docx_loader, text_loader, markdown_loader
+from utils.prompt_loader import load_document_report_prompts
 
 
 def _load_text(file_path: str) -> str:
