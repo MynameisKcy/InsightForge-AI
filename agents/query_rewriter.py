@@ -8,14 +8,6 @@ Query Rewriter（分析桥接处）：在 PlannerAgent 入口、_create_plan 之
 预处理步骤。失败/无历史时回退原始 query，保证可用性（与 rerank 降级策略一致）。
 设计见 docs/adr/0002-query-rewriting-two-points.md。
 """
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from model.factory import get_chat_model
 from utils.logger_handler import logger

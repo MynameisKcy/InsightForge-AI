@@ -4,16 +4,9 @@ Export Agent: Markdown → Word/PDF/HTML/Markdown 导出。
 
 import os
 import re
-import sys
 import base64
 from datetime import datetime
 from typing import Any
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from utils.logger_handler import logger

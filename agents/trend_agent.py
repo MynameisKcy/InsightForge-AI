@@ -3,16 +3,8 @@ Trend Analysis Agent: 接收 DataFrame，执行趋势分析，生成自然语言
 """
 
 import json
-import os
-import sys
 
 import pandas as pd
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from analysis.trend_analysis import TrendAnalysis

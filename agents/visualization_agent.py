@@ -3,16 +3,8 @@ Visualization Agent: 接收分析结果，自动选择合适的图表类型并�
 """
 
 import json
-import os
-import sys
 
 import pandas as pd
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from visualization.charts import ChartGenerator

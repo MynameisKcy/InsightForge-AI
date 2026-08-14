@@ -2,14 +2,6 @@
 DocumentReportAgent：针对文本类文件（PDF/Word/TXT/MD）生成
 结构化报告（摘要 + 关键要点 + 可选问答），输出 Markdown。
 """
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from utils.file_handler import pdf_loader, docx_loader, text_loader, markdown_loader

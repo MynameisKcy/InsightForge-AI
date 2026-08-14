@@ -1,11 +1,7 @@
-import os
-import sys
 import time as _time
 import secrets as _secrets
 import unittest
 from unittest.mock import patch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import database.user_db as user_db_mod
 import api.fastapi_server as srv

@@ -3,14 +3,7 @@
 优先级（消费侧在 factory.getter 实现）：用户配置 > .env > YAML 默认。
 """
 import os
-import sys
 import sqlite3
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path

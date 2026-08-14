@@ -9,16 +9,9 @@ Verifies the analysis pipeline no longer locks to sales/product/profit:
 
 Pure-logic tests; PlannerAgent is constructed via __new__ to avoid __init__.
 """
-import os
-import sys
 import unittest
 
 import pandas as pd
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from agents.planner_agent import PlannerAgent
 from analysis.product_analysis import ProductAnalysis

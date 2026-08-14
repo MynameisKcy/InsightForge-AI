@@ -12,14 +12,7 @@ Covers three fixes:
 These are pure-logic tests; PlannerAgent is constructed via __new__ to avoid the
 heavy __init__ (which builds 7 sub-agents + LLM models).
 """
-import os
-import sys
 import unittest
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from agents.planner_agent import PlannerAgent, RequestContext
 from agents.pipeline_context import PipelineContext

@@ -1,11 +1,3 @@
-import os, sys
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for p in (PROJECT_ROOT, PROJECT_PARENT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
 from agents.document_report_agent import DocumentReportAgent, _load_text
 
 class _FakeLLM:

@@ -13,15 +13,7 @@ finalized_up_to 门控：已 finalize 到最新轮的会话不再重复 LLM 调�
 finalize（upsert 覆盖），保证摘要随会话演进刷新。
 """
 
-import os
-import sys
 from datetime import datetime
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 

@@ -7,15 +7,8 @@ feeds the tool the current request's user_id. These tests verify the
 caching / isolation / invalidation contract and that the tool wires user_id
 end-to-end, without constructing the real (heavy) PlannerAgent.
 """
-import os
-import sys
 import unittest
 from unittest.mock import patch
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from agent.tools import agent_tools
 

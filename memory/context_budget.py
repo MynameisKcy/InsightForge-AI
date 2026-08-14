@@ -11,14 +11,6 @@ ChatTongyi 不回填标准 `usage_metadata`，但在最终 AIMessage 的
   溢出异常类型未确定、流式重启有去重风险；待观测到真实溢出再补。
 """
 
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.config_handler import model_context_conf
 

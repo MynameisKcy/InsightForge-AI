@@ -2,14 +2,7 @@
 总结服务类：用户提问，搜索参考资料，将参考资料和提问提供给LLM,让模型总结回复
 """
 import os
-import sys
 import textwrap
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-if PROJECT_PARENT not in sys.path:
-    sys.path.insert(0, PROJECT_PARENT)
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser

@@ -1,17 +1,8 @@
-import os
-import sys
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
 from utils.logger_handler import logger
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for path in (PROJECT_ROOT, PROJECT_PARENT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from model.factory import get_chat_model
 from utils.prompt_loader import load_system_prompts

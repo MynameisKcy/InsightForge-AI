@@ -5,17 +5,10 @@ Chart Generator: 使用 Plotly 生成交互式图表，支持多种图表类型�
 import inspect
 import os
 import re
-import sys
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path

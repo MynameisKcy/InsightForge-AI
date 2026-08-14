@@ -9,19 +9,11 @@
 - HTML / Markdown 内联 base64 data URI（自包含可离线）
 """
 import os
-import sys
 import uuid
 import zipfile
 
 import pytest
 from PIL import Image
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for path in (PROJECT_ROOT, PROJECT_PARENT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.export_agent import ExportAgent
 from utils.path_tool import get_abs_path

@@ -3,14 +3,7 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 """
 
 import os
-import sys
 import traceback
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from agents.sql_agent import SQLAgent

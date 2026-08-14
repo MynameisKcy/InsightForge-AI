@@ -1,18 +1,9 @@
 import csv
 import json
-import os
-import sys
 from datetime import date
 
 from langchain_core.tools import tool
 import random
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(CURRENT_DIR))
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for path in (PROJECT_ROOT, PROJECT_PARENT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from rag.rag_service import RagSummarizerService
 from utils.config_handler import agent_conf

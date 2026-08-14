@@ -5,15 +5,7 @@
 应命中 display_name 含「山东省」的数据集，而非落到 dynamic_all（返回所有）。
 """
 import os
-import sys
 import tempfile
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for p in (PROJECT_ROOT, PROJECT_PARENT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
 import unittest
 

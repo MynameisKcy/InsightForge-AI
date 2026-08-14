@@ -1,14 +1,6 @@
 """POST /api/report/export 端点测试。"""
 import os
-import sys
 import time
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for path in (PROJECT_ROOT, PROJECT_PARENT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from fastapi.testclient import TestClient
 import api.fastapi_server as srv
