@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**InsightForge AI** — a multi-agent collaborative data analysis platform built on LangChain + LangGraph. Users interact via natural language; the system orchestrates specialized agents to perform SQL queries, trend/product/risk analysis, chart generation, and multi-format report export. All source code lives under `agent/`.
+**InsightForge AI** — a multi-agent collaborative data analysis platform built on LangChain + LangGraph. Users interact via natural language; the system orchestrates specialized agents to perform SQL queries, trend/product/risk analysis, chart generation, and multi-format report export. All source code lives at the repo root (packages: `api/`, `agents/`, `agent/`, `analysis/`, `visualization/`, `rag/`, `memory/`, `model/`, `database/`, `utils/`, ...); the repo root is the sys.path root. The `agent/` package is only the Smart Assistant (ReactAgent + tools).
 
 ## Commands
+
+All commands run from the repo root.
 
 **IMPORTANT:** All commands must be run inside the `AnalysisAgent` conda virtual environment. In the bash shell, conda is NOT on PATH by default. Activate it with:
 ```bash
@@ -17,18 +19,17 @@ Every Python/pytest command must be prefixed with this activation sequence.
 ```bash
 # Install dependencies (conda env: AnalysisAgent)
 conda activate AnalysisAgent
-cd agent
 pip install -r requirements.txt
 
 # Run FastAPI server (recommended, port 8502)
-conda activate AnalysisAgent && cd agent && python -m api.fastapi_server
+conda activate AnalysisAgent && python -m api.fastapi_server
 
 # Run existing tests
-conda activate AnalysisAgent && cd agent && python -m pytest tests/ -v
+conda activate AnalysisAgent && python -m pytest tests/ -v
 # or: python -m unittest discover tests -v
 
 # Run a single test file
-conda activate AnalysisAgent && cd agent && python -m unittest tests/test_rag_service.py -v
+conda activate AnalysisAgent && python -m unittest tests/test_rag_service.py -v
 ```
 
 ## Architecture
@@ -40,7 +41,7 @@ conda activate AnalysisAgent && cd agent && python -m unittest tests/test_rag_se
 
 ### Agent Pipeline
 
-All analysis agents extend `BaseAgent` (`agent/agents/base.py`) which provides `_call_llm()` and `_parse_json()`. The `PlannerAgent` orchestrates via `_agent_map` dict, passing results through a typed `PipelineContext` dataclass (`agent/agents/pipeline_context.py`): handlers write typed slots (`pctx.trend_result`, etc.) gated by `completed_steps: set[int]`; the old `prev_results` dict (`step_N` / `agent_name_result` keys) is retired. The Trend/Product/Risk stages are a single `AnalysisAgent` class injected with an `AnalysisModule` adapter (`analysis/analysis_module.py`: `TrendAnalysisAdapter` / `ProductAnalysisAdapter` / `RiskAnalysisAdapter`). `SQLAgent` output (`dataframe_json`) is the primary data carrier piped into all downstream agents. (`TrendAgent` class is retained for the `quick_data_insight` tool; `ProductAgent`/`RiskAgent` have no active callers.) The `product_analysis` stage (user-facing label "分组对比分析") is **domain-neutral**: sales data (price+qty columns) uses a revenue=price×qty fast-path, while population/traffic/operations data auto-detects a categorical dimension + numeric measure and aggregates by sum — it no longer forces qty×price on non-sales data. Report tables render data-derived headers (`dimension_col`/`measure_col` metadata) instead of hardcoded "产品/总收入/销量". Internal identifiers (`product_analysis` key, `product_result` slot, `ProductAnalysis` class) are retained as legacy; only labels/behavior were generalized.
+All analysis agents extend `BaseAgent` (`agents/base.py`) which provides `_call_llm()` and `_parse_json()`. The `PlannerAgent` orchestrates via `_agent_map` dict, passing results through a typed `PipelineContext` dataclass (`agents/pipeline_context.py`): handlers write typed slots (`pctx.trend_result`, etc.) gated by `completed_steps: set[int]`; the old `prev_results` dict (`step_N` / `agent_name_result` keys) is retired. The Trend/Product/Risk stages are a single `AnalysisAgent` class injected with an `AnalysisModule` adapter (`analysis/analysis_module.py`: `TrendAnalysisAdapter` / `ProductAnalysisAdapter` / `RiskAnalysisAdapter`). `SQLAgent` output (`dataframe_json`) is the primary data carrier piped into all downstream agents. (`TrendAgent` class is retained for the `quick_data_insight` tool; `ProductAgent`/`RiskAgent` have no active callers.) The `product_analysis` stage (user-facing label "分组对比分析") is **domain-neutral**: sales data (price+qty columns) uses a revenue=price×qty fast-path, while population/traffic/operations data auto-detects a categorical dimension + numeric measure and aggregates by sum — it no longer forces qty×price on non-sales data. Report tables render data-derived headers (`dimension_col`/`measure_col` metadata) instead of hardcoded "产品/总收入/销量". Internal identifiers (`product_analysis` key, `product_result` slot, `ProductAnalysis` class) are retained as legacy; only labels/behavior were generalized.
 
 ### Key Subsystems
 
@@ -57,21 +58,21 @@ All analysis agents extend `BaseAgent` (`agent/agents/base.py`) which provides `
 
 | File | Purpose |
 |------|---------|
-| `agent/.env` | **Primary**: DASHSCOPE_API_KEY, CHAT_MODEL_NAME, EMBEDDING_MODEL_NAME |
-| `agent/config/rag.yml` | Rerank model, retrieve_k, rerank_top_n, score threshold |
-| `agent/config/chroma.yml` | Collection name, chunk_size=500, chunk_overlap=50, separators |
-| `agent/config/agent.yml` | External data path |
-| `agent/config/datasources.yml` | Admin-preconfigured database connections (MySQL/PostgreSQL); passwords via `password_env` referencing .env variables |
-| `agent/config/prompts.yml` | Paths to prompt template files |
-| `agent/prompts/*.txt` | System prompt, RAG prompt, report prompt |
-| `agent/data/datasets/` | Uploaded CSV/Excel files stored on disk |
-| `agent/data/external/` | External data files referenced by datasources |
+| `.env` | **Primary**: DASHSCOPE_API_KEY, CHAT_MODEL_NAME, EMBEDDING_MODEL_NAME |
+| `config/rag.yml` | Rerank model, retrieve_k, rerank_top_n, score threshold |
+| `config/chroma.yml` | Collection name, chunk_size=500, chunk_overlap=50, separators |
+| `config/agent.yml` | External data path |
+| `config/datasources.yml` | Admin-preconfigured database connections (MySQL/PostgreSQL); passwords via `password_env` referencing .env variables |
+| `config/prompts.yml` | Paths to prompt template files |
+| `prompts/*.txt` | System prompt, RAG prompt, report prompt |
+| `data/datasets/` | Uploaded CSV/Excel files stored on disk |
+| `data/external/` | External data files referenced by datasources |
 
 **Config truth source**: `.env` is authoritative for model names and API keys; YAML values are fallback only.
 
 ### FastAPI SSE Protocol
 
-The `/api/chat` endpoint streams events with special tokens: `[THINKING]`, `[SESSION]`, `[SESSIONS_RELOAD]`, `[CHART:url]`, `[STEP:{json}]` (pipeline step progress), `[KEEPALIVE]` (15s heartbeat), `[CONTEXT]`, `[AUDIT:text]`, `[DONE]`, `[ERROR]`. Frontend is static files under `agent/api/static/` (served with no-cache middleware + versioned query strings) — no separate frontend build.
+The `/api/chat` endpoint streams events with special tokens: `[THINKING]`, `[SESSION]`, `[SESSIONS_RELOAD]`, `[CHART:url]`, `[STEP:{json}]` (pipeline step progress), `[KEEPALIVE]` (15s heartbeat), `[CONTEXT]`, `[AUDIT:text]`, `[DONE]`, `[ERROR]`. Frontend is static files under `api/static/` (served with no-cache middleware + versioned query strings) — no separate frontend build.
 
 ### Dataset Management API (new)
 
@@ -91,7 +92,7 @@ Frontend sidebar panel (`ds-section`) lists datasets, shows schema on click, and
 
 - **DashScope rerank model**: Must use `gte-rerank-v2` — `gte-rerank` returns 403 for most API keys. Import as `from dashscope import TextReRank` (not `dashscope.Rerank`). Always check `status_code==200` and `output` is not None before accessing results.
 - **SQL error retry**: SQLAgent feeds execution errors back to LLM for regeneration (max 2 retries). `_fix_sql` handles this loop.
-- **Path resolution**: All file paths are project-relative; `get_abs_path()` in `utils/path_tool.py` resolves relative to `agent/` directory.
+- **Path resolution**: All file paths are project-relative; `get_abs_path()` in `utils/path_tool.py` resolves relative to the repo root.
 - **Config loading**: YAML configs are loaded eagerly at module import time as global dicts (`rag_conf`, `chroma_conf`, etc.) via `utils/config_handler.py`.
 - **Reindex**: Use `/api/knowledge/reindex` endpoint or `vs.reindex_all()` to clear and rebuild the vector store.
 - **ReactAgent middleware**: `monitor_tool` detects `fill_report_context_for_report` to set `runtime.context["report"]=True`; `report_prompt_switch` (a `@dynamic_prompt` hook) swaps the system prompt to `report_prompt.txt` and, in normal mode (not report mode), injects cross-session recall into the system prompt via `_recall_for_turn`.

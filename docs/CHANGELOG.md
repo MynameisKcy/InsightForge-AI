@@ -1,5 +1,9 @@
 # 版本更新记录
 
+### 未发布
+
+- refactor: 扁平化包根(agent/ 整层上移至 repo 根), 统一导入形式, 消除 65 处双导入兜底与 63 处散落 sys.path hack
+
 ### v0.5（2026-08-06）
 
 > 相对 v0.4 的主要更新。
@@ -84,8 +88,8 @@
 
 **界面与交互**
 - 欢迎页重塑：hero + 功能卡片 + 登录/注册模态框（remember-me），统一 sci-tech 科技风设计语言。
-- 主工作台 sci-tech 主题重塑（信息架构保留）；移除用户头像功能；新增 SVG 图标库 `agent/api/static/js/icons.js`。
-- 前端从 `fastapi_server.py` 内联 HTML 抽离至 `agent/api/static/`（静态化 + no-cache 中间件 + 版本号破缓存）。
+- 主工作台 sci-tech 主题重塑（信息架构保留）；移除用户头像功能；新增 SVG 图标库 `api/static/js/icons.js`。
+- 前端从 `fastapi_server.py` 内联 HTML 抽离至 `api/static/`（静态化 + no-cache 中间件 + 版本号破缓存）。
 
 **鉴权**
 - 全站 `require_auth` 依赖 + TTL 令牌 LRU 缓存；cookie + token 登录态。

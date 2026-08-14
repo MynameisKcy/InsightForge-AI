@@ -30,8 +30,8 @@
 
 **单入口架构（[ADR-0001](adr/0001-single-entry-analysis-as-tool.md)）**：运行期只有 ReactAgent 一个入口，前端只调 `/api/chat`；分析流水线在 ReAct 循环选中 `run_full_analysis` 工具时同步执行，而非对等模式。`/api/analysis` 已退役（路由仍在、前端不调，与工具共用同一份 per-user 缓存）。术语遵循 [`../CONTEXT.md`](../CONTEXT.md)：Smart Assistant / Analysis Pipeline（非 "mode"）。
 
-- **Smart Assistant（ReactAgent，唯一入口）**：`agent/agent/react_agent.py`，基于 LangGraph `create_agent` 构建（非旧版 `AgentExecutor`）。绑定按 `user_id` 缓存的 LLM、15 个工具、3 个中间件（`monitor_tool` / `log_before_model` / `report_prompt_switch`）；`report_prompt_switch` 在正常模式额外注入跨会话召回（报告模式不注入）。`execute_stream` 是同步生成器，由 FastAPI 放进后台线程跑（见 [§7 SSE 流式与跨线程进度推送](DESIGN_DETAILS.md#7-sse-流式与跨线程进度推送)）。
-- **Analysis Pipeline（PlannerAgent，作为工具调用）**：`agent/agents/planner_agent.py`，由 `run_full_analysis` 工具按 `user_id` 取缓存实例并调用 `.run()`。入口处先经 `QueryRewriter` 消解对话指代（见 [§9 Query Rewriting](DESIGN_DETAILS.md#9-query-rewriting两点改写adr-0002)），再用 LLM 生成 JSON 执行计划（`_create_plan`），失败回退关键词默认计划（`_default_plan`），最后按计划顺序调度子代理、结果写入类型化 `PipelineContext`（取代 `prev_results` 字典）。
+- **Smart Assistant（ReactAgent，唯一入口）**：`agent/react_agent.py`，基于 LangGraph `create_agent` 构建（非旧版 `AgentExecutor`）。绑定按 `user_id` 缓存的 LLM、15 个工具、3 个中间件（`monitor_tool` / `log_before_model` / `report_prompt_switch`）；`report_prompt_switch` 在正常模式额外注入跨会话召回（报告模式不注入）。`execute_stream` 是同步生成器，由 FastAPI 放进后台线程跑（见 [§7 SSE 流式与跨线程进度推送](DESIGN_DETAILS.md#7-sse-流式与跨线程进度推送)）。
+- **Analysis Pipeline（PlannerAgent，作为工具调用）**：`agents/planner_agent.py`，由 `run_full_analysis` 工具按 `user_id` 取缓存实例并调用 `.run()`。入口处先经 `QueryRewriter` 消解对话指代（见 [§9 Query Rewriting](DESIGN_DETAILS.md#9-query-rewriting两点改写adr-0002)），再用 LLM 生成 JSON 执行计划（`_create_plan`），失败回退关键词默认计划（`_default_plan`），最后按计划顺序调度子代理、结果写入类型化 `PipelineContext`（取代 `prev_results` 字典）。
 
 ---
 
