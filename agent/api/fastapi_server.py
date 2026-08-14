@@ -98,22 +98,12 @@ from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
 # ── 记忆系统 & 用户认证 & 数据解析 ──
-try:
-    from memory.service import MemoryService
-except ModuleNotFoundError:
-    from agent.memory.service import MemoryService
+from memory.service import MemoryService
 
-try:
-    from database.user_db import user_db
-    from database.data_resolver import DataResolver
-except ModuleNotFoundError:
-    from agent.database.user_db import user_db
-    from agent.database.data_resolver import DataResolver
+from database.user_db import user_db
+from database.data_resolver import DataResolver
 
-try:
-    from utils.progress_emitter import ProgressEmitter
-except ModuleNotFoundError:
-    from agent.utils.progress_emitter import ProgressEmitter
+from utils.progress_emitter import ProgressEmitter
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _memory_service = None  # MemoryService 懒加载单例（需 llm_callable，由首次请求触发）
@@ -207,10 +197,7 @@ _react_agents = {}    # user_id -> ReactAgent
 
 def _get_react_agent(user_id: str):
     if user_id not in _react_agents:
-        try:
-            from agent.react_agent import ReactAgent
-        except ModuleNotFoundError:
-            from react_agent import ReactAgent
+        from agent.react_agent import ReactAgent
         _react_agents[user_id] = ReactAgent(user_id=user_id)
     return _react_agents[user_id]
 
@@ -221,10 +208,7 @@ def _get_planner_agent(user_id: str):
     /api/analysis（ADR-0001 已弃用，前端不再调用）与 run_full_analysis 工具共用同一份
     per-user 实例缓存，配置变更时只需失效一处（见 _invalidate_user_agents）。
     """
-    try:
-        from agent.agent.tools.agent_tools import _get_or_create_analyst
-    except ModuleNotFoundError:
-        from agent.tools.agent_tools import _get_or_create_analyst
+    from agent.tools.agent_tools import _get_or_create_analyst
     return _get_or_create_analyst(user_id)
 
 
@@ -233,10 +217,7 @@ def _invalidate_user_agents(user_id: str):
     配合 factory.reload_model_config(user_id) 一并清模型缓存。"""
     _react_agents.pop(user_id, None)
     # PlannerAgent 实例缓存由 agent_tools 持有，统一在此失效
-    try:
-        from agent.agent.tools.agent_tools import invalidate_analyst
-    except ModuleNotFoundError:
-        from agent.tools.agent_tools import invalidate_analyst
+    from agent.tools.agent_tools import invalidate_analyst
     invalidate_analyst(user_id)
 
 
@@ -248,10 +229,7 @@ def _get_vector_store():
     """延迟初始化向量库服务（方案C：运行时知识库管理）。"""
     global _vector_store_service
     if _vector_store_service is None:
-        try:
-            from rag.vector_store import VectorStoreService
-        except ModuleNotFoundError:
-            from agent.rag.vector_store import VectorStoreService
+        from rag.vector_store import VectorStoreService
         _vector_store_service = VectorStoreService()
     return _vector_store_service
 
@@ -637,10 +615,7 @@ _MAX_DATASET_SIZE = 100 * 1024 * 1024  # 100MB
 async def list_datasets(request: Request, user=Depends(require_auth)):
     """列出所有可用数据集。"""
     user_id = user["user_id"]
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
     datasets = datasources_db.list_datasets(owner_user_id=user_id)
     return JSONResponse({"datasets": datasets, "count": len(datasets)})
 
@@ -674,10 +649,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
         safe_name = "ds_" + (safe_name or "upload")
 
     # 处理同名冲突
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
 
     table_name = safe_name
     counter = 2
@@ -690,12 +662,8 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
         out.write(content)
 
     # 加载到 DuckDB
-    try:
-        from database.duckdb_manager import init_duckdb
-        from database.safety import safe_ident
-    except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
-        from agent.database.safety import safe_ident
+    from database.duckdb_manager import init_duckdb
+    from database.safety import safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -773,20 +741,14 @@ async def delete_dataset(request: Request, name: str, user=Depends(require_auth)
     if "/" in name or "\\" in name or name in ("", ".", ".."):
         return JSONResponse({"error": "非法数据集名"}, status_code=400)
 
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
 
     ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
         return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 删除表
-    try:
-        from database.duckdb_manager import init_duckdb
-    except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
+    from database.duckdb_manager import init_duckdb
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -816,22 +778,15 @@ async def get_dataset_schema(request: Request, name: str, user=Depends(require_a
     """获取数据集的详细 schema。"""
     user_id = user["user_id"]
 
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
 
     ds = datasources_db.get_dataset(name, owner_user_id=user_id)
     if not ds:
         return JSONResponse({"error": f"数据集 '{name}' 不存在或不属于当前用户"}, status_code=404)
 
     # 从 DuckDB 获取实时 schema
-    try:
-        from database.duckdb_manager import init_duckdb
-        from database.safety import safe_ident
-    except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
-        from agent.database.safety import safe_ident
+    from database.duckdb_manager import init_duckdb
+    from database.safety import safe_ident
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -874,10 +829,7 @@ async def reload_datasources(request: Request, user=Depends(require_auth)):
     """热加载 datasources.yml 配置的数据库连接。"""
     user_id = user["user_id"]
 
-    try:
-        from database.duckdb_manager import init_duckdb
-    except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
+    from database.duckdb_manager import init_duckdb
 
     try:
         db = init_duckdb(user_id=user_id)
@@ -891,10 +843,7 @@ async def reload_datasources(request: Request, user=Depends(require_auth)):
 # ── 知识库管理（方案C-5） ──
 
 def _kb_data_dir(user_id: str | None = None) -> str:
-    try:
-        from utils.config_handler import chroma_conf
-    except ModuleNotFoundError:
-        from agent.utils.config_handler import chroma_conf
+    from utils.config_handler import chroma_conf
     base = get_abs_path(chroma_conf["data_path"])
     # 按用户分目录：data/<user_id>/，消除同名文件覆盖与磁盘级跨用户泄露
     if not user_id:
@@ -903,23 +852,14 @@ def _kb_data_dir(user_id: str | None = None) -> str:
 
 
 def _kb_allowed_types() -> tuple:
-    try:
-        from utils.config_handler import chroma_conf
-    except ModuleNotFoundError:
-        from agent.utils.config_handler import chroma_conf
+    from utils.config_handler import chroma_conf
     return tuple(chroma_conf["allowed_knowledge_file_type"])
 
 
 # ── 账号设置（需求①：配置管理 + 热重载） ──
-try:
-    from database.user_settings_db import user_settings_db
-except ModuleNotFoundError:
-    from agent.database.user_settings_db import user_settings_db
+from database.user_settings_db import user_settings_db
 
-try:
-    from model.factory import reload_model_config
-except ModuleNotFoundError:
-    from agent.model.factory import reload_model_config
+from model.factory import reload_model_config
 
 
 @app.get("/api/settings/status")
@@ -1023,10 +963,7 @@ async def kb_list_files(request: Request, user=Depends(require_auth)):
     user_id = user["user_id"]
     data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
-    try:
-        from utils.file_handler import get_file_md5_hex
-    except ModuleNotFoundError:
-        from agent.utils.file_handler import get_file_md5_hex
+    from utils.file_handler import get_file_md5_hex
 
     vs = _get_vector_store()
     ingested_md5 = vs._load_md5_store()
@@ -1062,10 +999,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
     # ── 文本类（PDF/Word/TXT/MD，进 Chroma）──
     data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
-    try:
-        from utils.file_handler import get_file_md5_hex
-    except ModuleNotFoundError:
-        from agent.utils.file_handler import get_file_md5_hex
+    from utils.file_handler import get_file_md5_hex
     try:
         vs = _get_vector_store()
         ingested_md5 = vs._load_md5_store()
@@ -1094,10 +1028,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
                 "upload_time": "", "status": status, "source": "chroma",
             })
     # ── 表格类（CSV/Excel，进 DuckDB）──
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
     try:
         for d in datasources_db.list_datasets(owner_user_id=user_id):
             files.append({
