@@ -2,10 +2,7 @@
 import time
 from fastapi import Request, HTTPException
 
-try:
-    from database.user_db import user_db
-except ImportError:
-    from agent.database.user_db import user_db
+from database.user_db import user_db
 
 # token -> (user_dict, expire_ts)；30s 短缓存，token 24h 有效，安全
 _CACHE_TTL = 30.0
