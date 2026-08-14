@@ -1,12 +1,5 @@
 """context_budget 单测（ADR-0003 Phase 2）：token 估算/抽取/上下文窗口解析/阈值。"""
-import os
-import sys
 import unittest
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from memory import context_budget as cb
 

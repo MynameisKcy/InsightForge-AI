@@ -16,16 +16,8 @@ response_metadata['token_usage']['input_tokens'] 提供，已 spike 验证），
 分配（0,1,2,...），故新水印 = 旧水印 + 本轮折叠的轮数，内存与 DB 天然同步、无漂移。
 """
 
-import os
-import sys
 from collections import OrderedDict
 from typing import Any
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 from memory.context_budget import (

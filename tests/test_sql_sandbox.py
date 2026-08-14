@@ -3,15 +3,7 @@
 覆盖合法只读查询放行 + 各类攻击向量（多语句、文件读、SSRF、DDL/DML、
 PRAGMA 泄露、扩展加载、命令执行）拦截。
 """
-import os
-import sys
 import unittest
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from database.safety import assert_read_only, SecurityError  # noqa: E402
 

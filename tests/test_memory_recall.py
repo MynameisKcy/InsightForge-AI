@@ -15,18 +15,12 @@ rerank 够不到 DashScope:用例保持候选数 <= top_n,使 recall 跳过 rera
 不发起网络调用(与 rag_service._rerank 的 `len(docs) <= top_n` 早退一致)。
 """
 import os
-import sys
 import tempfile
 import threading
 import unittest
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import patch
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document

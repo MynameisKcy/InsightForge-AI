@@ -12,14 +12,8 @@
 short_term._get_summarizer(伪摘要器),避免触达真实 DashScope LLM 与生产 memory.db。
 """
 import os
-import sys
 import tempfile
 import unittest
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from memory.short_term import get_session, clear_session, ConversationMemory, MAX_TURNS
 from memory.long_term import LongTermMemory

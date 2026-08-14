@@ -1,11 +1,4 @@
-import os, sys, json
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for p in (PROJECT_ROOT, PROJECT_PARENT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
+import json
 import agent.tools.agent_tools as tools
 
 def test_list_user_files_uses_current_user_id(monkeypatch):

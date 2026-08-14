@@ -1,11 +1,4 @@
-import os, sys, tempfile
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-for p in (PROJECT_ROOT, PROJECT_PARENT):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
+import tempfile
 import database.user_settings_db as usd_mod
 
 def _fresh_db(tmp_path):

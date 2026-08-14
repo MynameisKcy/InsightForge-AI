@@ -5,15 +5,8 @@ Long-Term Memory: SQLite 存储对话摘要，按用户 ID 索引。
 import json
 import os
 import sqlite3
-import sys
 import uuid
 from datetime import datetime, timedelta
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path

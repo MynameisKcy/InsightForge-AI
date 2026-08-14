@@ -1,14 +1,7 @@
 """向量库 owner 隔离回归测试：用真实 in-memory Chroma（假 embed）验证
 A 上传的知识 B 检索/列表/删除均不可见，公共 system 知识对所有用户可见。"""
-import os
-import sys
 import unittest
 import uuid
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document

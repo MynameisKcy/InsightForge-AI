@@ -4,15 +4,8 @@ Report Agent: 整合所有分析结果 → 生成 Markdown 报告。
 
 import json
 import os
-import sys
 from datetime import datetime
 from typing import Any
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from utils.logger_handler import logger

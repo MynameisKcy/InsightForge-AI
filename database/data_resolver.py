@@ -4,13 +4,6 @@ Data Resolver: 根据用户提示词从 data/ 目录的 .txt 描述文件中自�
 """
 
 import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path

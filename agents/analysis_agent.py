@@ -6,14 +6,6 @@ Unified AnalysisAgent: 接受 AnalysisModule 适配器，执行分析 + LLM 洞�
 """
 
 import json
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from agents.base import BaseAgent
 from analysis.analysis_module import AnalysisModule

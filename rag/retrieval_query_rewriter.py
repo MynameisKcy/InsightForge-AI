@@ -8,14 +8,6 @@ Retrieval Query Rewriter（RAG 检索处）：在 rag_service.retriever_docs 的
 失败时回退为 [原始 query]，检索行为退化为现状（与 rerank 降级策略一致）。
 设计见 docs/adr/0002-query-rewriting-two-points.md。
 """
-import os
-import sys
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
 from model.factory import get_chat_model
 from utils.logger_handler import logger

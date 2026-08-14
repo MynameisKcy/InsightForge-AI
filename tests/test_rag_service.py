@@ -1,16 +1,6 @@
-import os
-import sys
 import unittest
 
 from langchain_core.documents import Document
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-PROJECT_PARENT = os.path.dirname(PROJECT_ROOT)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-if PROJECT_PARENT not in sys.path:
-    sys.path.insert(0, PROJECT_PARENT)
 
 from rag.rag_service import RagSummarizerService
 from utils.prompt_loader import load_rag_prompts

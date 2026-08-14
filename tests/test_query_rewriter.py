@@ -2,14 +2,7 @@
 
 用 __new__ 构造并注入桩模型，避免依赖真实 DashScope LLM。
 """
-import os
-import sys
 import unittest
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from agents.query_rewriter import QueryRewriter
 

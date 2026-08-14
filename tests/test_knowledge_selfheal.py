@@ -4,17 +4,11 @@
 "已入库"显示但大模型读不到的 bug。
 """
 import os
-import sys
 import tempfile
 import unittest
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from rag.vector_store import VectorStoreService
 
