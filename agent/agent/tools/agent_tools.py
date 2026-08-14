@@ -14,16 +14,10 @@ for path in (PROJECT_ROOT, PROJECT_PARENT):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from agent.rag.rag_service import RagSummarizerService
-    from agent.utils.config_handler import agent_conf
-    from agent.utils.path_tool import get_abs_path
-    from agent.agents.planner_agent import PlannerAgent
-except ModuleNotFoundError:
-    from rag.rag_service import RagSummarizerService
-    from utils.config_handler import agent_conf
-    from utils.path_tool import get_abs_path
-    from agents.planner_agent import PlannerAgent
+from rag.rag_service import RagSummarizerService
+from utils.config_handler import agent_conf
+from utils.path_tool import get_abs_path
+from agents.planner_agent import PlannerAgent
 
 rag = RagSummarizerService()
 
@@ -133,14 +127,9 @@ def run_full_analysis(query: str) -> str:
 @tool(description="快速查询数据集概况，返回所有已加载数据集的表结构、行数、关键统计信息，无需参数")
 def get_data_overview() -> str:
     """返回所有数据集的概况信息，自动适配当前数据集的实际列名。"""
-    try:
-        from database.duckdb_manager import init_duckdb
-        from database.safety import safe_ident
-        from utils.request_context import get_user_id
-    except ModuleNotFoundError:
-        from agent.database.duckdb_manager import init_duckdb
-        from agent.database.safety import safe_ident
-        from utils.request_context import get_user_id
+    from database.duckdb_manager import init_duckdb
+    from database.safety import safe_ident
+    from utils.request_context import get_user_id
 
     try:
         db = init_duckdb(user_id=get_user_id())
@@ -175,17 +164,10 @@ def get_data_overview() -> str:
 @tool(description="针对特定分组或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个地区人口最多'、'最近几期数值是否下降'")
 def quick_data_insight(query: str) -> str:
     """快速数据分析，返回关键洞察。"""
-    try:
-        from agents.sql_agent import SQLAgent
-        from agents.trend_agent import TrendAgent
-    except ModuleNotFoundError:
-        from agent.agents.sql_agent import SQLAgent
-        from agent.agents.trend_agent import TrendAgent
+    from agents.sql_agent import SQLAgent
+    from agents.trend_agent import TrendAgent
 
-    try:
-        from utils.request_context import get_user_id
-    except ModuleNotFoundError:
-        from utils.request_context import get_user_id
+    from utils.request_context import get_user_id
 
     try:
         sql = SQLAgent()
@@ -218,10 +200,7 @@ def quick_data_insight(query: str) -> str:
 @tool(description="从图表知识库和外部搜索中获取分析建议。结合历史图表数据和外部信息，为当前分析提供深度洞察。参数 query 为分析问题，如'销售下降原因分析'、'如何优化产品定价'")
 def get_chart_insights(query: str) -> str:
     """从图表知识库检索历史图表数据，结合外部搜索生成分析建议。"""
-    try:
-        from rag.chart_knowledge import chart_knowledge
-    except ModuleNotFoundError:
-        from agent.rag.chart_knowledge import chart_knowledge
+    from rag.chart_knowledge import chart_knowledge
 
     parts = []
 
@@ -249,10 +228,7 @@ def get_chart_insights(query: str) -> str:
 @tool(description="查询持久化的客户数据概况。返回按订单数排名的 TOP 客户列表，包含客户ID、名称、所在城市、区域、部门、订单数等信息。参数 top_n 为返回数量，默认 10")
 def get_customer_overview_tool(top_n: int = 10) -> str:
     """查询已持久化的客户数据，返回 TOP N 客户概况（仅当前用户）。"""
-    try:
-        from database.customer_profiles import get_customer_overview
-    except ModuleNotFoundError:
-        from agent.database.customer_profiles import get_customer_overview
+    from database.customer_profiles import get_customer_overview
     try:
         from utils.request_context import get_user_id
         uid = get_user_id()
@@ -282,10 +258,7 @@ def get_customer_overview_tool(top_n: int = 10) -> str:
 @tool(description="获取持久化客户数据的统计信息。返回总客户数、按城市分布、按部门分布等汇总统计，无需参数")
 def get_customer_stats_tool() -> str:
     """获取客户数据统计汇总（仅当前用户）。"""
-    try:
-        from database.customer_profiles import get_customer_count
-    except ModuleNotFoundError:
-        from agent.database.customer_profiles import get_customer_count
+    from database.customer_profiles import get_customer_count
     try:
         from utils.request_context import get_user_id
         uid = get_user_id()
@@ -317,10 +290,7 @@ def get_customer_stats_tool() -> str:
 # ── 需求③：文件引用与文本报告 ──
 import json as _json
 
-try:
-    from utils.request_context import get_user_id as _get_user_id_ctx
-except ModuleNotFoundError:
-    from agent.utils.request_context import get_user_id as _get_user_id_ctx
+from utils.request_context import get_user_id as _get_user_id_ctx
 
 
 def _current_user_id() -> str:
@@ -332,18 +302,9 @@ def _current_user_id() -> str:
 
 def _list_text_files(user_id: str):
     """列出文本类知识库文件（PDF/Word/TXT/MD，进 Chroma）。"""
-    try:
-        from utils.config_handler import chroma_conf
-    except ModuleNotFoundError:
-        from agent.utils.config_handler import chroma_conf
-    try:
-        from utils.file_handler import get_file_md5_hex
-    except ModuleNotFoundError:
-        from agent.utils.file_handler import get_file_md5_hex
-    try:
-        from utils.path_tool import get_abs_path
-    except ModuleNotFoundError:
-        from agent.utils.path_tool import get_abs_path
+    from utils.config_handler import chroma_conf
+    from utils.file_handler import get_file_md5_hex
+    from utils.path_tool import get_abs_path
     import os as _os
     uid = user_id or _current_user_id()
     data_dir = _os.path.join(get_abs_path(chroma_conf["data_path"]), uid)
@@ -365,10 +326,7 @@ def _list_text_files(user_id: str):
 
 def _list_table_files(user_id: str):
     """列出表格类数据集（CSV/Excel，进 DuckDB）。"""
-    try:
-        from database.datasources_db import datasources_db
-    except ModuleNotFoundError:
-        from agent.database.datasources_db import datasources_db
+    from database.datasources_db import datasources_db
     try:
         return datasources_db.list_datasets(owner_user_id=user_id) or []
     except Exception:
