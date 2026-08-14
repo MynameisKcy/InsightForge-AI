@@ -4,10 +4,7 @@ import sys
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
-try:
-    from utils.logger_handler import logger
-except ModuleNotFoundError:
-    from agent.utils.logger_handler import logger
+from utils.logger_handler import logger
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
@@ -16,24 +13,14 @@ for path in (PROJECT_ROOT, PROJECT_PARENT):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-try:
-    from agent.model.factory import get_chat_model
-    from agent.utils.prompt_loader import load_system_prompts
-    from agent.agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
-                                               get_current_month,get_external_data,fill_report_context_for_report,
-                                               run_full_analysis,get_data_overview,quick_data_insight,
-                                               get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
-                                               list_user_files,document_report)
-    from agent.agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
-except ModuleNotFoundError:
-    from model.factory import get_chat_model
-    from utils.prompt_loader import load_system_prompts
-    from agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
-                                         get_current_month,get_external_data,fill_report_context_for_report,
-                                         run_full_analysis,get_data_overview,quick_data_insight,
-                                         get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
-                                         list_user_files,document_report)
-    from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
+from model.factory import get_chat_model
+from utils.prompt_loader import load_system_prompts
+from agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
+                                     get_current_month,get_external_data,fill_report_context_for_report,
+                                     run_full_analysis,get_data_overview,quick_data_insight,
+                                     get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
+                                     list_user_files,document_report)
+from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
 
 
 class ReactAgent:
