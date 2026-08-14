@@ -204,11 +204,6 @@ def get_chart_insights(query: str) -> str:
         logger = __import__('logging').getLogger(__name__)
         logger.warning(f"Chart knowledge retrieval failed: {e}")
 
-    # 2. 尝试外部搜索获取最新信息
-    try:
-        from database.user_db import user_db
-    except ModuleNotFoundError:
-        pass
     # 外部搜索由 LLM 自主调用，此处仅返回内部知识库的结果
 
     if parts:

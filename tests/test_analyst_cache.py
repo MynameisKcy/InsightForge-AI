@@ -12,11 +12,9 @@ from unittest.mock import patch
 
 from agent.tools import agent_tools
 
-# IMPORTANT: import request_context via the SAME module name that run_full_analysis
-# uses internally (`from utils.request_context import get_user_id`). This repo's
-# dual-path imports can load agent/utils/request_context.py under two module names
-# ("utils.request_context" vs "agent.utils.request_context"); each gets its own
-# ContextVar, so setting on one would be invisible to code reading the other.
+# Import request_context via the SAME module name that run_full_analysis
+# uses internally (`from utils.request_context import get_user_id`), so the
+# ContextVar the tests set is the one the tool actually reads.
 from utils.request_context import set_request_context, reset_request_context
 
 

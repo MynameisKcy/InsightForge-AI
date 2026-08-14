@@ -1,4 +1,4 @@
-# agent/tests/test_data_resolver.py
+# tests/test_data_resolver.py
 """DataResolver 测试：验证用户自然语言输入能定位到具体数据集。
 
 重点：display_name（原始中文文件名）参与匹配——用户输入"山东"

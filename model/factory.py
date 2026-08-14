@@ -10,7 +10,7 @@ from langchain_community.chat_models import ChatTongyi
 # 必须在实例化模型之前执行：优先从 .env 读取，但不覆盖已存在的环境变量。
 try:
     from dotenv import load_dotenv
-    # .env 位于项目根目录（agent/），即本文件上两级目录
+    # .env 位于项目根目录，即本文件上两级目录
     _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     load_dotenv(_env_path, override=False)
 except ImportError:
