@@ -12,14 +12,9 @@ if PROJECT_ROOT not in sys.path:
 if PROJECT_PARENT not in sys.path:
     sys.path.insert(0, PROJECT_PARENT)
 
-try:
-    from agent.rag.rag_service import RagSummarizerService
-    from agent.utils.prompt_loader import load_rag_prompts
-    from agent.utils.report_exporter import build_report_filename, is_report_content, to_markdown_bytes
-except ModuleNotFoundError:
-    from rag.rag_service import RagSummarizerService
-    from utils.prompt_loader import load_rag_prompts
-    from utils.report_exporter import build_report_filename, is_report_content, to_markdown_bytes
+from rag.rag_service import RagSummarizerService
+from utils.prompt_loader import load_rag_prompts
+from utils.report_exporter import build_report_filename, is_report_content, to_markdown_bytes
 
 
 class DummyRetrieverWithInvoke:

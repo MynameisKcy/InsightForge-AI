@@ -15,10 +15,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-try:
-    from agent.rag.vector_store import VectorStoreService, PUBLIC_OWNER
-except ModuleNotFoundError:
-    from rag.vector_store import VectorStoreService, PUBLIC_OWNER
+from rag.vector_store import VectorStoreService, PUBLIC_OWNER
 
 
 class FakeEmbed(Embeddings):

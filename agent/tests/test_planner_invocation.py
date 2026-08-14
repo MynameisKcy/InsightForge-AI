@@ -21,12 +21,8 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    from agent.agents.planner_agent import PlannerAgent, RequestContext
-    from agent.agents.pipeline_context import PipelineContext
-except ModuleNotFoundError:
-    from agents.planner_agent import PlannerAgent, RequestContext
-    from agents.pipeline_context import PipelineContext
+from agents.planner_agent import PlannerAgent, RequestContext
+from agents.pipeline_context import PipelineContext
 
 
 def _bare_planner():

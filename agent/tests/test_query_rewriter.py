@@ -11,10 +11,7 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    from agent.agents.query_rewriter import QueryRewriter
-except ModuleNotFoundError:
-    from agents.query_rewriter import QueryRewriter
+from agents.query_rewriter import QueryRewriter
 
 
 class _FakeResponse:
