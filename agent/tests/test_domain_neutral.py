@@ -20,14 +20,9 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    from agent.agents.planner_agent import PlannerAgent
-    from agent.analysis.product_analysis import ProductAnalysis
-    from agent.analysis.anomaly_detection import AnomalyDetection
-except ModuleNotFoundError:
-    from agents.planner_agent import PlannerAgent
-    from analysis.product_analysis import ProductAnalysis
-    from analysis.anomaly_detection import AnomalyDetection
+from agents.planner_agent import PlannerAgent
+from analysis.product_analysis import ProductAnalysis
+from analysis.anomaly_detection import AnomalyDetection
 
 
 def _bare_planner():

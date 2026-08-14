@@ -16,10 +16,7 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    from agent.rag.vector_store import VectorStoreService
-except ModuleNotFoundError:
-    from rag.vector_store import VectorStoreService
+from rag.vector_store import VectorStoreService
 
 
 class FakeChroma:

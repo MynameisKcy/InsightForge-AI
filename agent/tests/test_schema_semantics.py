@@ -115,10 +115,7 @@ def test_load_csv_clears_profile_cache():
     import tempfile
 
     # validate_csv_path 要求文件在 data/ 目录下,用同一解析获取可写目录
-    try:
-        from utils.path_tool import get_abs_path
-    except ModuleNotFoundError:
-        from agent.utils.path_tool import get_abs_path
+    from utils.path_tool import get_abs_path
     data_dir = get_abs_path("data")
     os.makedirs(data_dir, exist_ok=True)
 
@@ -178,10 +175,7 @@ def test_reload_csv_clears_profile_cache():
     import tempfile
 
     # validate_csv_path 要求文件在 data/ 目录下
-    try:
-        from utils.path_tool import get_abs_path
-    except ModuleNotFoundError:
-        from agent.utils.path_tool import get_abs_path
+    from utils.path_tool import get_abs_path
     data_dir = get_abs_path("data")
     os.makedirs(data_dir, exist_ok=True)
 

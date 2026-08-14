@@ -11,12 +11,8 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    import agent.rag.retrieval_query_rewriter as rqr_mod
-    from agent.rag.retrieval_query_rewriter import RetrievalQueryRewriter
-except ModuleNotFoundError:
-    import retrieval_query_rewriter as rqr_mod
-    from retrieval_query_rewriter import RetrievalQueryRewriter
+import rag.retrieval_query_rewriter as rqr_mod
+from rag.retrieval_query_rewriter import RetrievalQueryRewriter
 
 
 class _FakeResponse:

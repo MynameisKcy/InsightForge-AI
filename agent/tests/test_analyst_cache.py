@@ -17,10 +17,7 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    from agent.agent.tools import agent_tools
-except ModuleNotFoundError:
-    from agent.tools import agent_tools
+from agent.tools import agent_tools
 
 # IMPORTANT: import request_context via the SAME module name that run_full_analysis
 # uses internally (`from utils.request_context import get_user_id`). This repo's
