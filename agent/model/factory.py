@@ -17,10 +17,7 @@ except ImportError:
     # python-dotenv 未安装时回退：依赖系统环境变量 DASHSCOPE_API_KEY
     pass
 
-try:
-    from agent.utils.config_handler import rag_conf
-except ModuleNotFoundError:
-    from utils.config_handler import rag_conf
+from utils.config_handler import rag_conf
 
 
 def _model_name(key: str) -> str:
