@@ -1,6 +1,6 @@
-from agent.utils.config_handler import prompts_conf
-from agent.utils.logger_handler import logger
-from agent.utils.path_tool import get_abs_path
+from utils.config_handler import prompts_conf
+from utils.logger_handler import logger
+from utils.path_tool import get_abs_path
 import os
 
 

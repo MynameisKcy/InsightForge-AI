@@ -2,10 +2,7 @@ import datetime
 import logging
 import os
 
-try:
-    from agent.utils.path_tool import get_abs_path
-except ModuleNotFoundError:
-    from utils.path_tool import get_abs_path
+from utils.path_tool import get_abs_path
 
 #日志保存根目录
 LOG_ROOT = get_abs_path("logs")

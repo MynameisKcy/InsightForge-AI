@@ -4,10 +4,7 @@ k:v
 """
 import yaml
 
-try:
-    from agent.utils.path_tool import get_abs_path
-except ModuleNotFoundError:
-    from utils.path_tool import get_abs_path
+from utils.path_tool import get_abs_path
 
 def load_rag_config(config_path: str = get_abs_path("config/rag.yml"),encoding="utf-8"):
     with open(config_path,"r",encoding=encoding) as f:

@@ -3,10 +3,7 @@ import os.path
 from langchain_core.documents import Document
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 
-try:
-    from agent.utils.logger_handler import logger
-except ModuleNotFoundError:
-    from utils.logger_handler import logger
+from utils.logger_handler import logger
 
 
 
