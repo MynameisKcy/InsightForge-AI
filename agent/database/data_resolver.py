@@ -43,11 +43,7 @@ def _import_datasources_db():
         from database.datasources_db import datasources_db
         return datasources_db
     except ModuleNotFoundError:
-        try:
-            from agent.database.datasources_db import datasources_db
-            return datasources_db
-        except ImportError:
-            return None
+        return None
 
 
 class DataResolver:

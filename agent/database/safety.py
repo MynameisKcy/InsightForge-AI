@@ -52,10 +52,7 @@ def validate_csv_path(path: str) -> str:
     if "'" in path:
         raise SecurityError(f"数据文件路径含非法字符: {path!r}")
     # 路径穿越防护：realpath 必须在 data 目录下
-    try:
-        from utils.path_tool import get_abs_path
-    except ModuleNotFoundError:
-        from agent.utils.path_tool import get_abs_path
+    from utils.path_tool import get_abs_path
     allowed_root = os.path.realpath(get_abs_path("data"))
     real = os.path.realpath(path)
     if not real.startswith(allowed_root + os.sep) and real != allowed_root:
