@@ -32,6 +32,9 @@ class RagSummarizerService(object):
         self.rerank_score_threshold = float(rag_conf.get("rerank_score_threshold", 0.3))
         self.prompt_text = load_rag_prompts()
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)
+        # 默认链（.env 模型）：仅供无 user_id 的旧调用/测试回退；
+        # 正式调用（rag_summarize 带 user_id）走 _get_chain 按用户解析模型，
+        # 避免单例 service 把所有用户钉死在 .env 默认模型上（网页配置失效 → 403）。
         self.model = get_chat_model()
         self.chain = self.__init_chain()
         # 检索查询扩展器（多查询改写，扩大粗召回召回率）；按 user_id 延迟取模型，
@@ -41,6 +44,18 @@ class RagSummarizerService(object):
     def __init_chain(self):
         chain = self.prompt_template | self.model |StrOutputParser()
         return chain
+
+    def _get_chain(self, user_id: str | None = None):
+        """按 user_id 解析摘要链：用户配置（网页设置）> .env 默认。
+
+        与 RetrievalQueryRewriter 的"单例 service 下按 user_id 延迟取模型"一致：
+        带 user_id 时即时构建（factory 内部按 user_id 缓存模型实例，且配置热更新后
+        能取到新模型）；无 user_id 回退 __init__ 构建的默认链 self.chain
+        （兼容旧调用与测试桩注入的 chain）。
+        """
+        if not user_id:
+            return self.chain
+        return self.prompt_template | get_chat_model(user_id) | StrOutputParser()
 
     def _coarse_retrieve(self, query: str, user_id: str | None = None) -> list[Document]:
         """向量粗召回：用 retrieve_k 拉大候选池，供 rerank 精排。按 owner 过滤（自己+公共 system）。"""
@@ -133,7 +148,7 @@ class RagSummarizerService(object):
             counter += 1
             context += f"[参考资料{counter}] 内容:{doc.page_content} | 元数据:{doc.metadata}\n"
 
-        answer = self.chain.invoke(
+        answer = self._get_chain(user_id).invoke(
             {
                 "input": query,
                 "context": context,

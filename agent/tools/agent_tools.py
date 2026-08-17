@@ -161,8 +161,11 @@ def quick_data_insight(query: str) -> str:
     from utils.request_context import get_user_id
 
     try:
-        sql = SQLAgent()
-        sql_result = sql.run({"task": query, "user_id": get_user_id()})
+        # user_id 必须传入构造器：Agent 的 LLM 按用户解析（网页设置 > .env），
+        # 不传则钉死 .env 默认模型（免费额度耗尽时 403）。
+        uid = get_user_id()
+        sql = SQLAgent(user_id=uid)
+        sql_result = sql.run({"task": query, "user_id": uid})
         if sql_result.get("error"):
             return f"数据查询失败: {sql_result['error']}"
 
@@ -173,7 +176,7 @@ def quick_data_insight(query: str) -> str:
             return "查询未返回任何数据，请确认问题是否合理。"
 
         if row_count > 1:
-            trend = TrendAgent()
+            trend = TrendAgent(user_id=uid)
             trend_result = trend.run({"dataframe_json": df_json})
             insight = trend_result.get("insight", trend_result.get("trend_summary", ""))
             if insight:
