@@ -324,7 +324,9 @@ def _list_table_files(user_id: str):
 
 def _new_document_report_agent():
     from agents.document_report_agent import DocumentReportAgent
-    return DocumentReportAgent()
+    # user_id 必须取当前请求用户（工具线程内 contextvar 已设）：Agent 的 LLM
+    # 按用户解析（网页设置 > .env），不传则钉死 .env 默认模型。
+    return DocumentReportAgent(user_id=_current_user_id())
 
 
 @tool(description="列出当前用户已上传的所有文件（文本类与表格类），含文件名、类型(text/table)、表名、状态。当用户要求基于某文件生成报告/分析时，先调用此工具确认可用文件。返回 JSON 字符串。")

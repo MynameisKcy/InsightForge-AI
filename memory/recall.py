@@ -52,12 +52,16 @@ class MemoryRecallService:
             self._memory_store = VectorStoreService(collection_name=MEMORY_COLLECTION)
         return self._memory_store
 
-    @property
-    def summarizer(self):
-        if self._summarizer is None:
-            from memory.short_term import get_summarizer
-            self._summarizer = get_summarizer()
-        return self._summarizer
+    def _summarizer_for(self, user_id: str):
+        """该用户的 summarizer：注入的（测试）原样用；懒加载按用户解析模型。
+
+        不缓存懒加载结果——缓存首个实例会把所有用户钉死在同一份模型配置上
+        （finalize 线程与请求线程可能属于不同用户）。
+        """
+        if self._summarizer is not None:
+            return self._summarizer
+        from memory.short_term import get_summarizer
+        return get_summarizer(user_id)
 
     # ── 会话结束：写终版摘要 ──
     def finalize_session(self, session_id: str, user_id: str) -> str:
@@ -74,7 +78,7 @@ class MemoryRecallService:
         # 终版摘要：有剩余轮次则合并压一份；否则沿用滚动摘要
         if remaining:
             try:
-                final = self.summarizer.summarize(remaining, rolling_summary)
+                final = self._summarizer_for(user_id).summarize(remaining, rolling_summary)
             except Exception as e:
                 logger.warning(f"finalize_session summarize failed: {e}; fallback to rolling summary")
                 final = rolling_summary or ""

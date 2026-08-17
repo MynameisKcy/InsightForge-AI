@@ -104,28 +104,31 @@ from database.data_resolver import DataResolver
 from utils.progress_emitter import ProgressEmitter
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
-_memory_service = None  # MemoryService 懒加载单例（需 llm_callable，由首次请求触发）
-# llm_callable 延迟解析模型用的"当前请求用户"记录：每次取用 service 时刷新。
-# 修复：单例曾被首个触发者（启动早期的 GET /api/sessions，user_id="default"）钉死在
-# .env 默认模型上，配置了网页模型的用户在会话压缩摘要上仍会 403/降级。
-# 注：后台闲置 finalize 线程读到的是最后一次请求的用户，极端并发下可能用错
-# 用户配置，失败时 summarizer 自带降级，属可接受折衷。
-_memory_llm_user = {"user_id": "default"}
+_memory_service = None  # MemoryService 懒加载单例（llm 按用户解析，由首次请求触发）
 
 
 def _get_memory_service(user_id: str = "default") -> MemoryService:
-    """获取 MemoryService 单例（懒加载；llm_callable 按当前请求用户延迟解析模型）。"""
+    """获取 MemoryService 单例（懒加载；summarizer 经 llm_factory(user_id) 按用户解析模型）。
+
+    user_id 仅供未来扩展（当前单例不持有用户状态）；按用户解析发生在
+    summarizer 调用时——工厂收到调用方的 user_id，后台闲置 finalize 线程
+    与请求线程互不干扰（消除了旧 _memory_llm_user 共享字典的竞态）。
+    """
     global _memory_service
     if _memory_service is None:
         from model.factory import get_chat_model
 
-        def _llm_call(messages: list[dict]) -> str:
-            from langchain_core.messages import HumanMessage
-            llm = get_chat_model(_memory_llm_user["user_id"])
-            return llm.invoke([HumanMessage(content=m["content"]) for m in messages]).content
+        def _llm_factory(uid: str):
+            def _llm_call(messages: list[dict]) -> str:
+                from langchain_core.messages import HumanMessage
+                llm = get_chat_model(uid)
+                return llm.invoke(
+                    [HumanMessage(content=m["content"]) for m in messages]
+                ).content
 
-        _memory_service = MemoryService(_llm_call)
-    _memory_llm_user["user_id"] = user_id or "default"
+            return _llm_call
+
+        _memory_service = MemoryService(_llm_factory)
     return _memory_service
 
 
@@ -512,7 +515,9 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
 
     try:
         from agents.export_agent import ExportAgent
-        result = ExportAgent().run({
+        # user_id 必传：Agent 的 LLM 按用户解析（网页设置 > .env），
+        # 不传则钉死 .env 默认模型（免费额度耗尽时 403）
+        result = ExportAgent(user_id=user["user_id"]).run({
             "markdown": markdown,
             "title": title,
             "formats": [fmt],
@@ -539,7 +544,7 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
 async def api_conversation_history(request: Request, limit: int = 20, user=Depends(require_auth)):
     """获取用户历史会话记录（长期记忆）。遗留兼容端点（ADR-0003 后前端改用 /api/sessions）。"""
     user_id = user["user_id"]
-    turns = _get_memory_service().get_conversation_history(user_id, limit)
+    turns = _get_memory_service(user_id).get_conversation_history(user_id, limit)
     return JSONResponse(content={"user_id": user_id, "turns": turns, "count": len(turns)})
 
 
@@ -547,7 +552,7 @@ async def api_conversation_history(request: Request, limit: int = 20, user=Depen
 async def api_list_sessions(request: Request, user=Depends(require_auth)):
     """获取用户的所有会话列表（按最近活跃排序）。"""
     user_id = user["user_id"]
-    sessions = _get_memory_service().list_sessions(user_id)
+    sessions = _get_memory_service(user_id).list_sessions(user_id)
     return JSONResponse(content={"user_id": user_id, "sessions": sessions, "count": len(sessions)})
 
 
@@ -556,7 +561,7 @@ async def api_get_session(request: Request, session_id: str, user=Depends(requir
     """获取指定会话的完整对话历史。IDOR 由外观 _assert_owner 统一处理。"""
     user_id = user["user_id"]
     try:
-        conversation = _get_memory_service().get_session(user_id, session_id)
+        conversation = _get_memory_service(user_id).get_session(user_id, session_id)
     except PermissionError:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     return JSONResponse(content={
@@ -572,7 +577,7 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     """删除指定会话及其全部记忆（LTM + Session Memory + 跨会话 embedding）。IDOR 由外观处理。"""
     user_id = user["user_id"]
     try:
-        _get_memory_service().delete_session(user_id, session_id)
+        _get_memory_service(user_id).delete_session(user_id, session_id)
     except PermissionError:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     return JSONResponse(content={"ok": True, "session_id": session_id})
@@ -592,7 +597,7 @@ async def api_rename_session(request: Request, session_id: str, user=Depends(req
     if len(title) > 60:
         title = title[:60]
     try:
-        _get_memory_service().rename_session(user_id, session_id, title)
+        _get_memory_service(user_id).rename_session(user_id, session_id, title)
     except PermissionError:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     return JSONResponse(content={"ok": True, "session_id": session_id, "title": title})

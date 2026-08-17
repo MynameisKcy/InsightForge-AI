@@ -11,7 +11,7 @@ class FacadeTestCase(unittest.TestCase):
         self._patches = []
         self.ltm_mock = self._start("memory.service.LongTermMemory")
         self.recall_mock = self._start("memory.service.get_memory_recall")
-        self.svc = MemoryService(llm_callable=lambda messages: "")
+        self.svc = MemoryService(llm_factory=lambda uid: (lambda messages: ""))
         # __init__ 已用上面的 mock 构造 _ltm / _recall
         self.ltm = self.ltm_mock.return_value
         self.recall = self.recall_mock.return_value
@@ -79,7 +79,7 @@ class DeleteSessionTests(unittest.TestCase):
         self._start("memory.service.get_memory_recall")
         # clear_session 在 service.py 内作为模块名查找，patch 其所在模块名
         self.clear_mock = self._start("memory.service.clear_session")
-        self.svc = MemoryService(llm_callable=lambda messages: "")
+        self.svc = MemoryService(llm_factory=lambda uid: (lambda messages: ""))
         self.ltm = self.svc._ltm
         self.recall = self.svc._recall
 
