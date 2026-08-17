@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import api.fastapi_server as srv
+import api.routes.datasets as ds_routes
 import database.datasources_db as ds_mod
 import database.duckdb_manager as duck_mod
 from database.datasources_db import DatasourcesDB
@@ -74,7 +75,7 @@ class _FakeDuckDB:
 @pytest.fixture
 def ds_env(tmp_path, monkeypatch):
     """数据集端点隔离环境：{'dir', 'meta', 'duck'}。"""
-    monkeypatch.setattr(srv, "_datasets_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(ds_routes, "_datasets_dir", lambda: str(tmp_path))
     meta = DatasourcesDB(db_path=str(tmp_path / "ds_meta.db"))
     monkeypatch.setattr(ds_mod, "datasources_db", meta)
     duck = _FakeDuckDB()

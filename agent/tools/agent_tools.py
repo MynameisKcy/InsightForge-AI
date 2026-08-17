@@ -82,7 +82,7 @@ def _get_or_create_analyst(user_id: str | None = None):
 def invalidate_analyst(user_id: str | None = None) -> None:
     """丢弃缓存的 PlannerAgent 实例，下次取用时按新配置重建。
 
-    user_id=None -> 清空全部；否则只清该用户。配合 fastapi_server._invalidate_user_agents
+    user_id=None -> 清空全部；否则只清该用户。配合 api.deps._invalidate_user_agents
     与 factory.reload_model_config 一并清掉 Agent 实例与模型缓存，使新配置真正生效。
     """
     if user_id is None:

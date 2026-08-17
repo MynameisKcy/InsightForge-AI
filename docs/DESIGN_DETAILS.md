@@ -58,7 +58,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 | 客户档案 | 复合主键 `(customer_id, user_id)`，查询 `WHERE user_id = ?` | `duckdb_manager.py:299, 704-735` |
 | 会话 / 对话历史 | `session_id` -> `user_id` owner 校验 | `long_term.py:191-201` |
 
-**IDOR 防护**：所有会话端点重新从 token 推导 `user_id`（绝不信任客户端），并与 `_long_term_memory.get_session_owner(session_id)` 比对，不匹配返回 **404（而非 403，防枚举）**--`/api/chat`（`fastapi_server.py:363`）、`GET/DELETE/PATCH /api/sessions/{id}`（`:516, :535, :549`）。数据集删除额外校验 realpath 必须在 `_datasets_dir()` 内（`:740-741`）。
+**IDOR 防护**：所有会话端点重新从 token 推导 `user_id`（绝不信任客户端），并与 `_long_term_memory.get_session_owner(session_id)` 比对，不匹配返回 **404（而非 403，防枚举）**--`/api/chat`（`api/routes/chat.py`）、`GET/DELETE/PATCH /api/sessions/{id}`（`api/routes/sessions.py`）。数据集删除额外校验 realpath 必须在 `_datasets_dir()` 内（`api/routes/datasets.py`）。
 
 > 注意：`_duckdb_instances` 是**无上限的普通 dict**（无 LRU / TTL / 容量上限），高用户 churn 下存在内存增长风险，仅 `close_duckdb(user_id)` 可手动清理。
 
@@ -72,7 +72,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 - **循环依赖打破**：`ConversationSummarizer` 改为构造时注入 `llm_callable`（不再 `import BaseAgent`），`MemoryService` 经 `set_summarizer_factory` 注入按 `user_id` 构造的 summarizer，消除 `memory` -> `agents` -> `memory` 环。
 
 > ⚠️ **当前限制（经核验）**：
-> - `MemoryService` 为进程级单例（`fastapi_server._get_memory_service`），summarizer 的 LLM 在首次调用时按首个 `user_id` 构造并缓存，后续不同用户的摘要压缩复用同一 LLM（会话**数据**仍按 user/session 隔离，仅摘要模型的配置隔离不成立）。
+> - `MemoryService` 为进程级单例（`api/deps.py 的 _get_memory_service`），summarizer 的 LLM 在首次调用时按首个 `user_id` 构造并缓存，后续不同用户的摘要压缩复用同一 LLM（会话**数据**仍按 user/session 隔离，仅摘要模型的配置隔离不成立）。
 > - `PipelineContext.dataframe` 共享反序列化属性已定义但未启用，`AnalysisAgent` 仍各自 `pd.read_json`。
 > - `planner_agent._rewrite_query` 与 `middleware._recall_for_turn` 仍直连 `memory.short_term` / `memory.recall` 子模块，未走 `MemoryService`。
 > - 长期记忆无 TTL / 遗忘机制，`conversation_history` 持续增长。
@@ -98,15 +98,15 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 - **Provider 选择**（非故障 fallback）：无 `base_url` 时用 `ChatTongyi`；用户或 `.env` 设了 `llm_base_url` / `LLM_BASE_URL` 时用 `langchain_openai.ChatOpenAI`（`streaming=True`）接入任意 OpenAI 兼容端点（`factory.py:104-108`）。**没有多模型故障切换链**--每个用户单一模型，配置可热替换。
 - **按用户缓存**：`_chat_model_cache` / `_embed_model_cache` 以 `user_id`（或 `__default__`）为键，`_config_lock` 保护（`:36-38, 122-132`）。
-- **热重载**：`reload_model_config(user_id)` 直接 `pop` 两个缓存条目（`:111-119`），下次 `get_chat_model` 重建。设置保存端点还会调 `_invalidate_user_agents(user_id)`（`fastapi_server.py:213`）丢弃该用户的 Agent 实例。**注意：没有"版本号"机制**--是"保存即清缓存、取用时重建"的失效模式。
+- **热重载**：`reload_model_config(user_id)` 直接 `pop` 两个缓存条目（`:111-119`），下次 `get_chat_model` 重建。设置保存端点还会调 `_invalidate_user_agents(user_id)`（`api/deps.py`）丢弃该用户的 Agent 实例。**注意：没有"版本号"机制**--是"保存即清缓存、取用时重建"的失效模式。
 - **配置优先级**（`factory.py:65-92`，已核验）：用户网页配置 > `.env` 环境变量 > YAML 默认值。
 - **API Key 加密**：在 `database/user_settings_db.py` 而非 factory。`_get_fernet()`（`:25-49`）从 `INSIGHTFORGE_SETTINGS_KEY` 取主密钥；缺失则 `Fernet.generate_key()` 随机生成并追加写入 `.env`（`load_dotenv(override=False)` 先加载避免覆盖既有密钥）。保存时 `f.encrypt`、读取时 `f.decrypt`，前端 `get_masked` 返回 `sk-***456` 形式。
 
 ## 7. SSE 流式与跨线程进度推送
 
-`/api/chat` 返回 `StreamingResponse(media_type="text/event-stream")`，每条事件为 `data: <payload>\n\n`，并设 `X-Accel-Buffering: no` 禁用 nginx 缓冲（`fastapi_server.py:447-453`）。
+`/api/chat` 返回 `StreamingResponse(media_type="text/event-stream")`，每条事件为 `data: <payload>\n\n`，并设 `X-Accel-Buffering: no` 禁用 nginx 缓冲（`api/routes/chat.py`）。
 
-**线程->异步桥** `_stream_with_heartbeat`（`fastapi_server.py:32-79`）：`ReactAgent.execute_stream` 是同步生成器，在 `run_full_analysis` 等长工具期间会阻塞数分钟。为不饿死异步循环，它被放进**守护线程**跑，每个 chunk 经 `loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))` 推入无界 `asyncio.Queue`；主协程 `await asyncio.wait_for(queue.get(), timeout=15)`，超时则 `yield` 一个心跳保活。线程异常装入 `error_box` 在 `finally` 抛回主协程 -> `[ERROR]`。
+**线程->异步桥** `_stream_with_heartbeat`（`api/sse.py`）：`ReactAgent.execute_stream` 是同步生成器，在 `run_full_analysis` 等长工具期间会阻塞数分钟。为不饿死异步循环，它被放进**守护线程**跑，每个 chunk 经 `loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))` 推入无界 `asyncio.Queue`；主协程 `await asyncio.wait_for(queue.get(), timeout=15)`，超时则 `yield` 一个心跳保活。线程异常装入 `error_box` 在 `finally` 抛回主协程 -> `[ERROR]`。
 
 **跨线程进度**：`ProgressEmitter.bind(loop, queue)`（`:48`）共享同一队列；`PlannerAgent` 经 `contextvars` 取到对应 emitter（`planner_agent.py:184`），`emit` 用 `loop.call_soon_threadsafe` 把步骤事件推入队列，从而绕过被阻塞的生成器直达前端。
 
@@ -134,7 +134,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 - **表格类**（`csv` / `xlsx` / `xls`）-> `POST /api/datasets/upload` -> DuckDB 建表 + `datasources.db` 记元数据（`owner_user_id` 隔离），可直接 SQL / 跨表 JOIN。
 - **文本类**（`txt` / `pdf` / `docx` / `md`）-> `POST /api/knowledge/upload` -> `VectorStoreService.load_single_document` 增量入 ChromaDB。
 
-`GET /api/files`（`fastapi_server.py:995`）合并两类返回统一列表；删除按 `type` 在前端分流到 `DELETE /api/datasets/{name}`（drop 表 + 删文件 + 删元数据）或 `DELETE /api/knowledge/files/{filename}`（删向量分片 + 删文件）。文件解析：PDF 用 `PyPDFLoader`（仅文本，无 OCR）、DOCX 用 `python-docx`（段落 + 表格按 `|` 拼接）、TXT/MD 用 `TextLoader`（`utils/file_handler.py`）。
+`GET /api/files`（`api/routes/knowledge.py`）合并两类返回统一列表；删除按 `type` 在前端分流到 `DELETE /api/datasets/{name}`（drop 表 + 删文件 + 删元数据）或 `DELETE /api/knowledge/files/{filename}`（删向量分片 + 删文件）。文件解析：PDF 用 `PyPDFLoader`（仅文本，无 OCR）、DOCX 用 `python-docx`（段落 + 表格按 `|` 拼接）、TXT/MD 用 `TextLoader`（`utils/file_handler.py`）。
 
 ## 9. Query Rewriting（两点改写，ADR-0002）
 
