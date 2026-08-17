@@ -105,20 +105,27 @@ from utils.progress_emitter import ProgressEmitter
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _memory_service = None  # MemoryService 懒加载单例（需 llm_callable，由首次请求触发）
+# llm_callable 延迟解析模型用的"当前请求用户"记录：每次取用 service 时刷新。
+# 修复：单例曾被首个触发者（启动早期的 GET /api/sessions，user_id="default"）钉死在
+# .env 默认模型上，配置了网页模型的用户在会话压缩摘要上仍会 403/降级。
+# 注：后台闲置 finalize 线程读到的是最后一次请求的用户，极端并发下可能用错
+# 用户配置，失败时 summarizer 自带降级，属可接受折衷。
+_memory_llm_user = {"user_id": "default"}
 
 
 def _get_memory_service(user_id: str = "default") -> MemoryService:
-    """获取 MemoryService 单例（懒加载，按 user_id 的管理模型初始化）。"""
+    """获取 MemoryService 单例（懒加载；llm_callable 按当前请求用户延迟解析模型）。"""
     global _memory_service
     if _memory_service is None:
         from model.factory import get_chat_model
-        llm = get_chat_model(user_id)
 
         def _llm_call(messages: list[dict]) -> str:
             from langchain_core.messages import HumanMessage
+            llm = get_chat_model(_memory_llm_user["user_id"])
             return llm.invoke([HumanMessage(content=m["content"]) for m in messages]).content
 
         _memory_service = MemoryService(_llm_call)
+    _memory_llm_user["user_id"] = user_id or "default"
     return _memory_service
 
 
