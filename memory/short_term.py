@@ -145,7 +145,7 @@ class ConversationMemory:
             fold_turns, keep_turns = self._split_oldest_turns(fold_count)
             if not fold_turns:
                 return
-            new_summary = get_summarizer().summarize(fold_turns, self.summary)
+            new_summary = get_summarizer(self.user_id).summarize(fold_turns, self.summary)
             new_watermark = self.summarized_up_to + fold_count
             self.summary = new_summary
             self.summarized_up_to = new_watermark
@@ -233,17 +233,19 @@ _summarizer_factory = None
 def set_summarizer_factory(factory):
     """设置 summarizer 工厂（由 MemoryService 在初始化时调用）。
 
-    打破 memory → agents 的循环依赖：llm_callable 由上层注入，
-    ConversationSummarizer 不再自行导入 BaseAgent。
+    打破 memory → agents 的循环依赖：LLM 按上层注入解析。工厂接受 user_id、
+    返回该用户的 ConversationSummarizer——按用户解析模型配置（网页设置 > .env），
+    后台闲置 finalize 线程与请求线程各自拿到正确用户的模型，不存在共享
+    "当前用户"状态（旧实现把全部用户钉死在同一份模型配置上）。
     """
     global _summarizer_factory
     _summarizer_factory = factory
 
 
-def get_summarizer():
-    """获取 ConversationSummarizer 实例（无状态，每次新建）。"""
+def get_summarizer(user_id: str = "default"):
+    """获取该用户的 ConversationSummarizer（无状态，每次新建）。"""
     if _summarizer_factory:
-        return _summarizer_factory()
+        return _summarizer_factory(user_id)
     from memory.summarizer import ConversationSummarizer
     return ConversationSummarizer(lambda msgs: "")
 

@@ -43,6 +43,10 @@ class VectorStoreService:
         self.collection_name = collection_name or chroma_conf["collection_name"]
         self.vector_store = Chroma(
             collection_name=self.collection_name,
+            # embedding 刻意保持全局（不按用户解析）：同一 collection 内混用
+            # 不同 embedding 模型会破坏向量空间（相似度跨模型不可比）。
+            # 按用户隔离的是 chat 模型（factory.get_chat_model(user_id)），
+            # 不是 embedding。
             embedding_function=get_embed_model(),
             persist_directory=get_abs_path(chroma_conf["persist_directory"]),
         )

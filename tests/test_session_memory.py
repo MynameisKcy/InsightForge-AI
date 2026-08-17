@@ -45,7 +45,7 @@ class SessionMemoryTests(unittest.TestCase):
         self._orig_get_summarizer = short_term_mod.get_summarizer
         self._fake_summarizer = _FakeSummarizer()
         short_term_mod._get_ltm = lambda: self.ltm
-        short_term_mod.get_summarizer = lambda: self._fake_summarizer
+        short_term_mod.get_summarizer = lambda *a, **k: self._fake_summarizer
 
         # 清空全局池,隔离用例
         short_term_mod._session_pool.clear()

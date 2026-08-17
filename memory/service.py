@@ -6,8 +6,9 @@ MemoryService 外观：编排 Session Memory + Long-Term Memory + Recall 的完�
 get_session()、_long_term_memory、get_memory_recall()、record_input_tokens()
 等内部细节。
 
-循环依赖消除：llm_callable 由上层注入，ConversationSummarizer 不再自行导入
-BaseAgent（memory → agents → memory 循环已打破）。
+循环依赖消除：llm 由上层注入的工厂按用户解析，ConversationSummarizer 不再自行导入
+BaseAgent（memory → agents → memory 循环已打破）。工厂接受 user_id——后台闲置
+finalize 线程与请求线程各自解析正确用户的模型，无共享"当前用户"状态。
 """
 
 import threading
@@ -39,27 +40,30 @@ class MemoryService:
     """统一内存外观 —— 编排 Session Memory + Long-Term Memory + Recall。
 
     使用方式:
-        svc = MemoryService(llm_callable)
+        svc = MemoryService(llm_factory)
         turn = svc.begin_turn(user_id, session_id, query)
         # ... agent 处理 ...
         svc.end_turn(user_id, turn.session_id, query, assistant_response,
                      input_tokens=n)
     """
 
-    def __init__(self, llm_callable: Callable[[list[dict]], str]):
+    def __init__(self, llm_factory: Callable[[str], Callable[[list[dict]], str]]):
         """
         Args:
-            llm_callable: LLM 调用函数，接受 messages: list[dict]，返回 str。
-                          用于 ConversationSummarizer。由上层（factory.get_chat_model）
-                          创建，打破 memory → agents 的循环依赖。
+            llm_factory: user_id -> llm_callable 工厂；llm_callable 接受
+                          messages: list[dict] 返回 str，用于 ConversationSummarizer。
+                          按用户解析模型（网页设置 > .env），由上层
+                          （factory.get_chat_model）创建，打破 memory → agents 的循环依赖。
         """
-        self._llm_callable = llm_callable
+        self._llm_factory = llm_factory
         self._ltm = LongTermMemory()
         self._recall = get_memory_recall()
 
-        # 注入 summarizer 工厂，使 short_term 和 recall 模块的懒加载
-        # ConversationSummarizer 使用上层注入的 llm_callable，不再自行导入 BaseAgent。
-        set_summarizer_factory(lambda: ConversationSummarizer(llm_callable))
+        # 注入按用户的 summarizer 工厂，使 short_term 和 recall 模块的懒加载
+        # ConversationSummarizer 用正确用户的 llm_callable，不再自行导入 BaseAgent。
+        set_summarizer_factory(
+            lambda uid: ConversationSummarizer(llm_factory(uid))
+        )
 
     # ── 公开接口 ──
 

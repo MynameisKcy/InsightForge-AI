@@ -24,7 +24,7 @@ def _fake_service() -> MemoryService:
     with patch("memory.service.LongTermMemory"), patch(
         "memory.service.get_memory_recall"
     ):
-        svc = MemoryService(llm_callable=lambda m: "")
+        svc = MemoryService(llm_factory=lambda uid: (lambda m: ""))
     svc._ltm.get_user_sessions.return_value = [{"session_id": "s1", "title": "t"}]
     svc._ltm.get_last_n_turns.return_value = [{"role": "user", "content": "hi"}]
     # 不存在的会话 → get_session_owner 返回 None → _assert_owner 抛 PermissionError → 404
