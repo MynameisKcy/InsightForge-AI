@@ -7,7 +7,7 @@ import json
 import pandas as pd
 
 from agents.base import BaseAgent
-from visualization.charts import ChartGenerator
+from visualization.charts import ChartGenerator, chart_png_path
 from utils.logger_handler import logger
 from rag.chart_knowledge import chart_knowledge
 
@@ -101,7 +101,10 @@ class VisualizationAgent(BaseAgent):
                     "title": spec.get("title", "Chart"),
                     "type": spec.get("chart_type", "bar"),
                     # 同名 PNG（kaleido 渲染），供报告导出嵌入栅格图；无则为 None
-                    "png_path": ChartGenerator.chart_png_path(chart_path),
+                    # 注意：chart_png_path 是 charts.py 的模块级函数，不是
+                    # ChartGenerator 的静态方法（误调会 AttributeError 使
+                    # 已成功渲染的图表被误标为失败）。
+                    "png_path": chart_png_path(chart_path),
                 }
                 charts.append(chart_entry)
 
@@ -132,10 +135,27 @@ class VisualizationAgent(BaseAgent):
         return {"charts": charts, "error": None}
 
     @staticmethod
-    def _resolve_column(df: pd.DataFrame, col_name: str, prefer: str = "number") -> str | None:
+    def _resolve_column(df: pd.DataFrame, col_name, prefer: str = "number") -> str | None:
         """验证并修正列名：如果 col_name 不存在，在 df 中找最接近的匹配列。
         prefer: "number" 优先数值列, "object" 优先文本列, "any" 任意列。
+
+        col_name 为 list/tuple（LLM 偶尔给多列，如多系列柱状图）时逐项解析，
+        返回第一个有效列——下游 charts.py 的 y_col/x_col 均为单字符串契约
+        （labels 字典键、dropna(subset=[...])），直接透传 list 会以
+        "unhashable type: 'list'" 使整张图失败。
         """
+        if isinstance(col_name, (list, tuple)):
+            # 第一遍：任一item精确命中即用（优先精确列名，避免被其他
+            # item 的"默认列回退"抢先，画错列）。
+            for item in col_name:
+                if isinstance(item, str) and item in df.columns:
+                    return item
+            # 第二遍：逐项走模糊匹配/默认列回退
+            for item in col_name:
+                resolved = VisualizationAgent._resolve_column(df, item, prefer=prefer)
+                if resolved:
+                    return resolved
+            return None
         if not col_name:
             return None
         if col_name in df.columns:
