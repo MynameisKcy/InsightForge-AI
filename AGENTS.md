@@ -61,7 +61,10 @@ python -m pytest tests/test_rag_service.py -v   # single file
 - **DuckDB identifiers**: always wrap interpolated table names in `safe_ident()`
   (`database/safety.py`) — direct f-strings are a SQL injection risk. The read-only
   AST sandbox (`_assert_read_only`) guards the query channel; the `_load_csv` /
-  `load_csv_dataset` management channel legitimately bypasses it.
+  `load_csv_dataset` management channel legitimately bypasses it. Query-channel
+  resource limits (memory/threads/rows/timeout) live in `config/agent.yml` `duckdb:`
+  and are applied via connect-time config + Python-side caps — SET/PRAGMA stay
+  sandbox-rejected, so never try to apply limits via SQL.
 - **CSV encoding**: Chinese CSVs may fail `read_csv_auto`; the pandas GBK/GB18030/UTF-8
   fallback in `load_csv_dataset` handles this — keep it.
 - **Config priority**: `.env` is authoritative for model names/API keys (web-app settings
