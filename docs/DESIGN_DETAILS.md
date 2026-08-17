@@ -2,7 +2,7 @@
 
 ## 1. 子代理编排：静态 `_agent_map` 与顺序派发
 
-子代理采用**静态注册**：在 `PlannerAgent.__init__` 中直接实例化 7 个子代理，并统一把它们的 `.model` 指向当前用户的 LLM，使整条流水线共享同一份按 `user_id` 隔离的模型配置（`planner_agent.py:116-130`）。
+子代理采用**静态注册**：在 `PlannerAgent.__init__` 中实例化各阶段代理并把当前用户的 LLM **构造期注入**每个子 Agent（`SQLAgent(model=...)` 等，`planner_agent.py:107-128`），使整条流水线共享同一份按 `user_id` 隔离的模型配置（不再有构造后 `.model = ...` 回写）。其中 Trend / Product / Risk 三阶段已收敛为**同一个 `AnalysisAgent` 类**注入不同 `AnalysisModule` 适配器（`AnalysisAgent(TrendAnalysisAdapter())` 等，`planner_agent.py:111-113`），适配器封装各类型的列选择与计算、复用 `analysis/` 下纯计算类（`TrendAnalysis` / `ProductAnalysis` / `AnomalyDetection`），消除三个复制粘贴 Agent。旧 `TrendAgent` 类仍被 `quick_data_insight` @tool 使用（`agent_tools.py:201`），`ProductAgent` / `RiskAgent` 已删除。`product_analysis` 阶段已泛化为领域中立的**分组对比分析**：销售数据（含 price+qty 列）走"收入=单价×数量"快路径，人口/流量/运营等走"维度×度量"通用路径（按类别列分组、对数值列求和），不再对非销售数据强行 qty×price；`_detect_columns` 的 price/qty 仅按名列匹配，`build_product_summary` 输出 `dimension_col`/`measure_col`/`*_label` 元数据供报告渲染数据驱动表头（详见 CHANGELOG v0.4「流水线领域中性化」）。
 
 ```python
 self._agent_map = {
@@ -15,24 +15,19 @@ self._agent_map = {
     "export":           self._run_export,
 }
 ```
-> `planner_agent.py:134-141`。另有 `DocumentReportAgent` **不在** `_agent_map` 中，仅由 `document_report` 工具按需懒加载调用（`agent_tools.py:377`）。
+> `_agent_map` 的键（handler 名）未变（`planner_agent.py:134-141`）；`trend` / `product` / `risk` 三个 handler 底层改用 `AnalysisAgent(adapter)`。另有 `DocumentReportAgent` **不在** `_agent_map` 中，仅由 `document_report` 工具按需懒加载调用。
 
-**派发循环**（`planner_agent.py:243-301`）是单线程顺序 `for step in plan:`，每个 `handler(task, results, ctx)` 同步调用。结果同时写入两个键，供下游按名取用：
-
-```python
-results[step_key] = step_result                # "step_N"
-results[f"{agent_name}_result"] = step_result  # 如 "sql_query_result"
-```
+**派发循环**（`planner_agent.py:242-288` / `:364-415`）是单线程顺序 `for step in plan:`，每个 `handler(task, pctx, ctx)` 同步调用、返回 `None`，结果写入**类型化 `PipelineContext`** dataclass（`agents/pipeline_context.py`）的槽位（`pctx.sql_result` / `pctx.trend_result` / `pctx.product_result` / `pctx.risk_result` / `pctx.visualization_result` / `pctx.report_result` / `pctx.export_result`），取代旧的 `prev_results` 字典与 `step_N` / `agent_name_result` 双键。最终返回的 `"results"` 直接持有 `PipelineContext` 实例本身（`planner_agent.py:285, 415`）。
 
 **依赖与容错语义**（关键，需准确理解）：
 
-- `depends_on` 仅做"依赖的 `step_N` 是否存在且非 None"检查；若依赖未就绪，该步直接 `continue` **跳过**，不排队、不等待、不重试（`planner_agent.py:248-257`）。
-- 单步抛异常 -> 记入 `errors`、该步置 `None`、发出 `step_error` 进度；下游依赖该步的会被跳过（`planner_agent.py:274-278`）。
+- `depends_on` 现检查 `all(d in pctx.completed_steps for d in depends)`（`completed_steps: set[int]`，`planner_agent.py:251`）；若依赖未就绪，该步直接 `continue` **跳过**，不排队、不等待、不重试。成功后 `pctx.completed_steps.add(step_num)`（`:264`）。
+- 单步抛异常时记入 `pctx.errors`、发出 `step_error` 进度；下游依赖该步的会被跳过（`planner_agent.py:274-278`）。
 - **没有并行执行**：即便 `trend` 与 `product` 都只依赖 `sql_query`，也只能串行跑。
-- **没有跨代理重试 / fallback**：唯一的重试是 `SQLAgent._fix_sql` 的错误回灌重生成（最多 2 次重试 = 3 次尝试，`sql_agent.py:88-114`）。
-- `success = len(errors) == 0`（`planner_agent.py:300`）。
+- **没有跨代理重试 / fallback**：唯一的重试是 `SQLAgent._fix_sql` 的错误回灌重生成（最多 2 次重试 = 3 次尝试）。
+- `pctx.success`（`pipeline_context.py:54`）综合 `errors` 与各槽位判定。
 
-**通信契约**：`SQLAgent` 产出的 `dataframe_json`（records-orient JSON 字符串）是主数据载体，经 `sql_query_result` 键流入 `Trend`/`Product`/`Risk`/`Viz`；`ReportAgent` 聚合全部 `*_result`（`planner_agent.py:502-510`）。
+**通信契约**：`SQLAgent` 产出的 `dataframe_json`（records-orient JSON 字符串）是主数据载体，写入 `pctx.dataframe_json`（`planner_agent.py:437`）后流入 `Trend` / `Product` / `Risk` / `Viz`；各阶段结果写入对应 `pctx.*_result` 槽位，`ReportAgent` 聚合全部槽位。`PipelineContext` 另暴露便利属性 `charts` / `report_markdown` / `export_files`（`pipeline_context.py:58-72`）供 `run_stream` 取用。
 
 ## 2. NL->SQL 只读沙箱（AST 级，非进程隔离）
 
@@ -63,24 +58,24 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 | 客户档案 | 复合主键 `(customer_id, user_id)`，查询 `WHERE user_id = ?` | `duckdb_manager.py:299, 704-735` |
 | 会话 / 对话历史 | `session_id` -> `user_id` owner 校验 | `long_term.py:191-201` |
 
-**IDOR 防护**：所有会话端点重新从 token 推导 `user_id`（绝不信任客户端），并与 `_long_term_memory.get_session_owner(session_id)` 比对，不匹配返回 **404（而非 403，防枚举）**--`/api/chat`（`fastapi_server.py:363`）、`GET/DELETE/PATCH /api/sessions/{id}`（`:516, :535, :549`）。数据集删除额外校验 realpath 必须在 `_datasets_dir()` 内（`:740-741`）。
+**IDOR 防护**：所有会话端点重新从 token 推导 `user_id`（绝不信任客户端），并与 `_long_term_memory.get_session_owner(session_id)` 比对，不匹配返回 **404（而非 403，防枚举）**--`/api/chat`（`api/routes/chat.py`）、`GET/DELETE/PATCH /api/sessions/{id}`（`api/routes/sessions.py`）。数据集删除额外校验 realpath 必须在 `_datasets_dir()` 内（`api/routes/datasets.py`）。
 
 > 注意：`_duckdb_instances` 是**无上限的普通 dict**（无 LRU / TTL / 容量上限），高用户 churn 下存在内存增长风险，仅 `close_duckdb(user_id)` 可手动清理。
 
-## 4. 记忆系统：两层结构与当前限制
+## 4. 记忆系统：两级记忆（ADR-0003，Session 级 + User 级）
 
-记忆是**扁平两层**设计，无工作 / 情景 / 语义的进一步分层：
+记忆为**两级**设计（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)），由 `MemoryService` 外观（`memory/service.py`）统一编排为 `begin_turn()` / `end_turn()` 两方法，调用方不再直接操作底层模块：
 
-- **短期记忆**（`memory/short_term.py`）：进程内 dict `_session_pool`，每会话保留 `MAX_TURNS = 30` 轮（1 轮 = 1 问 + 1 答）。超过阈值时 `_maybe_compress`（`:54-76`）取最早的 30 轮，调 `ConversationSummarizer`（LLM 摘要，失败回退主题抽取）写入 `self.summary`，再把摘要落盘到长期记忆。
-- **长期记忆**（`memory/long_term.py`）：SQLite `database/memory.db`，三张表--`memory_summaries`（滚动摘要）、`chat_sessions`、`conversation_history`（每轮问答）。检索为**纯 SQL 按时间倒序**（`ORDER BY created_at DESC`），无向量、无语义检索。
-
-**注入方式**：`/api/chat` 在追加用户消息前取 `memory.get_context(max_turns=10)`（`fastapi_server.py:352`），作为 `history` 传入 `execute_stream`（`:387`）；`get_context` 在 `summary` 非空时前置一条 `[历史对话摘要]` 系统消息（`short_term.py:40-45`）。
+- **Session Memory**（`memory/short_term.py`）：按 `session_id` 隔离（不再按 `user_id`），进程内 LRU 池 `_session_pool`，miss 时从 SQLite `conversation_history` **回灌**（`_ensure_hydrated`）。压缩不再用固定 30 轮，改为 **90% 上下文预算触发**：`_maybe_compress` 经 `usage_metadata` 的 `input_tokens` 判定（字符兜底 80%），折半折叠并写入 `summarized_up_to` **水印**持久化到 `chat_sessions` 表。`MAX_TURNS=30` 现仅作非聊天路径（如共指改写 `get_context(max_turns=6)`）的默认截断。
+- **Long-Term Memory**（`memory/long_term.py`）：SQLite `database/memory.db`（`memory_summaries` / `chat_sessions` / `conversation_history`，已加 `session_id` 列）+ **跨会话召回** `MemoryRecallService`（`memory/recall.py`）：终版会话摘要写入 ChromaDB `memory` collection（shared-collection + `user_id` owner 过滤，`include_public=False`），按相关性检索 + `gte-rerank-v2` 精排。闲置会话（`SESSION_IDLE_SECONDS`）的终版摘要 piggyback 到下次请求后台生成。
+- **召回注入**：经 `dynamic_prompt` 中间件（`report_prompt_switch` -> `_build_system_prompt`）在**正常模式**把跨会话召回注入系统提示（报告模式不注入）并限长；upsert 原子串行化。
+- **循环依赖打破**：`ConversationSummarizer` 改为构造时注入 `llm_callable`（不再 `import BaseAgent`），`MemoryService` 经 `set_summarizer_factory` 注入按 `user_id` 构造的 summarizer，消除 `memory` -> `agents` -> `memory` 环。
 
 > ⚠️ **当前限制（经核验）**：
-> - 长期记忆的滚动摘要 `get_recent_summaries` / `get_user_history` 在聊天链路中**未被调用**--摘要写入了 SQLite 却不回灌 prompt，实际只有进程内 `self.summary` 到达模型。
-> - 短期记忆仅按 `user_id` 索引（`short_term.py:95-99`），**不区分 `session_id`**，同一用户切换会话会共享滚动摘要与轮次缓冲。
-> - 长期记忆无 TTL / 遗忘机制，`conversation_history` 无限增长。
-> - 分析桥 `QueryRewriter` 现读取短期记忆 `get_session(user_id).get_context(max_turns=6)`（`planner_agent.py:326`）用于消解指代--这是流水线首次接入记忆；但 `ConversationMemory` 类名仍仅 import 未直接使用，长期记忆摘要依旧不回灌。
+> - `MemoryService` 为进程级单例（`api/deps.py 的 _get_memory_service`），summarizer 的 LLM 在首次调用时按首个 `user_id` 构造并缓存，后续不同用户的摘要压缩复用同一 LLM（会话**数据**仍按 user/session 隔离，仅摘要模型的配置隔离不成立）。
+> - `PipelineContext.dataframe` 共享反序列化属性已定义但未启用，`AnalysisAgent` 仍各自 `pd.read_json`。
+> - `planner_agent._rewrite_query` 与 `middleware._recall_for_turn` 仍直连 `memory.short_term` / `memory.recall` 子模块，未走 `MemoryService`。
+> - 长期记忆无 TTL / 遗忘机制，`conversation_history` 持续增长。
 
 ## 5. RAG 两阶段检索
 
@@ -103,15 +98,15 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 - **Provider 选择**（非故障 fallback）：无 `base_url` 时用 `ChatTongyi`；用户或 `.env` 设了 `llm_base_url` / `LLM_BASE_URL` 时用 `langchain_openai.ChatOpenAI`（`streaming=True`）接入任意 OpenAI 兼容端点（`factory.py:104-108`）。**没有多模型故障切换链**--每个用户单一模型，配置可热替换。
 - **按用户缓存**：`_chat_model_cache` / `_embed_model_cache` 以 `user_id`（或 `__default__`）为键，`_config_lock` 保护（`:36-38, 122-132`）。
-- **热重载**：`reload_model_config(user_id)` 直接 `pop` 两个缓存条目（`:111-119`），下次 `get_chat_model` 重建。设置保存端点还会调 `_invalidate_user_agents(user_id)`（`fastapi_server.py:213`）丢弃该用户的 Agent 实例。**注意：没有"版本号"机制**--是"保存即清缓存、取用时重建"的失效模式。
+- **热重载**：`reload_model_config(user_id)` 直接 `pop` 两个缓存条目（`:111-119`），下次 `get_chat_model` 重建。设置保存端点还会调 `_invalidate_user_agents(user_id)`（`api/deps.py`）丢弃该用户的 Agent 实例。**注意：没有"版本号"机制**--是"保存即清缓存、取用时重建"的失效模式。
 - **配置优先级**（`factory.py:65-92`，已核验）：用户网页配置 > `.env` 环境变量 > YAML 默认值。
 - **API Key 加密**：在 `database/user_settings_db.py` 而非 factory。`_get_fernet()`（`:25-49`）从 `INSIGHTFORGE_SETTINGS_KEY` 取主密钥；缺失则 `Fernet.generate_key()` 随机生成并追加写入 `.env`（`load_dotenv(override=False)` 先加载避免覆盖既有密钥）。保存时 `f.encrypt`、读取时 `f.decrypt`，前端 `get_masked` 返回 `sk-***456` 形式。
 
 ## 7. SSE 流式与跨线程进度推送
 
-`/api/chat` 返回 `StreamingResponse(media_type="text/event-stream")`，每条事件为 `data: <payload>\n\n`，并设 `X-Accel-Buffering: no` 禁用 nginx 缓冲（`fastapi_server.py:447-453`）。
+`/api/chat` 返回 `StreamingResponse(media_type="text/event-stream")`，每条事件为 `data: <payload>\n\n`，并设 `X-Accel-Buffering: no` 禁用 nginx 缓冲（`api/routes/chat.py`）。
 
-**线程->异步桥** `_stream_with_heartbeat`（`fastapi_server.py:32-79`）：`ReactAgent.execute_stream` 是同步生成器，在 `run_full_analysis` 等长工具期间会阻塞数分钟。为不饿死异步循环，它被放进**守护线程**跑，每个 chunk 经 `loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))` 推入无界 `asyncio.Queue`；主协程 `await asyncio.wait_for(queue.get(), timeout=15)`，超时则 `yield` 一个心跳保活。线程异常装入 `error_box` 在 `finally` 抛回主协程 -> `[ERROR]`。
+**线程->异步桥** `_stream_with_heartbeat`（`api/sse.py`）：`ReactAgent.execute_stream` 是同步生成器，在 `run_full_analysis` 等长工具期间会阻塞数分钟。为不饿死异步循环，它被放进**守护线程**跑，每个 chunk 经 `loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))` 推入无界 `asyncio.Queue`；主协程 `await asyncio.wait_for(queue.get(), timeout=15)`，超时则 `yield` 一个心跳保活。线程异常装入 `error_box` 在 `finally` 抛回主协程 -> `[ERROR]`。
 
 **跨线程进度**：`ProgressEmitter.bind(loop, queue)`（`:48`）共享同一队列；`PlannerAgent` 经 `contextvars` 取到对应 emitter（`planner_agent.py:184`），`emit` 用 `loop.call_soon_threadsafe` 把步骤事件推入队列，从而绕过被阻塞的生成器直达前端。
 
@@ -119,18 +114,18 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 | Token | 产出位置 | 含义 |
 |-------|----------|------|
-| `[SESSION]{id}` | `:381` | 当前轮会话 ID |
-| `[SESSIONS_RELOAD]` | `:383` | 新建会话时通知前端刷新列表 |
-| `[KEEPALIVE]` | `:390` | 15s 心跳，前端仅重置空闲计时 |
-| `[STEP:{json}]` | `:400` | 步骤进度（plan / step_start / step_done / step_error / status） |
-| `[THINKING]{text}` | `:409`（源自 `react_agent.py:130`） | 工具调用提示，不计入持久化内容 |
-| `[CHART:{url}]` | `:430` | 检测到新生成的图表 HTML |
-| `[DONE]` | `:442` | 流结束 |
-| `[ERROR] {msg}` | `:445` | 流式异常 |
+| `[SESSION]{id}` | `api/routes/chat.py` | 当前轮会话 ID |
+| `[SESSIONS_RELOAD]` | `api/routes/chat.py` | 新建会话时通知前端刷新列表 |
+| `[KEEPALIVE]` | `api/sse.py`（心跳串由 chat 路由传入） | 15s 心跳，前端仅重置空闲计时 |
+| `[STEP:{json}]` | `api/routes/chat.py`（事件源为 `ProgressEmitter`） | 步骤进度（plan / step_start / step_done / step_error / status） |
+| `[THINKING]{text}` | `agent/react_agent.py` | 工具调用提示，不计入持久化内容 |
+| `[CHART:{url}]` | `api/routes/chat.py` | 检测到新生成的图表 HTML |
+| `[DONE]` | `api/routes/chat.py` | 流结束 |
+| `[ERROR] {msg}` | `api/routes/chat.py` | 流式异常 |
 
-> `[CONTEXT]` 与 `[AUDIT:]` 在前端 `app.js:506, 508-520` 有解析分支，但**后端无任何产出方**--为预留的 dormant 分支。审计通道目前未启用。
+> `[CONTEXT]` 与 `[AUDIT:]` 在前端 `app.js` 有解析分支，但**后端无任何产出方**——为预留的 dormant 分支。审计通道目前未启用。
 
-> ⚠️ **无服务端取消**：客户端 `AbortController` 中断只取消 `StreamingResponse` 生成器，后台守护线程仍会把 `execute_stream` 跑完（LLM / Agent 工作不被打断），属资源浪费点。
+> **协作式服务端取消**（`utils/cancel_token.py`）：主协程在心跳超时与每 20 个 chunk 处抽检 `request.is_disconnected()`，断连即置 `CancelToken`（event + contextvar），`ReactAgent` 流循环与 `PlannerAgent` 步骤边界轮询退出，`run_full_analysis` 不吞取消异常；取消后不发 `[DONE]`、不写记忆。**不抢占**：单次进行中的 LLM 调用仍会完成，取消发生在下一个边界。
 
 ## 8. 文件分轨：文本入向量库 / 表格入 DuckDB
 
@@ -139,7 +134,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 - **表格类**（`csv` / `xlsx` / `xls`）-> `POST /api/datasets/upload` -> DuckDB 建表 + `datasources.db` 记元数据（`owner_user_id` 隔离），可直接 SQL / 跨表 JOIN。
 - **文本类**（`txt` / `pdf` / `docx` / `md`）-> `POST /api/knowledge/upload` -> `VectorStoreService.load_single_document` 增量入 ChromaDB。
 
-`GET /api/files`（`fastapi_server.py:995`）合并两类返回统一列表；删除按 `type` 在前端分流到 `DELETE /api/datasets/{name}`（drop 表 + 删文件 + 删元数据）或 `DELETE /api/knowledge/files/{filename}`（删向量分片 + 删文件）。文件解析：PDF 用 `PyPDFLoader`（仅文本，无 OCR）、DOCX 用 `python-docx`（段落 + 表格按 `|` 拼接）、TXT/MD 用 `TextLoader`（`utils/file_handler.py`）。
+`GET /api/files`（`api/routes/knowledge.py`）合并两类返回统一列表；删除按 `type` 在前端分流到 `DELETE /api/datasets/{name}`（drop 表 + 删文件 + 删元数据）或 `DELETE /api/knowledge/files/{filename}`（删向量分片 + 删文件）。文件解析：PDF 用 `PyPDFLoader`（仅文本，无 OCR）、DOCX 用 `python-docx`（段落 + 表格按 `|` 拼接）、TXT/MD 用 `TextLoader`（`utils/file_handler.py`）。
 
 ## 9. Query Rewriting（两点改写，ADR-0002）
 
@@ -147,7 +142,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 **① 分析桥 `QueryRewriter`**（`agents/query_rewriter.py`，在 `PlannerAgent.run` 的 `_create_plan` 之前调用，`planner_agent.py:211,314-330`）
 
-- 结合短期记忆 `get_session(user_id).get_context(max_turns=6)`（`:326`）将当前 query 改写为**自包含**形式，消解代词/指代（"它/这个/上个月/刚才说的产品"），使多轮 query（如"分析它的趋势"）以无歧义形式进入规划。
+- 结合短期记忆 `get_session(session_id, user_id).get_context(max_turns=6)`（`planner_agent.py:322`）将当前 query 改写为**自包含**形式，消解代词/指代（"它/这个/上个月/刚才说的产品"），使多轮 query（如"分析它的趋势"）以无歧义形式进入规划。
 - 改写结果**仅用于规划**；对外标题/标签仍用原始 query。
 - 复用 `get_chat_model(user_id)` 的按用户隔离 LLM；失败/无历史回退原始 query，不引入新硬失败。代价：每次分析多一次 LLM 调用（相对多分钟流水线可忽略）。
 
@@ -157,4 +152,4 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 - rerank 仍用**原始 query** 打分（`:154`）--扩召回、保精度（rerank 只能排序粗召回已返回的结果，无法找回粗召回没取到的相关文档；故改写扩召回与 rerank 保精度不重复）。
 - 失败回退 `[原始 query]`，检索行为退化为现状。
 
-> 已知限制（ADR-0002）：短期记忆按 `user_id` 而非 `session_id` 索引，分析桥改写的历史可能跨会话泄漏（与 [§4](#4-记忆系统两层结构与当前限制) 短期记忆限制同源）。
+> 该限制（ADR-0002 原述：短期记忆按 `user_id` 而非 `session_id` 索引，分析桥改写历史可能跨会话泄漏）**已由 ADR-0003 解决**：Session Memory 现按 `session_id` 隔离（见 §4）。

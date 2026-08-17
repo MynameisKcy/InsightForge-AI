@@ -11,11 +11,12 @@
 | `/api/password` | POST | ✓ | 改密码（清缓存） |
 | `/api/chat` | POST | ✓ | SSE 流式聊天，按 user_id 隔离 |
 | `/api/analysis` | POST | ✓ | 同步 JSON 数据分析（**已退役** [ADR-0001](adr/0001-single-entry-analysis-as-tool.md)，前端不调） |
+| `/api/report/export` | POST | ✓ | 报告导出 Word/MD/PDF/HTML（`{markdown,title,format}` -> 文件下载） |
 | `/api/conversation/history` | GET | ✓ | 长期记忆最近 N 轮 |
 | `/api/sessions` `/{id}` | GET/DEL/PATCH | ✓ | 会话列表 / 详情 / 删除 / 重命名（均 IDOR owner 校验，404 防枚举） |
 | `/api/settings` `/status` | GET/POST | ✓ | 配置读取（掩码）/ 保存（热重载）/ 是否已配置 |
 | `/api/files` | GET | ✓ | 统一文件列表（文本 + 表格） |
-| `/api/datasets` `/{name}` `/schema` | GET/POST/DEL | ✓ | 数据集列表 / 上传 / 删除 / schema（DESCRIBE+SUMMARIZE+样本） |
+| `/api/datasets` `/{name}` `/schema` | GET/POST/DEL | ✓ | 数据集列表 / 上传 / 删除 / schema（DESCRIBE+SUMMARIZE+样本，含 display_name 中文原名） |
 | `/api/datasets/upload` | POST | ✓ | CSV/Excel 上传（multipart，max 100MB） |
 | `/api/datasources/reload` | POST | ✓ | 热重载 `datasources.yml` -> 挂载外部库 |
 | `/api/knowledge/files` `/{name}` | GET/DEL | ✓ | 知识库文件列表（md5/入库态）/ 删除（删向量+文件） |

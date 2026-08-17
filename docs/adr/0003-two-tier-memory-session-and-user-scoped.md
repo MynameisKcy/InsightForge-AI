@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: implemented
 ---
 
 # 0003 - Two-tier memory: session-scoped Session Memory + user-scoped Long-Term Memory
@@ -23,3 +23,11 @@ We decided to make the mismatch a deliberate two-tier boundary rather than elimi
 - The recall store reuses the shared-collection + `user_id` owner-filter pattern (a separate `memory` collection via the existing `VectorStoreService`); recall retrieval filters with `include_public=False` (strictly per-user, no public memory). Remove a session's embedding (by `session_id` metadata) when the session is deleted.
 - `session_id` must be resolved (created if absent) before any memory access, and threaded into the ReactAgent; the in-memory pool is LRU-bounded and evicted on session deletion.
 - Resolves the "short-term memory keyed by `user_id`, leaks across sessions" limitation recorded in ADR-0002.
+
+## Implementation
+
+- Landed across four phases (commits `c55f3dd` / `c01bee4` / `bde2b2b` / `1497be0`) plus the recall-injection refinement (`206c7bb`); 216 tests pass.
+- A `MemoryService` facade (`memory/service.py`) orchestrates both tiers via `begin_turn()` / `end_turn()`, consolidating memory calls previously scattered across `fastapi_server` / `react_agent` / `planner_agent` / middleware.
+- Recall injection landed in the `dynamic_prompt` middleware (`report_prompt_switch` -> `_build_system_prompt`): injected in normal mode, suppressed in report mode, length-capped.
+- The `memory` -> `agents` -> `memory` cycle was broken by giving `ConversationSummarizer` an injected `llm_callable` instead of importing `BaseAgent`.
+- Known gap (outside this ADR's scope): `MemoryService` is a process-level singleton, so the summarizer's LLM is fixed to the first `user_id` - session **data** remains per-user/per-session isolated, only the summarization model's config isolation does not hold.

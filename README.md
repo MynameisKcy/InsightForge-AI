@@ -81,7 +81,7 @@
 
 ```bash
 git clone https://github.com/MynameisKcy/InsightForge-AI.git
-cd InsightForge-AI/agent
+cd InsightForge-AI
 conda create -n AnalysisAgent python=3.10 -y && conda activate AnalysisAgent
 pip install -r requirements.txt
 cp .env.example .env          # 编辑 .env 填入 DASHSCOPE_API_KEY
@@ -125,7 +125,7 @@ python -m api.fastapi_server  # 访问 http://localhost:8502
 | [HTTP API 参考](docs/API_REFERENCE.md) | 全部接口与鉴权说明 |
 | [安全说明与能力边界](docs/SECURITY_AND_LIMITATIONS.md) | 安全机制 + 架构 / 功能限制 |
 | [测试](docs/TESTING.md) | 运行方式与覆盖策略 |
-| [版本更新记录](docs/CHANGELOG.md) | v0.1 / v0.2 / v0.3 / v0.4 |
+| [版本更新记录](docs/CHANGELOG.md) | v0.1 ~ v0.5 + 未发布 |
 
 架构决策记录见 [docs/adr/](docs/adr/)。
 
