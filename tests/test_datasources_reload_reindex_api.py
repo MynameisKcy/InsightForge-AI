@@ -1,7 +1,7 @@
 """POST /api/datasources/reload 与 POST /api/knowledge/reindex 端点测试。
 
 - reload：仅 database.duckdb_manager.init_duckdb 一个桩（路由内函数级 import）
-- reindex：仅 srv._get_vector_store 一个桩（conftest.swap_srv_seam）
+- reindex：仅 api.deps._get_vector_store 一个桩（conftest.swap_srv_seam）
 """
 import database.duckdb_manager as duck_mod
 from tests.test_datasets_api import _FakeDuckDB

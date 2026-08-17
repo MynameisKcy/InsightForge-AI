@@ -38,8 +38,11 @@ data/*.pdf
 data/*.docx
 
 # 本地辅助脚本与实验性文档（不纳入版本库）
-docs/superpowers/
-docs/specs/
-docs/plans/
 scripts/
 claude.md
+
+# 本机运行产物 / 工具本地状态（不入版本库）
+tmp-kaleido/
+.tmp/
+.zcode/
+*.db.bak

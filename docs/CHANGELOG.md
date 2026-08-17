@@ -2,6 +2,9 @@
 
 ### 未发布
 
+- refactor(cleanup): 删 fastapi_server 兼容再导出层——测试引用迁至属主模块(`api.sse._stream_with_heartbeat` / `api.deps._get_vector_store` / `database.user_settings_db`), `conftest._swap` 收敛为 deps 单属主(缺名即断言失败), auth 导入缩减为实际使用项; `.gitignore` 删已不存在的 plans/specs/superpowers 条目并忽略本机产物(`tmp-kaleido/` `.tmp/` `.zcode/` `*.db.bak`)
+- refactor(api): 拆分 fastapi_server 巨石——1252 行组装根收敛为 ~110 行 + `api/deps.py`(服务接缝) + `api/sse.py`(线程->异步流式桥) + `api/serialization.py` + `api/routes/` 八模块(chat/analysis/datasets/knowledge/sessions/settings/users/pages)；测试换桩目标从 `api.fastapi_server` 迁至属主模块(conftest `_swap` 优先 `api.deps`)
+- refactor(architecture): 架构重构 Tier1 收敛(候选1-8)——database 抽 `safety.py`/`schema.py`/`customer_profiles.py` 统一 SQL 安全与画像接缝, profile-cache 收口 `_invalidate_profile()`; `MemoryService` 外观收口记忆三层操作(会话读/改名/删除协调 + `_assert_owner` IDOR 前置); rag 抽共享 `rerank_docs`(gte-rerank-v2) 供 recall/rag_service 复用; `BaseAgent`/子 Agent/`PlannerAgent` 构造期模型注入(删 reach-around 赋值); 洞察回退契约归位各 `AnalysisModule` 适配器(删 9 键并集硬编); 删死模块 ProductAgent/RiskAgent 与 `PipelineContext.dataframe` 死属性
 - refactor: 扁平化包根(agent/ 整层上移至 repo 根), 统一导入形式, 消除 63 处双导入兜底(余 2 处单臂可选导入守卫)与 63 处散落 sys.path hack
 - fix(user-model): 按用户解析模型传播收尾——quick_data_insight/TrendAgent/ExportAgent/DocumentReportAgent 构造补传 user_id, RAG 摘要链 `_get_chain(user_id)`, MemoryService 改 `llm_factory(user_id)` + summarizer 按用户工厂(删 `_memory_llm_user` 共享字典, 消后台闲置 finalize 线程竞态)
 - test(api): 补端点测试盲区——chat SSE token 契约/analysis/datasets/datasources reload/knowledge reindex, 新增 tests/conftest.py 共享 fixtures(+31 用例)
@@ -64,7 +67,7 @@
 
 **工程**
 - 测试套件扩充至 **216 passed / 29 文件**（新增两级记忆 / 召回、导出端点与 Agent、Schema 画像、AnalysisAgent / PipelineContext、display_name、上下文预算等用例）。
-- 已知实现落差（待跟进）：`PipelineContext.dataframe` 共享反序列化属性已定义但未启用（`AnalysisAgent` 仍自行 `pd.read_json`）；`MemoryService` 为进程级单例，summarizer 的 LLM 固定为首个 `user_id`（多用户配置隔离差距，会话数据仍按 user/session 隔离）。
+- 已知实现落差：~~`PipelineContext.dataframe` 未启用~~、~~summarizer 固定首个 `user_id`~~——两项均已解决（分别见未发布「架构重构 Tier1」「按用户解析模型传播收尾」）。
 
 ### v0.3（2026-07-30）
 

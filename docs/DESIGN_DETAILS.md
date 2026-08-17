@@ -2,7 +2,7 @@
 
 ## 1. 子代理编排：静态 `_agent_map` 与顺序派发
 
-子代理采用**静态注册**：在 `PlannerAgent.__init__` 中实例化各阶段代理并统一把它们的 `.model` 指向当前用户的 LLM，使整条流水线共享同一份按 `user_id` 隔离的模型配置（`planner_agent.py:118-132`）。其中 Trend / Product / Risk 三阶段已收敛为**同一个 `AnalysisAgent` 类**注入不同 `AnalysisModule` 适配器（`AnalysisAgent(TrendAnalysisAdapter())` 等，`planner_agent.py:121-123`），适配器封装各类型的列选择与计算、复用 `analysis/` 下纯计算类（`TrendAnalysis` / `ProductAnalysis` / `AnomalyDetection`），消除三个复制粘贴 Agent。旧 `TrendAgent` 类仍被 `quick_data_insight` @tool 使用（`agent_tools.py:201`），`ProductAgent` / `RiskAgent` 已无活跃调用方。`product_analysis` 阶段已泛化为领域中立的**分组对比分析**：销售数据（含 price+qty 列）走"收入=单价×数量"快路径，人口/流量/运营等走"维度×度量"通用路径（按类别列分组、对数值列求和），不再对非销售数据强行 qty×price；`_detect_columns` 的 price/qty 仅按名列匹配，`build_product_summary` 输出 `dimension_col`/`measure_col`/`*_label` 元数据供报告渲染数据驱动表头（详见 CHANGELOG v0.4「流水线领域中性化」）。
+子代理采用**静态注册**：在 `PlannerAgent.__init__` 中实例化各阶段代理并把当前用户的 LLM **构造期注入**每个子 Agent（`SQLAgent(model=...)` 等，`planner_agent.py:107-128`），使整条流水线共享同一份按 `user_id` 隔离的模型配置（不再有构造后 `.model = ...` 回写）。其中 Trend / Product / Risk 三阶段已收敛为**同一个 `AnalysisAgent` 类**注入不同 `AnalysisModule` 适配器（`AnalysisAgent(TrendAnalysisAdapter())` 等，`planner_agent.py:111-113`），适配器封装各类型的列选择与计算、复用 `analysis/` 下纯计算类（`TrendAnalysis` / `ProductAnalysis` / `AnomalyDetection`），消除三个复制粘贴 Agent。旧 `TrendAgent` 类仍被 `quick_data_insight` @tool 使用（`agent_tools.py:201`），`ProductAgent` / `RiskAgent` 已删除。`product_analysis` 阶段已泛化为领域中立的**分组对比分析**：销售数据（含 price+qty 列）走"收入=单价×数量"快路径，人口/流量/运营等走"维度×度量"通用路径（按类别列分组、对数值列求和），不再对非销售数据强行 qty×price；`_detect_columns` 的 price/qty 仅按名列匹配，`build_product_summary` 输出 `dimension_col`/`measure_col`/`*_label` 元数据供报告渲染数据驱动表头（详见 CHANGELOG v0.4「流水线领域中性化」）。
 
 ```python
 self._agent_map = {
@@ -114,18 +114,18 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 
 | Token | 产出位置 | 含义 |
 |-------|----------|------|
-| `[SESSION]{id}` | `:381` | 当前轮会话 ID |
-| `[SESSIONS_RELOAD]` | `:383` | 新建会话时通知前端刷新列表 |
-| `[KEEPALIVE]` | `:390` | 15s 心跳，前端仅重置空闲计时 |
-| `[STEP:{json}]` | `:400` | 步骤进度（plan / step_start / step_done / step_error / status） |
-| `[THINKING]{text}` | `:409`（源自 `react_agent.py:130`） | 工具调用提示，不计入持久化内容 |
-| `[CHART:{url}]` | `:430` | 检测到新生成的图表 HTML |
-| `[DONE]` | `:442` | 流结束 |
-| `[ERROR] {msg}` | `:445` | 流式异常 |
+| `[SESSION]{id}` | `api/routes/chat.py` | 当前轮会话 ID |
+| `[SESSIONS_RELOAD]` | `api/routes/chat.py` | 新建会话时通知前端刷新列表 |
+| `[KEEPALIVE]` | `api/sse.py`（心跳串由 chat 路由传入） | 15s 心跳，前端仅重置空闲计时 |
+| `[STEP:{json}]` | `api/routes/chat.py`（事件源为 `ProgressEmitter`） | 步骤进度（plan / step_start / step_done / step_error / status） |
+| `[THINKING]{text}` | `agent/react_agent.py` | 工具调用提示，不计入持久化内容 |
+| `[CHART:{url}]` | `api/routes/chat.py` | 检测到新生成的图表 HTML |
+| `[DONE]` | `api/routes/chat.py` | 流结束 |
+| `[ERROR] {msg}` | `api/routes/chat.py` | 流式异常 |
 
-> `[CONTEXT]` 与 `[AUDIT:]` 在前端 `app.js:506, 508-520` 有解析分支，但**后端无任何产出方**--为预留的 dormant 分支。审计通道目前未启用。
+> `[CONTEXT]` 与 `[AUDIT:]` 在前端 `app.js` 有解析分支，但**后端无任何产出方**——为预留的 dormant 分支。审计通道目前未启用。
 
-> ⚠️ **无服务端取消**：客户端 `AbortController` 中断只取消 `StreamingResponse` 生成器，后台守护线程仍会把 `execute_stream` 跑完（LLM / Agent 工作不被打断），属资源浪费点。
+> **协作式服务端取消**（`utils/cancel_token.py`）：主协程在心跳超时与每 20 个 chunk 处抽检 `request.is_disconnected()`，断连即置 `CancelToken`（event + contextvar），`ReactAgent` 流循环与 `PlannerAgent` 步骤边界轮询退出，`run_full_analysis` 不吞取消异常；取消后不发 `[DONE]`、不写记忆。**不抢占**：单次进行中的 LLM 调用仍会完成，取消发生在下一个边界。
 
 ## 8. 文件分轨：文本入向量库 / 表格入 DuckDB
 
