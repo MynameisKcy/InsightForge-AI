@@ -6,6 +6,7 @@
 - fix(user-model): 按用户解析模型传播收尾——quick_data_insight/TrendAgent/ExportAgent/DocumentReportAgent 构造补传 user_id, RAG 摘要链 `_get_chain(user_id)`, MemoryService 改 `llm_factory(user_id)` + summarizer 按用户工厂(删 `_memory_llm_user` 共享字典, 消后台闲置 finalize 线程竞态)
 - test(api): 补端点测试盲区——chat SSE token 契约/analysis/datasets/datasources reload/knowledge reindex, 新增 tests/conftest.py 共享 fixtures(+31 用例)
 - feat(security): DuckDB 查询通道资源上限——`config/agent.yml` `duckdb` 节(memory_limit/threads 经连接配置, max_result_rows 超限报错喂 `_fix_sql` 自愈, query_timeout watchdog `conn.interrupt()` 中断); 沙箱白名单零放宽(SET/PRAGMA 依旧被拒)
+- feat(sse): 客户端断连的协作式服务端取消——`utils/cancel_token.py`(event+contextvar); /api/chat 心跳必检+每 20 chunk 抽检断连, ReactAgent 流循环与 PlannerAgent 步骤边界退出, run_full_analysis 不吞取消异常; 取消后不发 [DONE]/不写记忆。顺手修 progress_emitter/cancel_token 的 `token.reset()` 误用(reset 是 ContextVar 方法, 旧写法恒 AttributeError 被吞)
 
 ### v0.5（2026-08-06）
 

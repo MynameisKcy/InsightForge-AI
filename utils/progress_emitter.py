@@ -31,7 +31,9 @@ def reset_progress_emitter(token: Any) -> None:
     if token is None:
         return
     try:
-        token.reset()
+        # reset 是 ContextVar 的方法（token 是 _contextvars.Token，无 reset；
+        # 旧实现 token.reset() 恒 AttributeError 被吞，emitter 从不真正解绑）
+        _progress_emitter.reset(token)
     except Exception:
         pass
 
