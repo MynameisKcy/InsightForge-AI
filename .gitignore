@@ -1,21 +1,19 @@
 # 环境变量 / 密钥（含 DASHSCOPE_API_KEY）
-agent/.env
 .env
 
 # ChromaDB 向量库持久化目录
-agent/chroma_db/
+chroma_db/
 
 # 运行时生成的报告与图表
-agent/reports/
+reports/
 
 # md5 去重存储（运行时生成）
-agent/md5.text
+md5.text
 
 # 日志
-agent/logs/
+logs/
 
 # SQLite 数据库（用户认证 / 图表知识库 / 对话历史）
-agent/data/*.db
 *.db
 
 # Python
@@ -28,16 +26,23 @@ __pycache__/
 .idea/
 .vscode/
 
+# Claude Code 本地状态
+.claude/
+.superpowers/
+
 # 默认数据集 (2.1M, 停止版本跟踪, 磁盘保留; 全新 clone 需手动放回)
-agent/data/train.csv
+data/train.csv
 
 # 用户上传的知识库文件（运行时上传到 data/，不入版本库）
-agent/data/*.pdf
-agent/data/*.docx
+data/*.pdf
+data/*.docx
 
 # 本地辅助脚本与实验性文档（不纳入版本库）
-docs/superpowers/
-docs/specs/
-docs/plans/
 scripts/
 claude.md
+
+# 本机运行产物 / 工具本地状态（不入版本库）
+tmp-kaleido/
+.tmp/
+.zcode/
+*.db.bak

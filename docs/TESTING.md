@@ -1,12 +1,12 @@
 # 测试
 
-- **规模**：20 个文件、139 个用例，全量通过、全离线（约 15s）。
+- **规模**：44 个文件、319 个用例，全量通过、全离线（约 60s）。
 - **mock 策略**：LLM 与外部服务 100% mock；`test_sql_sandbox.py` 纯函数无 mock；涉及 DB 的用 temp SQLite / 临时 DuckDB。
-- **覆盖重点**：SQL 沙箱 AST 守卫（31 例）、鉴权与重定向循环修复、多用户隔离（数据集 / 设置 / 文件 / 客户档案）、配置优先级、模型缓存热重载、RAG 格式化、文档报告截断。
-- **运行器**：pytest（`python -m unittest discover tests` 只能收集 10 个 `unittest.TestCase` 文件，会漏掉 10 个 pytest 函数式测试文件，**请用 pytest**）。
+- **覆盖重点**：SQL 沙箱 AST 守卫、DuckDB 查询通道资源上限（内存/线程/行数/超时中断）、鉴权与重定向循环修复、多用户隔离（数据集 / 设置 / 文件 / 客户档案）、配置优先级、模型缓存热重载、RAG 格式化、文档报告截断、两级记忆与跨会话召回、报告导出端点与 ExportAgent、Schema 语义画像、AnalysisAgent / PipelineContext、display_name 定位、上下文预算压缩、chat SSE token 契约与断连取消、analysis / datasets / reload / reindex 端点。
+- **共享 fixtures**：`tests/conftest.py` 提供 app/client 构造与 `_swap` 桩替换工具（换桩目标优先打属主模块 `api.deps` 或各 `api/routes/` 模块，不再打 `api.fastapi_server`）。
+- **运行器**：pytest（`python -m unittest discover tests` 只能收集 `unittest.TestCase` 子类文件，会漏掉 pytest 函数式测试文件，**请用 pytest**）。
 
 ```bash
 conda activate AnalysisAgent
-cd agent
 python -m pytest tests/ -v
 ```

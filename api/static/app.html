@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- ── 诊断哨兵：必须最先执行，确保即便 app.js 404 / 语法错误 / 运行时抛错也能向用户上报根因 ── -->
+<script>
+(function () {
+  var seen = false;
+  function fatal(kind, text) {
+    if (seen) return; seen = true;
+    var d = document.createElement('div');
+    d.textContent = '⚠️ [诊断哨兵 · ' + kind + '] ' + text;
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#c0392b;color:#fff;padding:14px 18px;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;white-space:pre-wrap;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+    (document.body || document.documentElement).appendChild(d);
+    console.error('[诊断哨兵]', kind, text);
+  }
+  // 1) 捕获阶段监听：SCRIPT 元素加载失败（404）只在 capture 阶段冒泡到 window
+  window.addEventListener('error', function (e) {
+    var t = e.target || e.srcElement;
+    if (t && t.tagName === 'SCRIPT') {
+      fatal('script-404', '脚本加载失败（很可能 404）：' + (t.src || '') +
+        '。\n请打开 F12 → Network 查看该 URL 的状态码；若部署在反向代理子路径下，把 /static/ 改为 ./static/ 即可修复。');
+      return;
+    }
+    if (e.message) {
+      fatal('runtime', '脚本执行/解析错误：' + e.message +
+        (e.filename ? ' @ ' + String(e.filename).split('/').pop() : '') +
+        (e.lineno ? ':' + e.lineno + (e.colno ? ':' + e.colno : '') : '') +
+        '。\n若是 SyntaxError，运行 node --check agent/api/static/js/app.js 可精确定位。');
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    fatal('promise', '未捕获的 Promise 错误：' + (e.reason && e.reason.message || e.reason));
+  });
+  // 2) DOM 就绪兜底：关键全局是否就位（区分 404 / 语法错误 / 正常加载）
+  window.addEventListener('DOMContentLoaded', function () {
+    setTimeout(function () {
+      if (typeof window.Auth === 'undefined') {
+        fatal('auth-missing', 'auth.js 未加载成功或未定义 window.Auth。请检查 /static/js/auth.js 是否返回 200。');
+      } else if (typeof window.sendMessage !== 'function' || typeof window.newSession !== 'function') {
+        fatal('app-syntax', 'app.js 已请求但关键函数未注册——极可能存在语法错误导致整脚本被丢弃。' +
+          '请在项目根目录运行 node --check agent/api/static/js/app.js，按报错行号修复后刷新。');
+      }
+      // 否则：脚本正常加载且函数就位。若按钮仍无响应，指向 CSS 遮挡 / CSP(代理层) / 浏览器扩展。
+    }, 60);
+  });
+})();
+</script>
+<!-- Anti-FOUC: apply theme before first paint. Stored 'if-theme' choice wins; else follow OS.
+     Same key as the landing page, so the chosen theme carries across pages. -->
+<script>
+(function () {
+  try {
+    var stored = localStorage.getItem('if-theme');
+    var sysLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+    document.documentElement.setAttribute('data-theme', stored || (sysLight ? 'light' : 'dark'));
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InsightForge AI · Workbench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/css/tokens.css?v=20260730">
+<link rel="stylesheet" href="/static/css/app.css?v=20260805">
+<style>
+/* ── 报告导出按钮栏（报告流结束后渲染于报告 bubble 末尾）── */
+.export-bar { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.export-btn {
+  padding: 4px 12px; font-size: 13px; border: 1px solid var(--color-border, #ddd);
+  border-radius: 6px; background: var(--color-bg-2, #f7f7f8); color: var(--color-text, #333);
+  cursor: pointer; transition: all .15s;
+}
+.export-btn:hover { background: var(--color-primary-soft, #e8f0fe); border-color: var(--color-primary, #4a90d9); }
+.export-btn:disabled { opacity: .5; cursor: wait; }
+.export-tip { font-size: 12px; color: var(--color-error, #d33); margin-left: 8px; align-self: center; }
+</style>
+</head>
+<body>
+
+<!-- ── Sidebar — the rail. Deep-space surface, hairline-divided sections.
+     Cobalt signature: hairlines do the work; accent is the single signal. ── -->
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1 class="sidebar-brand"><a href="/" class="brand-home" title="返回首页">InsightForge</a> <span class="brand-mark" aria-hidden="true"></span></h1>
+    <div class="user-info" id="userDisplay" onclick="openProfileModal()" title="个人信息设置"></div>
+    <button class="btn-new-session" onclick="newSession()"><span>新会话</span></button>
+  </div>
+  <div class="sidebar-scroll">
+
+  <div class="set-banner" id="settingsBanner" style="display:none;">
+    <span class="set-banner__text">检测到尚未配置 LLM，将使用默认值。建议先配置。</span>
+    <a class="set-banner__link" onclick="openSettingsPanel()">前往配置</a>
+  </div>
+
+  <div class="session-list" id="sessionList">
+    <div class="no-sessions">暂无会话记录</div>
+  </div>
+
+  <!-- ── 数据集管理 ── -->
+  <div class="ds-section">
+    <div class="ds-header" onclick="toggleSection('ds')">
+      <h2><span class="section-chevron collapsed" id="chevronDs">▾</span> 数据集</h2>
+      <span class="ds-count" id="dsCount">—</span>
+    </div>
+    <div class="section-body collapsed" id="sectionBodyDs">
+    <div class="ds-body" id="dsList">
+      <div class="ds-item ds-item--muted">加载中…</div>
+    </div>
+    <div class="ds-upload">
+      <input type="file" id="dsFileInput" accept=".csv,.xlsx,.xls">
+      <button class="kb-btn" onclick="document.getElementById('dsFileInput').click()">＋ 上传 CSV / Excel</button>
+    </div>
+    </div>
+  </div>
+
+  <!-- ── 知识库管理 ── -->
+  <div class="kb-section">
+    <div class="kb-header" onclick="toggleSection('kb')">
+      <h2><span class="section-chevron collapsed" id="chevronKb">▾</span> 知识库</h2>
+      <span class="kb-stats" id="kbStats">—</span>
+    </div>
+    <div class="section-body collapsed" id="sectionBodyKb">
+    <div class="kb-body" id="kbFileList">
+      <div class="kb-file kb-file--muted">加载中…</div>
+    </div>
+    <div class="kb-upload">
+      <input type="file" id="kbFileInput" multiple accept=".txt,.pdf,.docx,.md">
+      <button class="kb-btn" onclick="document.getElementById('kbFileInput').click()">＋ 上传并入库</button>
+    </div>
+    <div class="kb-reindex">
+      <button class="kb-btn kb-btn--solid" onclick="kbReindex()">⟳ 全量重建索引</button>
+    </div>
+    </div>
+  </div>
+
+  <!-- ── 账号设置 ── -->
+  <div class="set-section">
+    <div class="set-header" onclick="toggleSection('set')">
+      <h2><span class="section-chevron" id="chevronSet">▾</span> 模型设置 <span class="set-dot" id="settingsDot"></span></h2>
+    </div>
+    <div class="section-body collapsed" id="sectionBodySet">
+      <div class="set-body">
+        <div class="set-group">
+          <div class="set-group-title">LLM 配置</div>
+          <div class="set-field">
+            <label>API Key</label>
+            <div class="set-key-row">
+              <input type="password" id="setApiKey" placeholder="sk-****（掩码显示，点击编辑明文输入）" autocomplete="off">
+              <button class="set-toggle" id="setKeyToggle" onclick="toggleKeyEdit()">编辑</button>
+            </div>
+          </div>
+          <div class="set-field">
+            <label>模型名称（如 qwen-max）</label>
+            <input type="text" id="setChatModel" placeholder="qwen-max">
+          </div>
+          <div class="set-field">
+            <label>请求地址 base_url（留空=默认千问官方；填则接入 OpenAI 兼容端点，不限千问）</label>
+            <input type="text" id="setBaseUrl" placeholder="留空使用千问官方">
+          </div>
+        </div>
+        <div class="set-group">
+          <div class="set-group-title">向量配置</div>
+          <div class="set-field">
+            <label>向量模型名称（如 text-embedding-v2）</label>
+            <input type="text" id="setEmbedModel" placeholder="text-embedding-v2">
+          </div>
+          <div class="set-field">
+            <label>向量库 host（可选，留空用本地 ChromaDB）</label>
+            <input type="text" id="setVdbHost" placeholder="（本地模式，留空）">
+          </div>
+          <div class="set-field">
+            <label>向量库 port</label>
+            <input type="text" id="setVdbPort" placeholder="">
+          </div>
+          <div class="set-field">
+            <label>collection / tenant</label>
+            <input type="text" id="setVdbCollection" placeholder="">
+          </div>
+        </div>
+        <div class="set-group">
+          <div class="set-group-title">数据库配置</div>
+          <div class="set-field">
+            <label>本地数据库连接串（SQLite 路径或 MySQL DSN）</label>
+            <input type="text" id="setLocalDb" placeholder="sqlite:///database/memory.db">
+          </div>
+        </div>
+      </div>
+      <div class="set-actions">
+        <button class="kb-btn kb-btn--solid" onclick="saveSettings()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 文件管理（统一文本/表格） ── -->
+  <div class="kb-section">
+    <div class="kb-header" onclick="toggleFilesSection()">
+      <h2><span class="section-chevron" id="chevronFiles">▾</span> 文件管理</h2>
+      <span class="kb-stats" id="filesCount">—</span>
+    </div>
+    <div class="section-body collapsed" id="sectionBodyFiles">
+      <div class="kb-body" id="allFileList" style="max-height:240px;">
+        <div class="kb-file kb-file--muted">加载中…</div>
+      </div>
+      <div class="kb-upload">
+        <input type="file" id="allFileInput" multiple accept=".txt,.pdf,.docx,.md,.csv,.xlsx,.xls">
+        <button class="kb-btn" onclick="document.getElementById('allFileInput').click()">＋ 上传文件（拖拽或选择）</button>
+        <div id="uploadProgress" class="upload-progress"></div>
+      </div>
+    </div>
+  </div>
+
+  </div>
+  <div class="sidebar-footer">
+    <button class="theme-cycle" id="themeToggle" type="button" aria-pressed="false" title="切换主题">
+      <svg class="ic ic-moon" width="16" height="16" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22.5 16.5A9.5 9.5 0 0 1 11.5 5.5a9.5 9.5 0 1 0 11 11z"/></svg>
+      <svg class="ic ic-sun" width="16" height="16" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="14" cy="14" r="5"/><path d="M14 3v3M14 22v3M3 14h3M22 14h3M5.6 5.6l2.1 2.1M20.3 20.3l2.1 2.1M22.4 5.6l-2.1 2.1M7.7 20.3l-2.1 2.1"/></svg>
+      <span class="theme-cycle__label">深色</span>
+    </button>
+    <button class="btn-logout" onclick="logout()"><span>登出</span></button>
+  </div>
+</div>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- ── Main area — the chat instrument. Blueprint-grid backdrop, centered
+     measure, hairline top-bar. Welcome-msg centred until first query. ── -->
+<div class="main-area">
+  <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="菜单">☰</button>
+  <div class="chat-container" id="chatContainer">
+    <div class="welcome-msg">
+      <span class="welcome-eyebrow">AI DATA ANALYST</span>
+      <h2>你好，我是 AI 数据分析顾问</h2>
+      <p>我可以帮你分析销售趋势、产品表现、利润变化，生成图表和报告。<br>
+      也可以回答知识库问题、查询外部数据。<br><br>
+      请直接描述你的需求，我会自动选择合适的分析方式。</p>
+    </div>
+  </div>
+  <button class="scroll-bottom-btn" id="scrollBottomBtn" onclick="scrollToBottom()" aria-label="滚动到底部" title="滚动到底部">↓</button>
+  <div class="input-area">
+    <div class="input-row">
+      <input type="text" id="userInput" placeholder="请输入你的问题…"
+             onkeypress="if(event.key==='Enter') sendMessage()" autofocus>
+      <button id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/icons.js?v=20260723"></script>
+<script src="/static/js/auth.js?v=20260723"></script>
+<script src="/static/js/app.js?v=20260804"></script>
+<div class="toast-container" id="toastContainer"></div>
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal-card">
+    <div class="modal-msg" id="modalMsg"></div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="resolveModal(false)">取消</button>
+      <button class="modal-btn ok" onclick="resolveModal(true)">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Profile modal ── -->
+<div class="modal-overlay" id="profileOverlay" onclick="if(event.target===this)closeProfileModal()">
+  <div class="modal-card modal-card--wide">
+    <div class="modal-title">个人信息</div>
+    <div class="set-field">
+      <label>昵称（侧边栏优先显示昵称，账号仅用于登录）</label>
+      <input type="text" id="pfNickname" maxlength="30" placeholder="设置昵称">
+    </div>
+    <div class="set-field">
+      <label>账号（登录用，不可改）</label>
+      <input type="text" id="pfAccount" readonly>
+    </div>
+    <hr class="modal-divider">
+    <div class="set-field"><label>修改密码</label>
+      <input type="password" id="pfOldPwd" placeholder="旧密码" autocomplete="off">
+    </div>
+    <div class="set-field">
+      <input type="password" id="pfNewPwd" placeholder="新密码（至少 8 位）" autocomplete="off">
+    </div>
+    <div class="set-field">
+      <input type="password" id="pfNewPwd2" placeholder="确认新密码" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn cancel" onclick="closeProfileModal()">关闭</button>
+      <button class="modal-btn ok" onclick="saveProfile()">保存</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  var label = btn.querySelector('.theme-cycle__label');
+  function current() { return root.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+  function sync() {
+    var light = current() === 'light';
+    btn.setAttribute('aria-pressed', light ? 'true' : 'false');
+    btn.setAttribute('title', light ? '切换到深色模式' : '切换到浅色模式');
+    if (label) label.textContent = light ? '浅色' : '深色';
+  }
+  sync();
+  btn.addEventListener('click', function () {
+    var next = current() === 'light' ? 'dark' : 'light';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('if-theme', next); } catch (e) {}
+    sync();
+  });
+  try {
+    var mq = window.matchMedia('(prefers-color-scheme: light)');
+    var onSys = function (e) {
+      if (localStorage.getItem('if-theme')) return;   /* explicit choice overrides OS */
+      root.setAttribute('data-theme', e.matches ? 'light' : 'dark');
+      sync();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onSys);
+    else if (mq.addListener) mq.addListener(onSys);
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
