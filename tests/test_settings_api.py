@@ -7,13 +7,12 @@ import database.user_settings_db as usd_mod
 
 def _fresh_settings(tmp_path):
     # reload 会重置模块级 DB_PATH 到真实路径，故 reload 后再覆盖 + 重建单例
+    # （settings 路由经属主模块 usd.user_settings_db 动态解析，重绑模块属性即生效）
     importlib.reload(usd_mod)
     usd_mod.DB_PATH = str(tmp_path / "u.db")
     usd_mod._ensure_db()
     usd_mod._init_db()
     usd_mod.user_settings_db = usd_mod.UserSettingsDB()
-    # 重新绑定到 server 模块已导入的引用
-    srv.user_settings_db = usd_mod.user_settings_db
 
 
 def _make_authed_user(prefix: str = "set"):
@@ -67,6 +66,6 @@ def test_masked_key_not_overwritten(tmp_path):
     # 回传掩码值 + 改模型名
     client.post("/api/settings", json={"llm_api_key": "sk-****456", "llm_model_name": "qwen-plus"}, headers=headers)
     # 取明文校验 key 未变
-    data = srv.user_settings_db.get(user_id)
+    data = usd_mod.user_settings_db.get(user_id)
     assert data["llm_api_key"] == "sk-secretkey123456"
     assert data["llm_model_name"] == "qwen-plus"

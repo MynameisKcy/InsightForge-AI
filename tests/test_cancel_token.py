@@ -12,7 +12,7 @@ import unittest
 
 from langchain_core.messages import AIMessage
 
-import api.fastapi_server as srv
+from api.sse import _stream_with_heartbeat
 from agent.react_agent import ReactAgent
 from utils.cancel_token import (
     CancelToken,
@@ -59,7 +59,7 @@ def test_stream_with_heartbeat_stops_on_cancel():
 
     async def scenario():
         chunks = []
-        async for kind, value in srv._stream_with_heartbeat(
+        async for kind, value in _stream_with_heartbeat(
                 gen, "data: [KEEPALIVE]\n\n", interval=0.1, cancel_token=token):
             chunks.append((kind, value))
         return chunks
@@ -85,7 +85,7 @@ def test_stream_with_heartbeat_heartbeat_path_breaks_on_cancel():
     async def scenario():
         token.cancel()  # 已取消：第一次 timeout 即退出
         seen = []
-        async for kind, value in srv._stream_with_heartbeat(
+        async for kind, value in _stream_with_heartbeat(
                 gen, "data: [KEEPALIVE]\n\n", interval=0.05, cancel_token=token):
             seen.append(kind)
         return seen
@@ -109,7 +109,7 @@ def test_stream_with_heartbeat_swallows_error_after_cancel():
 
     async def scenario():
         out = []
-        async for kind, value in srv._stream_with_heartbeat(
+        async for kind, value in _stream_with_heartbeat(
                 gen, "data: [KEEPALIVE]\n\n", interval=0.05, cancel_token=token):
             out.append(value)
         return out

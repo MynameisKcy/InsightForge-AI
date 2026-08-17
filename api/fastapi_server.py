@@ -27,8 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from utils.path_tool import get_abs_path
 
-from api.auth import (require_auth, get_current_user, invalidate_token, extract_token,
-                      validate_token_cached, set_auth_cookie, AUTH_COOKIE_NAME)  # noqa: F401
+from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
 from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
@@ -87,17 +86,6 @@ if os.path.isdir(_STATIC_DIR):
 _reports_dir = get_abs_path("reports")
 if os.path.exists(_reports_dir):
     app.mount("/reports", StaticFiles(directory=_reports_dir), name="reports")
-
-
-# ── 兼容再导出：历史代码/测试曾经 api.fastapi_server 命名空间访问这些接缝 ──
-# 注意：打桩请打到属主模块 api.deps（路由在请求期经 deps 动态解析），
-# 此处再导出仅供直接调用/读取（如 srv._stream_with_heartbeat 单测）。
-from api.deps import (  # noqa: F401, E402
-    _get_memory_service, _get_react_agent, _get_planner_agent,
-    _invalidate_user_agents, _get_vector_store,
-)
-from api.sse import _split_sentences, _stream_with_heartbeat  # noqa: F401, E402
-from database.user_settings_db import user_settings_db  # noqa: F401, E402
 
 
 def start_server(host: str = "0.0.0.0", port: int = 8502):

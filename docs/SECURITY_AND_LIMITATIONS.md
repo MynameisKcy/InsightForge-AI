@@ -31,7 +31,7 @@
 - **无模型 fallback 链**：单模型 per user，`ChatTongyi`/`ChatOpenAI` 为 provider 选择而非故障切换。
 - 导出 4 种格式（Word / MD / PDF / HTML）均已实现；`ExportAgent` 按用户请求文本解析格式（`_resolve_export_formats`），未指定时回退 `md+html`，也可经 `POST /api/report/export` 端点直接指定 `format` 下载。PDF 已注册中文字体 + 渲染表格 + 图片占位（不再整丢表格）。
 - `DocumentReportAgent` **不走 RAG**，直接把原文截断至 8000 字塞给 LLM。
-- 记忆为两级（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)）：Session Memory 按 `session_id` 隔离 + DB 回灌 + 跨会话召回注入系统提示（详见 DESIGN_DETAILS §4）--原"摘要写入不回灌 / 短期按 user_id 索引跨会话串扰"两项限制**已解决**。但 `MemoryService` 为进程级单例，summarizer 的 LLM 固定为首个 `user_id`（会话**数据**仍按 user/session 隔离，仅摘要模型的配置隔离不成立）。
+- 记忆为两级（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)）：Session Memory 按 `session_id` 隔离 + DB 回灌 + 跨会话召回注入系统提示（详见 DESIGN_DETAILS §4）——原"摘要写入不回灌 / 短期按 user_id 索引跨会话串扰 / summarizer 的 LLM 固定为首个 `user_id`"三项限制**已解决**（`MemoryService` 现以 `llm_factory(user_id)` + per-user summarizer 工厂按请求用户解析模型）；`MemoryService` 仍为进程级单例，但不再持有用户态。
 - `get_weather` / `get_user_id` / `get_user_location` 三个工具为**演示桩**（返回硬编码 / 随机值）。
 - 审计通道 `[AUDIT]` / `[CONTEXT]` 仅有前端解析、无后端产出，处于 dormant 状态。
 - `_duckdb_instances` 为无上限 dict，高用户 churn 下内存只增不减。

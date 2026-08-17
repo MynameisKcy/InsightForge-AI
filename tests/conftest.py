@@ -3,8 +3,7 @@
 沿用既有端点测试模式（test_session_routes / test_settings_api）：
 - 真实注册+登录（真实 users.db，唯一账号防跨运行冲突），Bearer 头认证；
 - 手工替换模块级工厂函数、用毕恢复（不用 dependency_overrides）。工厂接缝的
-  属主是 api.deps（路由在请求期经 deps 动态解析），名字不在 deps 时回退
-  api.fastapi_server（兼容再导出）。
+  属主是 api.deps（路由在请求期经 deps 动态解析）。
 """
 import secrets
 import time
@@ -48,9 +47,9 @@ def swap_srv_seam():
     replaced: list = []
 
     def _swap(name: str, fake) -> None:
-        owner = deps if hasattr(deps, name) else srv
-        replaced.append((owner, name, getattr(owner, name)))
-        setattr(owner, name, fake)
+        assert hasattr(deps, name), f"接缝 {name} 不在属主模块 api.deps"
+        replaced.append((deps, name, getattr(deps, name)))
+        setattr(deps, name, fake)
 
     yield _swap
 
