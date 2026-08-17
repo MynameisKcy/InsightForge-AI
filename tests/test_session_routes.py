@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import database.user_db as user_db_mod
+import api.deps as deps
 import api.fastapi_server as srv
 from memory.service import MemoryService
 
@@ -37,12 +38,12 @@ class SessionRoutesTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         self.client = TestClient(srv.app)
         self._svc = _fake_service()
-        # 路由处理器内调用 _get_memory_service()（无参），替换模块全局名
-        self._orig = srv._get_memory_service
-        srv._get_memory_service = lambda *a, **k: self._svc
+        # 路由处理器经 deps._get_memory_service()（请求期解析），替换 deps 模块属性
+        self._orig = deps._get_memory_service
+        deps._get_memory_service = lambda *a, **k: self._svc
 
     def tearDown(self):
-        srv._get_memory_service = self._orig
+        deps._get_memory_service = self._orig
 
     def test_list_sessions_returns_200(self):
         tok = _register_login("list")

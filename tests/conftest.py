@@ -1,8 +1,10 @@
-"""tests/ 共享 fixtures：TestClient、真实认证用户、srv 模块级工厂换桩。
+"""tests/ 共享 fixtures：TestClient、真实认证用户、模块级工厂换桩。
 
 沿用既有端点测试模式（test_session_routes / test_settings_api）：
 - 真实注册+登录（真实 users.db，唯一账号防跨运行冲突），Bearer 头认证；
-- 手工替换 api.fastapi_server 模块级工厂函数、用毕恢复（不用 dependency_overrides）。
+- 手工替换模块级工厂函数、用毕恢复（不用 dependency_overrides）。工厂接缝的
+  属主是 api.deps（路由在请求期经 deps 动态解析），名字不在 deps 时回退
+  api.fastapi_server（兼容再导出）。
 """
 import secrets
 import time
@@ -10,6 +12,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import api.deps as deps
 import api.fastapi_server as srv
 import database.user_db as user_db_mod
 
@@ -41,14 +44,15 @@ def auth_headers(auth) -> dict:
 
 @pytest.fixture
 def swap_srv_seam():
-    """临时替换 srv 模块级工厂（_get_react_agent 等），测试结束逆序恢复。"""
+    """临时替换模块级工厂（_get_react_agent 等），测试结束逆序恢复。"""
     replaced: list = []
 
     def _swap(name: str, fake) -> None:
-        replaced.append((name, getattr(srv, name)))
-        setattr(srv, name, fake)
+        owner = deps if hasattr(deps, name) else srv
+        replaced.append((owner, name, getattr(owner, name)))
+        setattr(owner, name, fake)
 
     yield _swap
 
-    for name, orig in reversed(replaced):
-        setattr(srv, name, orig)
+    for owner, name, orig in reversed(replaced):
+        setattr(owner, name, orig)

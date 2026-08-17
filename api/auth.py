@@ -69,3 +69,28 @@ def require_auth(request: Request) -> dict:
 def get_current_user(request: Request) -> dict | None:
     """非抛错版，供 GET /app 重定向判断用。"""
     return validate_token_cached(extract_token(request))
+
+
+# ── 会话 cookie：让页面级导航（GET /app）也能被服务端鉴权 ──
+# token 服务端有效期 24h（见 database.user_db.login），cookie 生命周期与之对齐。
+AUTH_COOKIE_NAME = "token"
+AUTH_COOKIE_MAX_AGE = 24 * 3600
+
+
+def set_auth_cookie(response, token: str, remember: bool = True) -> None:
+    """把会话 token 写入 cookie，使浏览器导航到 /app 时携带、被服务端正确识别。
+
+    httponly：防 XSS 读取 cookie 里的 token；
+    samesite=lax：允许顶级导航（点击链接 / location.href）携带，同时阻断跨站
+                  POST 携带，缓解 CSRF；
+    path=/：全站可用；
+    remember=False：会话 cookie（关闭浏览器即失效），与前端 sessionStorage 语义一致。
+    """
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_COOKIE_MAX_AGE if remember else None,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )

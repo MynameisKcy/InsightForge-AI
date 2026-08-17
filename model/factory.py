@@ -111,7 +111,7 @@ def _build_chat_model(user_id: str | None = None):
 def reload_model_config(user_id: str) -> None:
     """配置保存后调用：失效该用户的模型缓存，下次取用时按新配置重建。
 
-    配合 fastapi_server._invalidate_user_agents(user_id) 一并丢弃该用户的 Agent 实例，
+    配合 api.deps._invalidate_user_agents(user_id) 一并丢弃该用户的 Agent 实例，
     使新配置在下次请求时真正生效（Agent 不再持有旧模型）。
     """
     with _config_lock:

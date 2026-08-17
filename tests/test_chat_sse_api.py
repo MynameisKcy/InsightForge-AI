@@ -10,6 +10,7 @@ import json
 import os
 
 import api.fastapi_server as srv
+import api.routes.chat as chat_routes
 from memory.service import MemoryTurnContext
 
 
@@ -131,7 +132,7 @@ def test_chat_emits_new_chart_url(client, auth_headers, swap_srv_seam, monkeypat
     charts_dir = tmp_path / "reports" / "charts"
     charts_dir.mkdir(parents=True)
     # 路由经模块级 get_abs_path("reports/charts") 定位图表目录 → 指到 tmp
-    monkeypatch.setattr(srv, "get_abs_path", lambda p: str(tmp_path / p))
+    monkeypatch.setattr(chat_routes, "get_abs_path", lambda p: str(tmp_path / p))
 
     def _write_chart(_emitter):
         # 模拟 VisualizationAgent 在流执行期间落盘新图表（预扫描之后写入才算新图）
