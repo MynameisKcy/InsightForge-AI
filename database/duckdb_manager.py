@@ -5,6 +5,7 @@ DuckDB Manager: Load CSV data into DuckDB and provide query/execution interface.
 import os
 import re
 import html
+import threading
 import unicodedata
 import duckdb
 import pandas as pd
@@ -59,6 +60,26 @@ def _normalize_column_names(names: list[str]) -> list[str]:
     return result
 
 
+def _duckdb_limits() -> dict:
+    """读取 config/agent.yml `duckdb` 节的查询通道资源上限（防御式默认）。
+
+    只读 AST 沙箱不拦"合法但昂贵"的查询，资源上限是其 DoS 防护补全：
+    memory_limit/threads 经 connect(config=) 生效（SET/PRAGMA 被沙箱双拒，
+    不能走 SQL），max_result_rows / query_timeout 在查询通道 Python 侧强制。
+    """
+    try:
+        from utils.config_handler import agent_conf
+        conf = (agent_conf or {}).get("duckdb", {}) or {}
+    except Exception:
+        conf = {}
+    return {
+        "memory_limit": str(conf.get("memory_limit", "1GB")),
+        "threads": int(conf.get("threads", 2)),
+        "max_result_rows": int(conf.get("max_result_rows", 10000)),
+        "query_timeout_seconds": float(conf.get("query_timeout_seconds", 30)),
+    }
+
+
 class DuckDBManager:
     """Manages a DuckDB in-memory database, loads CSV data, and executes queries.
 
@@ -72,7 +93,18 @@ class DuckDBManager:
         self.table_name = table_name
         self.last_loaded_csv: str | None = None  # 本实例上次加载的 CSV，用于判断是否需要 reload（按 user 隔离，无跨用户竞态）
 
-        self.conn = duckdb.connect(database=":memory:")
+        # 连接级资源上限（每用户独立连接，互不影响）；超限 DuckDB 落盘临时文件而非 OOM
+        limits = _duckdb_limits()
+        self._max_result_rows = limits["max_result_rows"]
+        self._query_timeout = limits["query_timeout_seconds"]
+        conn_config = {}
+        if limits["memory_limit"]:
+            conn_config["memory_limit"] = limits["memory_limit"]
+        if limits["threads"] > 0:
+            conn_config["threads"] = limits["threads"]
+        self.conn = duckdb.connect(
+            database=":memory:", config=conn_config or None
+        )
         self._profile_cache: dict = {}
 
         if csv_path and os.path.exists(csv_path):
@@ -117,16 +149,49 @@ class DuckDBManager:
     def execute(self, sql: str) -> duckdb.DuckDBPyRelation:
         """Execute a SQL query and return the DuckDB relation.
 
-        查询通道：执行前做只读白名单校验，拦截 DROP/CREATE/INSERT 等写操作。
+        查询通道：执行前做只读白名单校验，拦截 DROP/CREATE/INSERT 等写操作；
+        执行期带超时 watchdog（Timer + conn.interrupt），超时抛 TimeoutError。
         管理通道（_load_csv/reload_csv）直接调 self.conn.execute，不经此校验。
         """
         assert_read_only(sql)
         logger.debug(f"Executing SQL: {sql[:200]}...")
+        if self._query_timeout and self._query_timeout > 0:
+            # DuckDB 无 SQL 级查询超时设置；Timer 线程超时 interrupt 执行中的
+            # 查询，conn.execute 抛 InterruptException，转可读错误供 _fix_sql 回灌
+            timer = threading.Timer(self._query_timeout, self._interrupt_conn)
+            timer.daemon = True
+            timer.start()
+            try:
+                return self.conn.execute(sql)
+            except duckdb.InterruptException:
+                raise TimeoutError(
+                    f"查询超过 {self._query_timeout:g}s 超时上限已中断，"
+                    f"请缩小扫描范围或添加过滤条件"
+                )
+            finally:
+                timer.cancel()
         return self.conn.execute(sql)
 
+    def _interrupt_conn(self) -> None:
+        """watchdog 回调：中断当前连接上执行中的查询（连接空闲时为无害 no-op）。"""
+        try:
+            self.conn.interrupt()
+        except Exception:
+            pass
+
     def query_df(self, sql: str) -> pd.DataFrame:
-        """Execute SQL and return results as a pandas DataFrame."""
-        return self.execute(sql).df()
+        """Execute SQL and return results as a pandas DataFrame.
+
+        结果行数超上限时抛 ValueError：SQLAgent 的错误回灌路径会把该消息
+        交给 _fix_sql 重新生成带 LIMIT 的查询（自愈，无需额外通道）。
+        """
+        df = self.execute(sql).df()
+        if self._max_result_rows and len(df) > self._max_result_rows:
+            raise ValueError(
+                f"查询结果 {len(df)} 行超过上限 {self._max_result_rows} 行，"
+                f"请添加 LIMIT 或缩小查询范围"
+            )
+        return df
 
     def get_schema_text(self) -> str:
         """Return a human-readable schema description."""

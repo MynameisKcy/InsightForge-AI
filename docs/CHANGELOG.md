@@ -3,6 +3,9 @@
 ### 未发布
 
 - refactor: 扁平化包根(agent/ 整层上移至 repo 根), 统一导入形式, 消除 63 处双导入兜底(余 2 处单臂可选导入守卫)与 63 处散落 sys.path hack
+- fix(user-model): 按用户解析模型传播收尾——quick_data_insight/TrendAgent/ExportAgent/DocumentReportAgent 构造补传 user_id, RAG 摘要链 `_get_chain(user_id)`, MemoryService 改 `llm_factory(user_id)` + summarizer 按用户工厂(删 `_memory_llm_user` 共享字典, 消后台闲置 finalize 线程竞态)
+- test(api): 补端点测试盲区——chat SSE token 契约/analysis/datasets/datasources reload/knowledge reindex, 新增 tests/conftest.py 共享 fixtures(+31 用例)
+- feat(security): DuckDB 查询通道资源上限——`config/agent.yml` `duckdb` 节(memory_limit/threads 经连接配置, max_result_rows 超限报错喂 `_fix_sql` 自愈, query_timeout watchdog `conn.interrupt()` 中断); 沙箱白名单零放宽(SET/PRAGMA 依旧被拒)
 
 ### v0.5（2026-08-06）
 

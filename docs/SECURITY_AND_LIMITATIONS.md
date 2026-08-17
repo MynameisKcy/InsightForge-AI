@@ -20,7 +20,7 @@
 
 ### 安全层面
 
-- "沙箱"是 **SQL 语句级 AST 校验**，非进程 / 容器 / 虚拟化隔离；**无 CPU / 内存 / 磁盘 / 行数 / 超时上限**，只读但昂贵的查询存在 DoS 风险。
+- "沙箱"是 **SQL 语句级 AST 校验**，非进程 / 容器 / 虚拟化隔离。查询通道带连接级资源上限（`config/agent.yml` `duckdb` 节：`memory_limit` 1GB / `threads` 2 经连接配置应用，`max_result_rows` 10000 超限报错喂 `_fix_sql` 自愈，`query_timeout_seconds` 30 由 watchdog `conn.interrupt()` 中断），可缓解但**非硬隔离**——磁盘占用（内存超限落盘临时文件）与进程级总量仍无上限。
 - RAG 向量库与图表知识库为**全局共享**，无按用户隔离（任意用户的上传知识可被他人检索到）；但**跨会话记忆召回**的 ChromaDB `memory` collection 采用 shared-collection + `user_id` owner 过滤（`include_public=False`），按用户隔离。
 - 无 CSRF token、无限流 / 登录防爆破、无 CORS 配置（同源）、无 CSP；图表 iframe 无 `sandbox` 属性；前端 XSS 防护为自研 `escapeHtml` + URL 协议白名单（未用 DOMPurify）。
 - 客户端中断 SSE 后，**后台线程仍跑完整任务**，无服务端取消。

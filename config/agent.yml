@@ -1,1 +1,9 @@
 external_data_path: data/external/records.csv
+
+# DuckDB 查询通道资源上限（只读沙箱的 DoS 防护补全；对每用户 :memory: 连接生效。
+# memory_limit/threads 经连接配置应用——SET/PRAGMA 被沙箱双拒不能走 SQL）
+duckdb:
+  memory_limit: "1GB"        # 单连接内存上限，超限落盘临时文件而非 OOM
+  threads: 2                 # 单连接线程数上限
+  max_result_rows: 10000     # 结果行数上限，超限报错提示加 LIMIT（喂 SQLAgent._fix_sql 自愈重试）
+  query_timeout_seconds: 30  # 查询超时（watchdog interrupt），<=0 不启用
