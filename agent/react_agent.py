@@ -29,23 +29,30 @@ class ReactAgent:
 
     def execute_stream(self, query: str, history: list[dict] | None = None,
                        user_id: str = "default", session_id: str = "",
-                       progress_emitter=None):
+                       progress_emitter=None, cancel_token=None):
         # 构建完整上下文：历史消息 + 当前问题
         # 设置请求级 user_id，供下游 @tool 工具（run_full_analysis 等）读取，实现多用户隔离
         # progress_emitter：绑定到 contextvar，供 PlannerAgent.run 在 run_full_analysis
         # 执行期间把步骤事件直接推入 SSE 队列（绕过被阻塞的流式 yield）。
+        # cancel_token：客户端断连时由 /api/chat 主协程 cancel()；流循环在每次
+        # agent.stream 产出后检查，尽早停止后续模型调用（协作式，不抢占进行中的调用）。
         from utils.request_context import set_request_context, reset_request_context
         from utils.progress_emitter import set_progress_emitter, reset_progress_emitter
+        from utils.cancel_token import set_cancel_token, reset_cancel_token
         ctx_token = set_request_context(user_id=user_id, session_id=session_id)
         pe_token = set_progress_emitter(progress_emitter)
+        ct_token = set_cancel_token(cancel_token)
         try:
-            yield from self._execute_stream_inner(query, history, user_id, session_id)
+            yield from self._execute_stream_inner(query, history, user_id, session_id,
+                                                  cancel_token=cancel_token)
         finally:
+            reset_cancel_token(ct_token)
             reset_progress_emitter(pe_token)
             reset_request_context(ctx_token)
 
     def _execute_stream_inner(self, query: str, history: list[dict] | None = None,
-                              user_id: str = "default", session_id: str = ""):
+                              user_id: str = "default", session_id: str = "",
+                              cancel_token=None):
         # 构建完整上下文：历史消息 + 当前问题
         messages = []
         if history:
@@ -102,6 +109,9 @@ class ReactAgent:
         final_ai_msg = None
 
         for chunk in self.agent.stream(input_dict, stream_mode="values", context={"report": False}):
+            if cancel_token is not None and cancel_token.cancelled:
+                logger.info("Stream cancelled by client disconnect; stopping agent loop")
+                break
             messages = chunk.get("messages", [])
             if not messages:
                 continue

@@ -18,6 +18,7 @@ from analysis.analysis_module import (
     RiskAnalysisAdapter,
 )
 from utils.logger_handler import logger
+from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
 from memory.short_term import get_session
 
 from database.data_resolver import DataResolver
@@ -222,6 +223,15 @@ class PlannerAgent(BaseAgent):
         pctx = PipelineContext(title=title)
 
         for step in plan:
+            # 客户端断连取消：步骤边界检查（长流水线尽早止损；单步内不抢占）
+            try:
+                raise_if_cancelled()
+            except PipelineCancelledError:
+                self._emit_progress("cancelled", {"step": step.get("step", 0)})
+                logger.info(f"Pipeline cancelled by client disconnect at step "
+                            f"{step.get('step', 0)} ({step.get('agent', '')})")
+                raise
+
             agent_name = step.get("agent", "")
             task = step.get("task", query)
             depends = step.get("depends_on", [])
@@ -341,6 +351,9 @@ class PlannerAgent(BaseAgent):
         pctx = PipelineContext(title=title)
 
         for step in plan:
+            # 客户端断连取消：步骤边界检查（与 run() 一致）
+            raise_if_cancelled()
+
             agent_name = step.get("agent", "")
             task = step.get("task", query)
             depends = step.get("depends_on", [])

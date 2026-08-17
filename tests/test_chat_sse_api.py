@@ -48,7 +48,7 @@ class _FakeReactAgent:
         self._last_input_tokens = 10
 
     def execute_stream(self, query, history=None, user_id=None,
-                       session_id=None, progress_emitter=None):
+                       session_id=None, progress_emitter=None, cancel_token=None):
         if self.on_start:
             self.on_start(progress_emitter)
         for chunk in self.chunks:

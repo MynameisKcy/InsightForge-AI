@@ -35,7 +35,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: float = 15,
-                                 progress_emitter=None):
+                                 progress_emitter=None, cancel_token=None):
     """把同步生成器放进后台线程执行，主协程带心跳消费。
 
     问题：ReactAgent.execute_stream 在 run_full_analysis 等长工具执行期间，
@@ -46,6 +46,7 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
 
     yield (kind, value)：kind 为 "heartbeat"（已格式化 SSE 行，直接 yield）、
     "chunk"（原始 chunk 文本，交调用方处理）、"progress"（步骤事件 dict，转 [STEP] 下发）。
+    cancel_token 置位后停止消费（生产者线程经协作式检查自行退出）。
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -71,16 +72,20 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
             try:
                 kind, value = await asyncio.wait_for(queue.get(), timeout=interval)
             except asyncio.TimeoutError:
+                if cancel_token is not None and cancel_token.cancelled:
+                    break
                 yield ("heartbeat", heartbeat)  # 心跳保活
                 continue
             if kind == "done":
+                break
+            if cancel_token is not None and cancel_token.cancelled:
                 break
             yield (kind, value)   # "chunk" 或 "progress"
     finally:
         # 线程异常在主协程抛出，触发上层 except → [ERROR]
         if progress_emitter is not None:
             progress_emitter.close()
-        if error_box:
+        if error_box and not (cancel_token is not None and cancel_token.cancelled):
             raise error_box[0]
 
 
@@ -102,6 +107,7 @@ from database.user_db import user_db
 from database.data_resolver import DataResolver
 
 from utils.progress_emitter import ProgressEmitter
+from utils.cancel_token import CancelToken
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _memory_service = None  # MemoryService 懒加载单例（llm 按用户解析，由首次请求触发）
@@ -362,6 +368,10 @@ async def api_chat(request: Request, user=Depends(require_auth)):
 
     agent = _get_react_agent(user_id)
 
+    # 客户端断连取消通道：generate() 检测到断连即 cancel()；生产者线程在
+    # ReactAgent 流循环 / PlannerAgent 步骤边界协作式退出，止损后续 LLM 调用
+    cancel = CancelToken()
+
     async def generate() -> AsyncGenerator[str, None]:
         full_response = ""
         # ── 记录分析前已有的图表文件，用于后续检测新图表 ──
@@ -378,15 +388,31 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                 yield f"data: [SESSIONS_RELOAD]\n\n"
 
             emitter = ProgressEmitter()
+            cancelled = False
+            _chunk_polls = 0
             async for kind, value in _stream_with_heartbeat(
                 lambda: agent.execute_stream(query, history=mem_context,
                                              user_id=user_id, session_id=session_id,
-                                             progress_emitter=emitter),
+                                             progress_emitter=emitter,
+                                             cancel_token=cancel),
                 heartbeat="data: [KEEPALIVE]\n\n",
                 interval=15,
                 progress_emitter=emitter,
+                cancel_token=cancel,
             ):
+                # 断连检测：卡顿期随心跳必检、流式期每 20 chunk 抽检一次
+                # （避免逐 chunk 轮询 receive 通道的开销；发现即置取消 token，
+                # 生产者线程在下一个边界退出，本协程停止下发）
+                # 注：TestClient 的 ASGI transport 在请求体耗尽后 receive 会
+                # 误报 http.disconnect，故不做逐 chunk 检测（测试路径不触发抽检/心跳）。
+                if cancel.cancelled:
+                    cancelled = True
+                    break
                 if kind == "heartbeat":
+                    if await request.is_disconnected():
+                        cancel.cancel()
+                        cancelled = True
+                        break
                     # 纯保活：前端 resetIdle 即可，不再覆盖思考文案
                     yield value
                     continue
@@ -395,6 +421,11 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     yield f"data: [STEP:{json.dumps(value, ensure_ascii=False)}]\n\n"
                     continue
                 # kind == "chunk"
+                _chunk_polls += 1
+                if _chunk_polls % 20 == 0 and await request.is_disconnected():
+                    cancel.cancel()
+                    cancelled = True
+                    break
                 chunk = value
                 if not chunk:
                     continue
@@ -414,6 +445,15 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     # 无法拆分的内容（如列表项、标题等）原样输出
                     yield f"data: {stripped}\n\n"
                     await asyncio.sleep(0.03)
+
+            # 取消也可能发生在 _stream_with_heartbeat 内部（其检测到 token 置位后
+            # 直接 break，外层 async-for 表现为正常耗尽）——以 token 终态为准
+            cancelled = cancelled or cancel.cancelled
+            if cancelled:
+                # 客户端已断连：响应无人接收，不发 [DONE]、不检测图表、
+                # 不把残缺回复写入记忆（完整轮次以下一次成功请求为准）
+                logger.info(f"Client disconnected; stream cancelled for session {session_id}")
+                return
 
             # ── 检测新生成的图表文件并发送给前端 ──
             chart_urls = []

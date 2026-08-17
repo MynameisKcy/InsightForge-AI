@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 import random
 
 from rag.rag_service import RagSummarizerService
+from utils.cancel_token import PipelineCancelledError
 from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
 from agents.planner_agent import PlannerAgent
@@ -111,6 +112,9 @@ def run_full_analysis(query: str) -> str:
             # 截取前 3000 字符避免 token 超限
             return markdown[:3000] + ("..." if len(markdown) > 3000 else "")
         return "分析已完成，但未生成报告内容。"
+    except PipelineCancelledError:
+        # 客户端断连取消不吞：向上传播结束生产者线程，避免 Agent 循环重试
+        raise
     except Exception as e:
         return f"数据分析调用失败: {str(e)}"
 

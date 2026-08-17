@@ -39,7 +39,7 @@
 - **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「安全层面」：AST 只读校验之外**无 CPU/内存/磁盘/行数/超时上限**，只读但昂贵的查询存在 DoS 风险。
 - **建议**：`DuckDBManager.execute` 内 `SET memory_limit` / `SET threads` / `SET max_output_buffer_size`，查询超时 + 结果行数截断（如 10k 行），超限返回结构化错误供 `SQLAgent._fix_sql` 回灌。
 
-### 4. SSE 断连的服务端取消 —— 价值高 / 工作量中
+### 4. SSE 断连的服务端取消 —— 价值高 / 工作量中 ✅ 已落地（2026-08-17，协作式 CancelToken：心跳必检+每 20 chunk 抽检断连 → ReactAgent 流循环/PlannerAgent 步骤边界退出；单次进行中的 LLM 调用仍完成，不抢占）
 
 - **证据**：`docs/SECURITY_AND_LIMITATIONS.md`：客户端中断 SSE 后后台线程仍跑完整任务。`api/fastapi_server.py:340-446` 的 `generate()` 无 `request.is_disconnected()` 检查。
 - **建议**：心跳循环里轮询 `is_disconnected()`，置 cancellation token 并传入 `agent.execute_stream` / 流水线，各步骤在步骤边界检查退出；同时可省掉 LLM token 浪费。
