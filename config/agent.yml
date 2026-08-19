@@ -7,3 +7,5 @@ duckdb:
   threads: 2                 # 单连接线程数上限
   max_result_rows: 10000     # 结果行数上限，超限报错提示加 LIMIT（喂 SQLAgent._fix_sql 自愈重试）
   query_timeout_seconds: 30  # 查询超时（watchdog interrupt），<=0 不启用
+  instance_pool_cap: 50      # 每用户实例池 LRU 上限：超限驱逐最久未访问用户的实例（关闭连接），
+                             # 被驱逐用户下次访问经数据集重灌透明重建（高用户 churn 下防内存只增不减）

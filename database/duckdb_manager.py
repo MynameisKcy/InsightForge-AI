@@ -7,6 +7,8 @@ import re
 import html
 import threading
 import unicodedata
+from collections import OrderedDict
+
 import duckdb
 import pandas as pd
 
@@ -593,8 +595,27 @@ class DuckDBManager:
         logger.info("DuckDB connection closed")
 
 
-# 按 user_id 缓存的 DuckDBManager 实例（每个 user 独立 :memory: 连接，互不干扰）
-_duckdb_instances: dict[str, "DuckDBManager"] = {}
+# 按 user_id 缓存的 DuckDBManager 实例（每个 user 独立 :memory: 连接，互不干扰）。
+# LRU 有上限（duckdb-instance-pool spec）：OrderedDict 记录访问新近度，超上限驱逐
+# 最久未访问用户的实例（关闭连接）；同步路由在线程池并发触达，须加锁串行化
+# move_to_end / popitem（非原子）。对齐 memory/short_term.py 的 SESSION_POOL_CAP 先例。
+_duckdb_instances: "OrderedDict[str, DuckDBManager]" = OrderedDict()
+_instances_lock = threading.Lock()
+
+# 实例池上限默认值（config/agent.yml `duckdb.instance_pool_cap` 缺失时回退）
+_DEFAULT_INSTANCE_POOL_CAP = 50
+
+
+def _instance_pool_cap() -> int:
+    """读取实例池 LRU 上限（防御式：配置缺失/非法回退默认值，下限 1）。"""
+    cap = _DEFAULT_INSTANCE_POOL_CAP
+    try:
+        from utils.config_handler import agent_conf
+        conf = (agent_conf or {}).get("duckdb", {}) or {}
+        cap = int(conf.get("instance_pool_cap", _DEFAULT_INSTANCE_POOL_CAP))
+    except Exception:
+        pass
+    return max(1, cap)
 
 
 def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
@@ -636,9 +657,11 @@ def _reload_datasets_into_instance(inst: "DuckDBManager") -> None:
 
 
 def init_duckdb(csv_path: str | None = None, user_id: str = "default") -> DuckDBManager:
-    """获取（或创建）指定 user_id 的 DuckDBManager 实例。
+    """获取（或创建）指定 user_id 的 DuckDBManager 实例（LRU 池，有上限）。
 
     每个 user_id 拥有独立的 :memory: 连接和表，多用户并发不会互相覆盖数据。
+    命中即提升新近度（LRU）；池超上限时驱逐最久未访问用户的实例（关闭连接），
+    该用户下次访问经 _reload_datasets_into_instance 透明重建。
     若提供 csv_path 且与该实例上次加载的不同，会触发 reload。
     新建实例时会重新加载 datasources_db 中记录的所有数据集，并注册外部数据库连接。
     """
@@ -649,25 +672,39 @@ def init_duckdb(csv_path: str | None = None, user_id: str = "default") -> DuckDB
         from utils.path_tool import get_abs_path
         csv_path = get_abs_path("data/train.csv")
 
-    inst = _duckdb_instances.get(user_id)
-    if inst is None:
-        inst = DuckDBManager(csv_path=csv_path, user_id=user_id)
-        _duckdb_instances[user_id] = inst
-        # 新建实例：重新加载所有已注册的数据集，并注册外部数据库连接
-        _reload_datasets_into_instance(inst)
-        try:
-            inst.register_external_databases()
-        except Exception as e:
-            logger.warning(f"init_duckdb: register_external_databases failed for user={user_id}: {e}")
-    else:
-        # 已有实例：若需要切换到不同 CSV 则 reload
-        if inst.last_loaded_csv != csv_path:
-            inst.reload_csv(csv_path)
+    with _instances_lock:
+        inst = _duckdb_instances.get(user_id)
+        if inst is None:
+            inst = DuckDBManager(csv_path=csv_path, user_id=user_id)
+            _duckdb_instances[user_id] = inst
+            # 新建实例：重新加载所有已注册的数据集，并注册外部数据库连接
+            _reload_datasets_into_instance(inst)
+            try:
+                inst.register_external_databases()
+            except Exception as e:
+                logger.warning(f"init_duckdb: register_external_databases failed for user={user_id}: {e}")
+            # LRU 驱逐：池超上限时关最久未访问用户的实例（刚插入的在末端，不会被驱逐）
+            cap = _instance_pool_cap()
+            while len(_duckdb_instances) > cap:
+                old_uid, old_inst = _duckdb_instances.popitem(last=False)
+                try:
+                    old_inst.close()
+                except Exception as e:
+                    logger.warning(f"init_duckdb: evict close failed for user={old_uid}: {e}")
+                logger.info(f"init_duckdb: LRU evicted user={old_uid} (pool cap={cap})")
+            needs_reload = False
+        else:
+            # 已有实例：刷新 LRU 新近度；若需要切换到不同 CSV 则 reload（锁外执行）
+            _duckdb_instances.move_to_end(user_id)
+            needs_reload = inst.last_loaded_csv != csv_path
+    if needs_reload:
+        inst.reload_csv(csv_path)
     return inst
 
 
 def close_duckdb(user_id: str = "default") -> None:
-    """关闭并移除指定 user 的 DuckDB 实例（资源清理，可选）。"""
-    inst = _duckdb_instances.pop(user_id, None)
+    """关闭并移除指定 user 的 DuckDB 实例（资源清理，可选；语义与 LRU 池正交）。"""
+    with _instances_lock:
+        inst = _duckdb_instances.pop(user_id, None)
     if inst:
         inst.close()

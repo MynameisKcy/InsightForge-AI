@@ -35,9 +35,9 @@ class DummyVectorStore:
 
 def _make_service(retriever):
     """用 __new__ 构造未初始化的 service，注入桩 vector_store 与 rerank 配置，
-    使 _coarse_retrieve / _rerank 不依赖真实 Chroma 与 DashScope。"""
+    使 _coarse_retrieve / _rerank 不依赖真实 Chroma 与 DashScope。
+    （service 本身已不持有 retriever 属性——检索走 vector_store.similarity_search。）"""
     service = RagSummarizerService.__new__(RagSummarizerService)
-    service.retriever = retriever
     service.vector_store = DummyVectorStore(retriever)
     # _coarse_retrieve 用 retrieve_k 覆盖 search_kwargs
     service.retrieve_k = 15
