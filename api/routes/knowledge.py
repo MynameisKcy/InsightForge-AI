@@ -36,7 +36,7 @@ async def kb_list_files(request: Request, user=Depends(require_auth)):
     from utils.file_handler import get_file_md5_hex
 
     vs = deps._get_vector_store()
-    ingested_md5 = vs._load_md5_store()
+    vs._load_md5_store()
     # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
     chroma_sources = vs.chroma_sources(user_id)
     chroma_basenames = {os.path.basename(s) for s in chroma_sources}
@@ -72,13 +72,12 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
     from utils.file_handler import get_file_md5_hex
     try:
         vs = deps._get_vector_store()
-        ingested_md5 = vs._load_md5_store()
+        vs._load_md5_store()
         # "已入库"以 chroma 实际数据为准（md5 仅去重提示，可能与 chroma 偏离）
         chroma_sources = vs.chroma_sources(user_id)
         chroma_basenames = {os.path.basename(s) for s in chroma_sources}
     except Exception as e:
         logger.warning(f"加载向量库 md5 失败: {e}")
-        ingested_md5 = set()
         chroma_sources = set()
         chroma_basenames = set()
     if os.path.isdir(data_dir):
@@ -89,7 +88,7 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
             if ext not in allowed:
                 continue
-            md5 = get_file_md5_hex(fpath) or ""
+            get_file_md5_hex(fpath) or ""
             ingested = (fpath in chroma_sources) or (fname in chroma_basenames)
             status = "已完成" if ingested else "处理中"
             files.append({

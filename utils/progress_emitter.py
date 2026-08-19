@@ -17,7 +17,7 @@ contextvar：`set_progress_emitter` / `get_progress_emitter`。`execute_stream`
 import contextvars
 from typing import Any, Optional
 
-_progress_emitter: "contextvars.ContextVar[Optional[ProgressEmitter]]" = \
+_progress_emitter: "contextvars.ContextVar[ProgressEmitter | None]" = \
     contextvars.ContextVar("progress_emitter", default=None)
 
 
@@ -55,7 +55,7 @@ class ProgressEmitter:
         self._loop = loop
         self._queue = queue
 
-    def emit(self, event_type: str, data: Optional[dict] = None) -> None:
+    def emit(self, event_type: str, data: dict | None = None) -> None:
         """发射一个进度事件。无绑定/已关闭时静默 no-op。"""
         if self._closed or self._loop is None or self._queue is None:
             return

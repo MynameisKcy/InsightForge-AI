@@ -1,5 +1,6 @@
 
 import pandas as pd
+
 from analysis.trend_analysis import TrendAnalysis
 
 

@@ -11,7 +11,6 @@ import os
 import pandas as pd
 import pytest
 
-import api.fastapi_server as srv
 import api.routes.datasets as ds_routes
 import database.datasources_db as ds_mod
 import database.duckdb_manager as duck_mod

@@ -2,9 +2,9 @@
 Trend Analysis: 数值趋势、时序变化、同比环比、增长率、时间序列分析（领域中立）
 """
 
-import pandas as pd
+
 import numpy as np
-from typing import Any
+import pandas as pd
 
 
 class TrendAnalysis:

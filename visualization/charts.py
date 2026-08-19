@@ -6,7 +6,6 @@ import inspect
 import os
 import re
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
 
@@ -16,9 +15,9 @@ from utils.path_tool import get_abs_path
 # 延迟导入 Plotly，处理未安装情况
 _plotly_available = True
 try:
-    import plotly.graph_objects as go
     import plotly.express as px
-    import plotly.io as pio
+    import plotly.graph_objects as go  # noqa: F401  # 可用性探测导入
+    import plotly.io as pio  # noqa: F401  # 可用性探测导入
 except ImportError:
     _plotly_available = False
     logger.warning("Plotly not installed. Charts will be generated as placeholder text.")

@@ -1,5 +1,5 @@
-import tempfile
 import database.user_settings_db as usd_mod
+
 
 def _fresh_db(tmp_path):
     """给模块换一个临时 DB_PATH，避免污染真实库。"""

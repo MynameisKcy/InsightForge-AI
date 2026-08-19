@@ -17,15 +17,14 @@ response_metadata['token_usage']['input_tokens'] 提供，已 spike 验证），
 """
 
 from collections import OrderedDict
-from typing import Any
 
-from utils.logger_handler import logger
 from memory.context_budget import (
-    compress_threshold,
     char_fallback_threshold,
-    min_keep_turns,
+    compress_threshold,
     estimate_messages_tokens,
+    min_keep_turns,
 )
+from utils.logger_handler import logger
 
 MAX_TURNS = 30  # get_context 默认截断的轮数（一问一答 = 1 轮）；聊天路径传 None 不截断
 SESSION_POOL_CAP = 50  # 内存池上限（LRU），超过淘汰最久未用

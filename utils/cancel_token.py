@@ -15,7 +15,6 @@ finalize 等其他线程拿不到、也不应拿到——取消只属于发起�
 """
 import contextvars
 import threading
-from typing import Optional
 
 
 class PipelineCancelledError(RuntimeError):
@@ -36,11 +35,11 @@ class CancelToken:
         return self._event.is_set()
 
 
-_cancel_token: "contextvars.ContextVar[Optional[CancelToken]]" = \
+_cancel_token: "contextvars.ContextVar[CancelToken | None]" = \
     contextvars.ContextVar("cancel_token", default=None)
 
 
-def set_cancel_token(token: Optional[CancelToken]):
+def set_cancel_token(token: CancelToken | None):
     """绑定当前请求的取消通道，返回 token 供 reset。"""
     return _cancel_token.set(token)
 
@@ -55,7 +54,7 @@ def reset_cancel_token(token) -> None:
         pass
 
 
-def get_cancel_token() -> Optional[CancelToken]:
+def get_cancel_token() -> CancelToken | None:
     return _cancel_token.get()
 
 

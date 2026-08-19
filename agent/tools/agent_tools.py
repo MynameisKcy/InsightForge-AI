@@ -1,15 +1,14 @@
 import csv
-import json
+import random
 from datetime import date
 
 from langchain_core.tools import tool
-import random
 
+from agents.planner_agent import PlannerAgent
 from rag.rag_service import RagSummarizerService
 from utils.cancel_token import PipelineCancelledError
 from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
-from agents.planner_agent import PlannerAgent
 
 rag = RagSummarizerService()
 
@@ -44,7 +43,7 @@ def get_current_month() -> str:
 
 @tool(description="从外部系统中获取指定用户指定月份的使用记录，以纯字符串形式返回，如果未检索到则返回未找到提示")
 def get_external_data(user_id: str, month: str) -> str:
-    with open(_external_data_path(), "r", encoding="utf-8", newline="") as records_file:
+    with open(_external_data_path(), encoding="utf-8", newline="") as records_file:
         for record in csv.DictReader(records_file):
             if record["user_id"] == str(user_id) and record["month"] == str(month):
                 return (
@@ -95,7 +94,7 @@ def invalidate_analyst(user_id: str | None = None) -> None:
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:
-        from utils.request_context import get_user_id, get_session_id
+        from utils.request_context import get_session_id, get_user_id
         analyst = _get_or_create_analyst(get_user_id())
         result = analyst.run({
             "query": query,
@@ -161,7 +160,6 @@ def quick_data_insight(query: str) -> str:
     """快速数据分析，返回关键洞察。"""
     from agents.sql_agent import SQLAgent
     from agents.trend_agent import TrendAgent
-
     from utils.request_context import get_user_id
 
     try:
@@ -187,8 +185,9 @@ def quick_data_insight(query: str) -> str:
                 return f"分析结论（共 {row_count} 条数据）:\n{insight}"
 
         # 如果只有少量行，直接返回数据摘要
-        import pandas as pd
         from io import StringIO
+
+        import pandas as pd
         df = pd.read_json(StringIO(df_json), orient="records")
         return f"查询结果（共 {row_count} 条）:\n{df.head(10).to_string(index=False)}"
     except Exception as e:
@@ -297,10 +296,10 @@ def _current_user_id() -> str:
 
 def _list_text_files(user_id: str):
     """列出文本类知识库文件（PDF/Word/TXT/MD，进 Chroma）。"""
-    from utils.config_handler import chroma_conf
-    from utils.file_handler import get_file_md5_hex
-    from utils.path_tool import get_abs_path
     import os as _os
+
+    from utils.config_handler import chroma_conf
+    from utils.path_tool import get_abs_path
     uid = user_id or _current_user_id()
     data_dir = _os.path.join(get_abs_path(chroma_conf["data_path"]), uid)
     allowed = tuple(chroma_conf.get("allowed_knowledge_file_type", ["txt", "pdf", "docx", "md"]))

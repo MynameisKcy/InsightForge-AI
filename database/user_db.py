@@ -162,7 +162,6 @@ class UserDB:
                 logger.info(f"User {account} password hash upgraded to bcrypt")
 
             # 创建 session
-            import uuid
             token = secrets.token_hex(16)
             now = datetime.now()
             expires = now + timedelta(hours=24)  # 24 小时有效

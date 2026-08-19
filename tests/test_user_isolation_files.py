@@ -1,5 +1,7 @@
 import json
+
 import agent.tools.agent_tools as tools
+
 
 def test_list_user_files_uses_current_user_id(monkeypatch):
     """list_user_files 应按 _current_user_id() 取当前用户，A 的调用只走 A 的列表；

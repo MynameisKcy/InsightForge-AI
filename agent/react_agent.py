@@ -2,16 +2,27 @@
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
-from utils.logger_handler import logger
-
+from agent.tools.agent_tools import (
+    document_report,
+    fill_report_context_for_report,
+    get_chart_insights,
+    get_current_month,
+    get_customer_overview_tool,
+    get_customer_stats_tool,
+    get_data_overview,
+    get_external_data,
+    get_user_id,
+    get_user_location,
+    get_weather,
+    list_user_files,
+    quick_data_insight,
+    rag_sumarize,
+    run_full_analysis,
+)
+from agent.tools.middleware import log_before_model, monitor_tool, report_prompt_switch
 from model.factory import get_chat_model
+from utils.logger_handler import logger
 from utils.prompt_loader import load_system_prompts
-from agent.tools.agent_tools import (rag_sumarize,get_weather,get_user_id,get_user_location,
-                                     get_current_month,get_external_data,fill_report_context_for_report,
-                                     run_full_analysis,get_data_overview,quick_data_insight,
-                                     get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
-                                     list_user_files,document_report)
-from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
 
 
 class ReactAgent:
@@ -36,9 +47,9 @@ class ReactAgent:
         # 执行期间把步骤事件直接推入 SSE 队列（绕过被阻塞的流式 yield）。
         # cancel_token：客户端断连时由 /api/chat 主协程 cancel()；流循环在每次
         # agent.stream 产出后检查，尽早停止后续模型调用（协作式，不抢占进行中的调用）。
-        from utils.request_context import set_request_context, reset_request_context
-        from utils.progress_emitter import set_progress_emitter, reset_progress_emitter
-        from utils.cancel_token import set_cancel_token, reset_cancel_token
+        from utils.cancel_token import reset_cancel_token, set_cancel_token
+        from utils.progress_emitter import reset_progress_emitter, set_progress_emitter
+        from utils.request_context import reset_request_context, set_request_context
         ctx_token = set_request_context(user_id=user_id, session_id=session_id)
         pe_token = set_progress_emitter(progress_emitter)
         ct_token = set_cancel_token(cancel_token)

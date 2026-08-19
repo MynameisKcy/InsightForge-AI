@@ -1,10 +1,10 @@
 import hashlib
 import os.path
-from langchain_core.documents import Document
+
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_core.documents import Document
 
 from utils.logger_handler import logger
-
 
 
 def get_file_md5_hex(filepath:str):

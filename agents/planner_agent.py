@@ -5,23 +5,22 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 import os
 import traceback
 
-from agents.base import BaseAgent
-from agents.sql_agent import SQLAgent
 from agents.analysis_agent import AnalysisAgent
-from agents.visualization_agent import VisualizationAgent
-from agents.report_agent import ReportAgent
+from agents.base import BaseAgent
 from agents.export_agent import ExportAgent
 from agents.pipeline_context import PipelineContext
+from agents.report_agent import ReportAgent
+from agents.sql_agent import SQLAgent
+from agents.visualization_agent import VisualizationAgent
 from analysis.analysis_module import (
-    TrendAnalysisAdapter,
     ProductAnalysisAdapter,
     RiskAnalysisAdapter,
+    TrendAnalysisAdapter,
 )
-from utils.logger_handler import logger
-from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
-from memory.short_term import get_session
-
 from database.data_resolver import DataResolver
+from memory.short_term import get_session
+from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
+from utils.logger_handler import logger
 from utils.progress_emitter import get_progress_emitter
 
 
@@ -368,13 +367,11 @@ class PlannerAgent(BaseAgent):
             yield ("step_start", {"step": step_num, "agent": agent_name, "task": task})
             yield ("status", f"步骤 {step_num}: {task}...")
 
-            step_ok = False
             try:
                 handler = self._agent_map.get(agent_name)
                 if handler:
                     handler(task, pctx, ctx)
                     pctx.completed_steps.add(step_num)
-                    step_ok = True
                     yield ("step_done", {"step": step_num, "agent": agent_name})
                 else:
                     pctx.errors.append(f"Unknown agent: {agent_name}")

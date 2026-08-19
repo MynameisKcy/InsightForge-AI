@@ -54,7 +54,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
     content = await file.read()
     if len(content) > _MAX_DATASET_SIZE:
         return JSONResponse(
-            {"success": False, "error": f"文件超过大小限制(100MB)"},
+            {"success": False, "error": "文件超过大小限制(100MB)"},
             status_code=413,
         )
 
@@ -229,7 +229,7 @@ async def get_dataset_schema(request: Request, name: str, user=Depends(require_a
             ],
             "sample": _json_safe(sample_df.to_dict(orient="records")),
         })
-    except Exception as e:
+    except Exception:
         # DuckDB 中表可能尚未加载，返回元数据中的 schema_json
         import json as _json
         return JSONResponse({

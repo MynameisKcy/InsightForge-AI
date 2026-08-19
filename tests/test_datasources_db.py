@@ -1,7 +1,7 @@
 # tests/test_datasources_db.py
 import os
-import unittest
 import tempfile
+import unittest
 
 
 class TestDatasourcesDB(unittest.TestCase):

@@ -1,4 +1,3 @@
-import json
 import agent.tools.agent_tools as tools
 
 # list_user_files 的格式 + 隔离契约见 test_user_isolation_files.py

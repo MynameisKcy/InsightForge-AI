@@ -2,10 +2,9 @@
 Conversation Summarizer: 使用 LLM 将多轮对话压缩为简短摘要。
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from utils.logger_handler import logger
-
 
 SUMMARY_PROMPT = """你是一个对话摘要生成器。请将以下对话历史压缩为一段简洁的摘要（不超过 300 字）。
 

@@ -7,10 +7,9 @@ import json
 import pandas as pd
 
 from agents.base import BaseAgent
-from visualization.charts import ChartGenerator, chart_png_path
-from utils.logger_handler import logger
 from rag.chart_knowledge import chart_knowledge
-
+from utils.logger_handler import logger
+from visualization.charts import ChartGenerator, chart_png_path
 
 CHART_DECISION_PROMPT = """你是一个数据可视化专家。根据数据分析结果，决定应该生成哪些图表。
 

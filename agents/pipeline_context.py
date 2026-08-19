@@ -5,7 +5,6 @@ PipelineContext: 类型化管道数据流，替代 prev_results 字典抓取袋�
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -20,13 +19,13 @@ class PipelineContext:
     dataframe_json: str = ""
 
     # ── 代理输出槽位 ──
-    sql_result: Optional[dict] = None
-    trend_result: Optional[dict] = None
-    product_result: Optional[dict] = None
-    risk_result: Optional[dict] = None
-    visualization_result: Optional[dict] = None
-    report_result: Optional[dict] = None
-    export_result: Optional[dict] = None
+    sql_result: dict | None = None
+    trend_result: dict | None = None
+    product_result: dict | None = None
+    risk_result: dict | None = None
+    visualization_result: dict | None = None
+    report_result: dict | None = None
+    export_result: dict | None = None
 
     # ── 元数据 ──
     title: str = ""

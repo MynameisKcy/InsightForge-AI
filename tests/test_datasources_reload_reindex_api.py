@@ -6,7 +6,6 @@
 import database.duckdb_manager as duck_mod
 from tests.test_datasets_api import _FakeDuckDB
 
-
 # ── /api/datasources/reload ──
 
 def test_reload_success(client, auth, monkeypatch):

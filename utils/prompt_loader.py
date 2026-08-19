@@ -1,18 +1,19 @@
+import os
+
 from utils.config_handler import prompts_conf
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
-import os
 
 
 def load_system_prompts():
     try:
         system_prompt_path = get_abs_path(prompts_conf['main_prompt_path'])
     except KeyError as e:
-        logger.error(f"[load system prompts]在yaml配置项中没有main_prompt_path")
+        logger.error("[load system prompts]在yaml配置项中没有main_prompt_path")
         raise e
 
     try:
-        return open(system_prompt_path,"r",encoding="utf-8").read()
+        return open(system_prompt_path,encoding="utf-8").read()
     except Exception as e:
         logger.error(f"[load system prompts]解析系统提示词出错,{str(e)}")
         raise e
@@ -30,7 +31,7 @@ def _load_prompt_file(conf_key: str, log_prefix: str) -> str:
         raise error
 
     try:
-        with open(prompt_path, "r", encoding="utf-8") as prompt_file:
+        with open(prompt_path, encoding="utf-8") as prompt_file:
             return prompt_file.read()
     except Exception as e:
         logger.error(f"[{log_prefix}]解析提示词出错,{str(e)}")

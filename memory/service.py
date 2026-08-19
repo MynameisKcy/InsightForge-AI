@@ -12,12 +12,12 @@ finalize 线程与请求线程各自解析正确用户的模型，无共享"当�
 """
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 from memory.long_term import LongTermMemory
+from memory.recall import get_memory_recall
 from memory.short_term import clear_session, get_session, set_summarizer_factory
-from memory.recall import get_memory_recall, MemoryRecallService
 from memory.summarizer import ConversationSummarizer
 from utils.logger_handler import logger
 
@@ -120,7 +120,7 @@ class MemoryService:
         session_id: str,
         query: str,
         assistant_response: str,
-        input_tokens: Optional[int] = None,
+        input_tokens: int | None = None,
     ) -> None:
         """请求结束时调用。
 

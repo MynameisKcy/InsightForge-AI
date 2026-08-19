@@ -14,8 +14,8 @@ heavy __init__ (which builds 7 sub-agents + LLM models).
 """
 import unittest
 
-from agents.planner_agent import PlannerAgent, RequestContext
 from agents.pipeline_context import PipelineContext
+from agents.planner_agent import PlannerAgent, RequestContext
 
 
 def _bare_planner():

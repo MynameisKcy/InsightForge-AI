@@ -12,8 +12,8 @@ import unittest
 
 from langchain_core.messages import AIMessage
 
-from api.sse import _stream_with_heartbeat
 from agent.react_agent import ReactAgent
+from api.sse import _stream_with_heartbeat
 from utils.cancel_token import (
     CancelToken,
     PipelineCancelledError,

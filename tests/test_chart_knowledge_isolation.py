@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from rag.chart_knowledge import ChartKnowledgeBase, PUBLIC_OWNER
+from rag.chart_knowledge import PUBLIC_OWNER, ChartKnowledgeBase
 
 
 def _make_kb() -> ChartKnowledgeBase:
