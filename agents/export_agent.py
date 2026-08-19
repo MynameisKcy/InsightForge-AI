@@ -2,11 +2,10 @@
 Export Agent: Markdown → Word/PDF/HTML/Markdown 导出。
 """
 
+import base64
 import os
 import re
-import base64
 from datetime import datetime
-from typing import Any
 
 from agents.base import BaseAgent
 from utils.logger_handler import logger
@@ -16,24 +15,30 @@ from utils.path_tool import get_abs_path
 _docx_available = True
 try:
     from docx import Document
-    from docx.shared import Inches, Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches, Pt, RGBColor  # noqa: F401  # 可用性探测导入
 except ImportError:
     _docx_available = False
     logger.warning("python-docx not installed. Word export disabled.")
 
 _pdf_available = True
 try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-    from reportlab.platypus import Table, TableStyle
-    from reportlab.platypus import Image as RLImage
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT  # noqa: F401  # 可用性探测导入
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Image as RLImage
+    from reportlab.platypus import (
+        PageBreak,  # noqa: F401  # 可用性探测导入
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 except ImportError:
     _pdf_available = False
     logger.warning("reportlab not installed. PDF export disabled.")

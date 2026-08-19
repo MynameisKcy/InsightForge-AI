@@ -1,5 +1,6 @@
 from agents.document_report_agent import DocumentReportAgent, _load_text
 
+
 class _FakeLLM:
     def _call_llm(self, messages):
         return "# 摘要\n本文档讲X。\n\n## 关键要点\n- 点1\n- 点2\n\n## 问答\n问:A\n答:B"

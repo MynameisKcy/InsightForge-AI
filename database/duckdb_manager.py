@@ -2,9 +2,9 @@
 DuckDB Manager: Load CSV data into DuckDB and provide query/execution interface.
 """
 
+import html
 import os
 import re
-import html
 import threading
 import unicodedata
 from collections import OrderedDict
@@ -12,16 +12,14 @@ from collections import OrderedDict
 import duckdb
 import pandas as pd
 
-from utils.logger_handler import logger
-
+from database.customer_profiles import persist_customer_profiles
 from database.safety import (
     assert_read_only,
     safe_ident,
     validate_csv_path,
     validate_table_name,
 )
-from database.customer_profiles import persist_customer_profiles
-
+from utils.logger_handler import logger
 
 # 不可见/干扰字符：零宽、BOM、软连字符、大部分控制字符（保留制表/换行待折叠）
 _INVISIBLE_RE = re.compile(r"[​-‏‪-‮⁠﻿]")

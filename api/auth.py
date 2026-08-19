@@ -1,6 +1,7 @@
 """统一鉴权：require_auth 依赖 + validate_token 进程内短缓存。"""
 import time
-from fastapi import Request, HTTPException
+
+from fastapi import HTTPException, Request
 
 from database.user_db import user_db
 

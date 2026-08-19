@@ -2,18 +2,22 @@ import json
 import os.path
 import threading
 
-from langchain_core.documents import Document
-from langchain_core.vectorstores import VectorStore
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from utils.file_handler import listdir_with_allowed_type, get_file_md5_hex
-from utils.file_handler import text_loader, pdf_loader, docx_loader, markdown_loader
+from model.factory import get_embed_model
+from utils.config_handler import chroma_conf
+from utils.file_handler import (
+    docx_loader,
+    get_file_md5_hex,
+    listdir_with_allowed_type,
+    markdown_loader,
+    pdf_loader,
+    text_loader,
+)
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
-from utils.config_handler import chroma_conf
-from model.factory import get_embed_model
-
 
 # 公共 / 历史 owner：迁移前无 user_id 的分片统一归属 system，作为对所有用户可见的公共知识。
 PUBLIC_OWNER = "system"
@@ -119,7 +123,7 @@ class VectorStoreService:
         if not os.path.exists(path):
             return set()
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 content = f.read().strip()
             if not content:
                 return set()

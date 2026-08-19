@@ -34,8 +34,9 @@ class AnalysisAgent(BaseAgent):
         input_data = {"dataframe_json": str, ...}  (兼容旧接口)
         或直接从 PipelineContext 获取 DataFrame。
         """
-        import pandas as pd
         from io import StringIO
+
+        import pandas as pd
 
         df_json = input_data.get("dataframe_json", "[]")
 

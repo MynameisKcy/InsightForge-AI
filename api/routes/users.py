@@ -2,8 +2,13 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from api.auth import (require_auth, invalidate_token, extract_token,
-                      set_auth_cookie, AUTH_COOKIE_NAME)
+from api.auth import (
+    AUTH_COOKIE_NAME,
+    extract_token,
+    invalidate_token,
+    require_auth,
+    set_auth_cookie,
+)
 from database.user_db import user_db
 from utils.logger_handler import logger
 

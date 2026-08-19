@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from agents.base import BaseAgent
 from agents.analysis_agent import AnalysisAgent
+from agents.base import BaseAgent
 from agents.report_agent import ReportAgent
 
 

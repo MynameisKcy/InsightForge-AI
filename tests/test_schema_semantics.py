@@ -1,8 +1,9 @@
 import os
 
-from database.duckdb_manager import DuckDBManager
-from database.schema import detect_wide_table, compute_table_profile
 import pandas as pd
+
+from database.duckdb_manager import DuckDBManager
+from database.schema import compute_table_profile, detect_wide_table
 
 
 def test_detect_wide_table_year_columns():
@@ -103,7 +104,6 @@ def test_enhanced_schema_text_cache_cleared_on_drop():
 
 def test_load_csv_clears_profile_cache():
     """重新加载同名表应清旧画像缓存,避免 stale profile。"""
-    import os
     import tempfile
 
     # validate_csv_path 要求文件在 data/ 目录下,用同一解析获取可写目录
@@ -163,7 +163,6 @@ def test_compute_table_profile_handles_quote_in_column_name():
 
 def test_reload_csv_clears_profile_cache():
     """reload_csv 重建同名表应清旧画像缓存,避免 stale profile。"""
-    import os
     import tempfile
 
     # validate_csv_path 要求文件在 data/ 目录下

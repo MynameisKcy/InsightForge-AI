@@ -9,7 +9,6 @@ Owner 隔离（chart-knowledge-isolation spec）：
   （语义与先例 rag/vector_store.py 的 PUBLIC_OWNER / _migrate_legacy_owner 一致）。
 """
 
-import json
 import os
 import sqlite3
 from datetime import datetime, timedelta

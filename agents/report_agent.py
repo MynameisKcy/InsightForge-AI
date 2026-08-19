@@ -5,7 +5,6 @@ Report Agent: 整合所有分析结果 → 生成 Markdown 报告。
 import json
 import os
 from datetime import datetime
-from typing import Any
 
 from agents.base import BaseAgent
 from utils.logger_handler import logger
@@ -59,7 +58,7 @@ class ReportAgent(BaseAgent):
         super().__init__(model=model)
         self._template = None
         if _jinja2_available and os.path.exists(REPORT_TEMPLATE_PATH):
-            with open(REPORT_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            with open(REPORT_TEMPLATE_PATH, encoding="utf-8") as f:
                 self._template = Template(f.read())
 
     def run(self, input_data: dict) -> dict:
@@ -125,7 +124,6 @@ class ReportAgent(BaseAgent):
         # 解析图表路径：优先 PNG（导出/报告预览用栅格图），无则回退 HTML（交互式）
         trend_chart = ""
         product_chart = ""
-        risk_chart = ""
         for c in charts:
             ctype = c.get("type", "")
             # png_path 优先；无 PNG 时回退交互式 HTML path

@@ -12,7 +12,6 @@ Retrieval Query Rewriter（RAG 检索处）：在 rag_service.retriever_docs 的
 from model.factory import get_chat_model
 from utils.logger_handler import logger
 
-
 EXPAND_SYSTEM_PROMPT = """你是一个检索查询扩展器。给定一个检索查询，生成 3 条语义相关但表述不同的改写，用于向量检索召回更多相关文档。
 
 规则：

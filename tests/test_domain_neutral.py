@@ -14,8 +14,8 @@ import unittest
 import pandas as pd
 
 from agents.planner_agent import PlannerAgent
-from analysis.product_analysis import ProductAnalysis
 from analysis.anomaly_detection import AnomalyDetection
+from analysis.product_analysis import ProductAnalysis
 
 
 def _bare_planner():

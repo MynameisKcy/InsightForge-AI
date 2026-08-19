@@ -6,7 +6,7 @@ SSE 协议 token 契约（[SESSION]/[STEP]/[CHART]/[DONE] 等）与 api/static/ 
 import asyncio
 import json
 import os
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -62,7 +62,7 @@ async def api_chat(request: Request, user=Depends(require_auth)):
             # 通知前端 session_id
             yield f"data: [SESSION]{session_id}\n\n"
             if new_session:
-                yield f"data: [SESSIONS_RELOAD]\n\n"
+                yield "data: [SESSIONS_RELOAD]\n\n"
 
             emitter = ProgressEmitter()
             cancelled = False

@@ -23,7 +23,6 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -367,7 +366,7 @@ class MiddlewareRecallInjectionTests(unittest.TestCase):
 
     def test_no_recall_when_no_user_context(self):
         """未设 contextvar（uid=default）时不召回，避免误用 default 用户记忆。"""
-        from utils.request_context import set_request_context, reset_request_context
+        from utils.request_context import reset_request_context, set_request_context
         tok = set_request_context(user_id="default", session_id="")
         try:
             from agent.tools.middleware import _build_system_prompt

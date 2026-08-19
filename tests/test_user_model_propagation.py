@@ -10,12 +10,11 @@
 from unittest.mock import patch
 
 import memory.short_term as short_term_mod
+from agent.tools import agent_tools
 from memory.recall import MemoryRecallService
 from memory.service import MemoryService
 from memory.short_term import ConversationMemory, get_summarizer, set_summarizer_factory
-
-from agent.tools import agent_tools
-from utils.request_context import set_request_context, reset_request_context
+from utils.request_context import reset_request_context, set_request_context
 
 
 class _FakeSummarizer:

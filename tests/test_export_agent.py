@@ -1,7 +1,7 @@
 """ExportAgent 测试。"""
 import os
 
-from agents.export_agent import ExportAgent, _cjk_font_registered
+from agents.export_agent import ExportAgent
 
 
 def test_register_cjk_font_returns_name_or_none():

@@ -1,5 +1,6 @@
 import database.user_settings_db as usd_mod
 
+
 def _fresh(tmp_path):
     usd_mod.DB_PATH = str(tmp_path / "u.db")
     usd_mod._ensure_db()

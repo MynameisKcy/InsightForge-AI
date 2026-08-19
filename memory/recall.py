@@ -48,7 +48,7 @@ class MemoryRecallService:
     @property
     def memory_store(self):
         if self._memory_store is None:
-            from rag.vector_store import VectorStoreService, MEMORY_COLLECTION
+            from rag.vector_store import MEMORY_COLLECTION, VectorStoreService
             self._memory_store = VectorStoreService(collection_name=MEMORY_COLLECTION)
         return self._memory_store
 

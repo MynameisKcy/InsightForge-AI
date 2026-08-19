@@ -1,11 +1,11 @@
-import time as _time
 import secrets as _secrets
+import time as _time
 import unittest
 from unittest.mock import patch
 
-import database.user_db as user_db_mod
 import api.deps as deps
 import api.fastapi_server as srv
+import database.user_db as user_db_mod
 from memory.service import MemoryService
 
 

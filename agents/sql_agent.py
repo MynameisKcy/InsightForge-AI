@@ -2,15 +2,13 @@
 SQL Agent: 自然语言 → SQL → DataFrame
 """
 
-import json
 import re
 
 import pandas as pd
 
 from agents.base import BaseAgent
-from database.duckdb_manager import DuckDBManager, init_duckdb
+from database.duckdb_manager import init_duckdb
 from utils.logger_handler import logger
-
 
 SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用户的数据分析需求和数据库 Schema，生成可执行的 DuckDB SQL 语句。
 

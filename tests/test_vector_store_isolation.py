@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from rag.vector_store import VectorStoreService, PUBLIC_OWNER
+from rag.vector_store import PUBLIC_OWNER, VectorStoreService
 
 
 class FakeEmbed(Embeddings):

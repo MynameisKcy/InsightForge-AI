@@ -6,19 +6,17 @@ import textwrap
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
-
 from langchain_core.prompts import PromptTemplate
 
-from rag.vector_store import VectorStoreService
-from rag.retrieval_query_rewriter import RetrievalQueryRewriter
-from utils.prompt_loader import load_rag_prompts
-from utils.config_handler import rag_conf
 from model.factory import get_chat_model
-
+from rag.retrieval_query_rewriter import RetrievalQueryRewriter
+from rag.vector_store import VectorStoreService
+from utils.config_handler import rag_conf
 from utils.logger_handler import logger
+from utils.prompt_loader import load_rag_prompts
 
 
-class RagSummarizerService(object):
+class RagSummarizerService:
     def __init__(self):
         self.vector_store = VectorStoreService()
         # 注意：不构造无 owner 过滤的 retriever——检索一律走

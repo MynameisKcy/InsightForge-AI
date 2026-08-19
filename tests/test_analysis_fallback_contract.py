@@ -1,10 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from analysis.analysis_module import (
-    TrendAnalysisAdapter, ProductAnalysisAdapter, RiskAnalysisAdapter,
-)
 from agents.analysis_agent import AnalysisAgent
+from analysis.analysis_module import (
+    ProductAnalysisAdapter,
+    RiskAnalysisAdapter,
+    TrendAnalysisAdapter,
+)
 
 
 class AdapterFallbackContractTests(unittest.TestCase):

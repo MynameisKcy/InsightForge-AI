@@ -9,9 +9,9 @@ from typing import Protocol
 
 import pandas as pd
 
-from analysis.trend_analysis import TrendAnalysis
-from analysis.product_analysis import ProductAnalysis
 from analysis.anomaly_detection import AnomalyDetection
+from analysis.product_analysis import ProductAnalysis
+from analysis.trend_analysis import TrendAnalysis
 
 
 class AnalysisModule(Protocol):

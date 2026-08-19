@@ -7,8 +7,6 @@ Dimension / Breakdown Analysis: 按维度分组对比度量 -- TOP 项、分布�
 """
 
 import pandas as pd
-import numpy as np
-
 
 # ── 维度/度量列的命名候选（仅用于"按名识别"销售快路径与常见维度列）──
 _PRODUCT_CANDIDATES = ["Product_Description", "Product_Name", "product_name", "product", "name"]

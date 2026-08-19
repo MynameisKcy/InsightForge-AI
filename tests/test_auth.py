@@ -1,5 +1,5 @@
-import time as _time
 import secrets as _secrets
+import time as _time
 
 import database.user_db as user_db_mod
 
@@ -27,15 +27,16 @@ def _make_request(token: str | None):
 
 
 def test_require_auth_rejects_missing_token():
-    from api.auth import require_auth
     import pytest
+
+    from api.auth import require_auth
     with pytest.raises(Exception) as e:
         require_auth(_make_request(None))
     assert "401" in str(e.value) or e.value.status_code == 401
 
 
 def test_require_auth_accepts_valid_token():
-    from api.auth import require_auth, extract_token, validate_token_cached
+    from api.auth import extract_token, require_auth, validate_token_cached
     _register()
     login_res = _login()
     token = login_res["token"]
@@ -50,8 +51,9 @@ def test_require_auth_accepts_valid_token():
 
 
 def test_require_auth_rejects_bad_token():
-    from api.auth import require_auth
     import pytest
+
+    from api.auth import require_auth
     with pytest.raises(Exception):
         require_auth(_make_request("not-a-real-token"))
 
@@ -63,6 +65,7 @@ def test_get_current_user_none_when_no_token():
 
 def test_api_me_requires_auth():
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     # 未登录 401
@@ -78,6 +81,7 @@ def test_api_me_requires_auth():
 
 def test_app_redirects_when_unauthenticated():
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     r = client.get("/app", follow_redirects=False)
@@ -88,6 +92,7 @@ def test_app_redirects_when_unauthenticated():
 def test_update_profile_changes_nickname():
     """POST /api/profile 改昵称后，GET /api/me 立即返回新昵称。"""
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("prof")
@@ -107,6 +112,7 @@ def test_update_profile_changes_nickname():
 def test_change_password_wrong_old():
     """旧密码错误时 /api/password 返回失败且文案含“旧密码错误”。"""
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("pwd")
@@ -141,8 +147,9 @@ def test_change_password_success_then_login_with_new():
 
 def test_logout_invalidates_cache():
     """登出后立即从短缓存逐出该 token，validate_token_cached 返回 None。"""
-    from api.auth import validate_token_cached
     from fastapi.testclient import TestClient
+
+    from api.auth import validate_token_cached
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("logout")
@@ -167,6 +174,7 @@ def test_login_sets_auth_cookie():
     头，服务端无法识别会话 → 302 回落地页，与 /api/me（带 header）形成重定向循环。
     """
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("cklogin")
@@ -186,6 +194,7 @@ def test_app_served_when_authenticated_via_cookie():
     修复前被误判未登录而 302。现在 extract_token 回退到 cookie，应正常返回页面。
     """
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("ckapp")
@@ -202,6 +211,7 @@ def test_app_served_when_authenticated_via_cookie():
 def test_logout_clears_auth_cookie():
     """回归：POST /api/logout 应清除 token cookie，避免登出后凭 cookie 绕过鉴权。"""
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("ckout")
@@ -218,6 +228,7 @@ def test_logout_clears_auth_cookie():
 def test_app_no_redirect_loop_when_authenticated():
     """回归：已登录下 /api/me(200) → /app(200) 不应再出现 302 循环。"""
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     client = TestClient(app)
     acct = _uniq_account("loop")
@@ -239,6 +250,7 @@ def test_bearer_only_request_refreshes_cookie():
     后中间件补种 cookie，/app 方能加载。
     """
     from fastapi.testclient import TestClient
+
     from api.fastapi_server import app
     acct = _uniq_account("bearer")
     _register(acct)

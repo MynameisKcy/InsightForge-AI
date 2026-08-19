@@ -233,6 +233,6 @@ class DataResolver:
         """读取 .txt 描述文件的完整内容。"""
         desc_path = get_abs_path(f"data/{desc_filename}")
         if os.path.exists(desc_path):
-            with open(desc_path, "r", encoding="utf-8") as f:
+            with open(desc_path, encoding="utf-8") as f:
                 return f.read()
         return ""

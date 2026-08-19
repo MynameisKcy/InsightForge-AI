@@ -6,8 +6,6 @@ Anomaly Detection: 度量异常检测、分组异常、低表现项检测（领�
 """
 
 import pandas as pd
-import numpy as np
-
 
 _QTY_CANDIDATES = ["Quantity", "qty", "total_quantity", "total_qty"]
 _PRICE_CANDIDATES = ["Avg_Price", "avg_price", "Price", "price", "unit_price"]

@@ -9,7 +9,6 @@ fake ReactAgent 的 execute_stream 为同步生成器（_stream_with_heartbeat �
 import json
 import os
 
-import api.fastapi_server as srv
 import api.routes.chat as chat_routes
 from memory.service import MemoryTurnContext
 
@@ -52,8 +51,7 @@ class _FakeReactAgent:
                        session_id=None, progress_emitter=None, cancel_token=None):
         if self.on_start:
             self.on_start(progress_emitter)
-        for chunk in self.chunks:
-            yield chunk
+        yield from self.chunks
         if self.exc:
             raise self.exc
 

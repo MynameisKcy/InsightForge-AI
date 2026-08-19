@@ -5,7 +5,7 @@ PRAGMA 泄露、扩展加载、命令执行）拦截。
 """
 import unittest
 
-from database.safety import assert_read_only, SecurityError  # noqa: E402
+from database.safety import SecurityError, assert_read_only  # noqa: E402
 
 
 class AssertReadOnlyTest(unittest.TestCase):

@@ -1,6 +1,6 @@
+import csv
 import os
 import unittest
-import csv
 
 
 class TestDuckDBMultiSource(unittest.TestCase):
@@ -79,8 +79,8 @@ class TestDuckDBMultiSource(unittest.TestCase):
     def test_customer_isolation_by_user(self):
         """客户数据按 user_id 隔离：A 上传的客户对 B 不可见。"""
         import database.customer_profiles as cmod
+        from database.customer_profiles import get_customer_count, get_customer_overview
         from database.duckdb_manager import DuckDBManager
-        from database.customer_profiles import get_customer_overview, get_customer_count
 
         # 用临时 customers.db，避免污染真实库
         orig_path = cmod._CUSTOMER_DB_PATH
@@ -131,8 +131,8 @@ class TestDuckDBMultiSource(unittest.TestCase):
     def test_upload_csv_populates_profiles(self):
         """上传路径(load_csv_dataset)也应触发客户画像持久化——回归 1/4 路径 bug。"""
         import database.customer_profiles as cmod
-        from database.duckdb_manager import DuckDBManager
         from database.customer_profiles import get_customer_count
+        from database.duckdb_manager import DuckDBManager
 
         orig_path = cmod._CUSTOMER_DB_PATH
         tmp_cust = os.path.join(self.tmp_dir, "test_customers_upload.db")

@@ -4,7 +4,7 @@ DocumentReportAgent：针对文本类文件（PDF/Word/TXT/MD）生成
 """
 
 from agents.base import BaseAgent
-from utils.file_handler import pdf_loader, docx_loader, text_loader, markdown_loader
+from utils.file_handler import docx_loader, markdown_loader, pdf_loader, text_loader
 from utils.prompt_loader import load_document_report_prompts
 
 

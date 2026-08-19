@@ -25,10 +25,9 @@ if _REPO_ROOT not in sys.path:
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
-from utils.path_tool import get_abs_path
-
 from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
 from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
+from utils.path_tool import get_abs_path
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 

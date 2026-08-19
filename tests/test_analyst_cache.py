@@ -15,7 +15,7 @@ from agent.tools import agent_tools
 # Import request_context via the SAME module name that run_full_analysis
 # uses internally (`from utils.request_context import get_user_id`), so the
 # ContextVar the tests set is the one the tool actually reads.
-from utils.request_context import set_request_context, reset_request_context
+from utils.request_context import reset_request_context, set_request_context
 
 
 class _FakePlannerAgent:

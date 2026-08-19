@@ -4,7 +4,6 @@ Report export helpers.
 import datetime
 import re
 
-
 REPORT_TITLE = "# 用户使用情况报告"
 REPORT_SECTIONS = (
     "## 基本信息",

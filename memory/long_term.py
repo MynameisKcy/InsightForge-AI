@@ -2,7 +2,6 @@
 Long-Term Memory: SQLite 存储对话摘要，按用户 ID 索引。
 """
 
-import json
 import os
 import sqlite3
 import uuid

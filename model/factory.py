@@ -1,10 +1,10 @@
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
+
+from langchain_community.chat_models import ChatTongyi
 from langchain_community.chat_models.tongyi import BaseChatModel
 from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_core.embeddings import Embeddings
-from langchain_community.chat_models import ChatTongyi
 
 # ── 方案C：加载 .env 环境变量（DASHSCOPE_API_KEY 等）──
 # 必须在实例化模型之前执行：优先从 .env 读取，但不覆盖已存在的环境变量。
@@ -30,6 +30,7 @@ def _model_name(key: str) -> str:
 # 模型按 user_id 缓存：各用户用自己的 LLM 配置，互不泄漏。
 # reload_model_config(user_id) 在配置保存后失效该用户缓存，下次取用时按新配置重建。
 import threading
+
 _config_lock = threading.Lock()
 _chat_model_cache = {}   # user_id -> BaseChatModel
 _embed_model_cache = {}  # user_id -> Embeddings
@@ -152,18 +153,18 @@ def get_embed_model(user_id: str | None = None):
 
 class BaseModelFactory(ABC):
     @abstractmethod
-    def generator(self) -> Optional[Embeddings | BaseChatModel]:
+    def generator(self) -> Embeddings | BaseChatModel | None:
         pass
 
 
 class ChatModelFactory(BaseModelFactory):
-    def generator(self) -> Optional[Embeddings | BaseChatModel]:
+    def generator(self) -> Embeddings | BaseChatModel | None:
         # 大语言模型（通义千问）：名称取 CHAT_MODEL_NAME 环境变量或 rag.yml
         return ChatTongyi(model=_model_name("chat_model_name"))
 
 
 class EmbeddingsFactory(BaseModelFactory):
-    def generator(self) -> Optional[Embeddings | BaseChatModel]:
+    def generator(self) -> Embeddings | BaseChatModel | None:
         # 向量嵌入模型：名称取 EMBEDDING_MODEL_NAME 环境变量或 rag.yml
         return DashScopeEmbeddings(model=_model_name("embedding_model_name"))
 

@@ -15,9 +15,9 @@ import os
 import tempfile
 import unittest
 
-from memory.short_term import get_session, clear_session, ConversationMemory, MAX_TURNS
-from memory.long_term import LongTermMemory
 import memory.short_term as short_term_mod
+from memory.long_term import LongTermMemory
+from memory.short_term import clear_session, get_session
 
 
 class _FakeSummarizer:
