@@ -1,0 +1,37 @@
+# InsightForge AI — 工程化工具链配置
+# 依赖仍由 requirements.txt 管理（conda 工作流不变）；本文件收口工具配置 +
+# 声明 Python 版本要求，不重复声明依赖以避免双源漂移。
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insightforge-ai"
+version = "0.1.0"
+description = "InsightForge AI — multi-agent collaborative data-analysis platform"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# 排除生成产物 / 第三方 / 本地工具目录
+extend-exclude = [
+  "chroma_db", "reports", "data", "logs", "tmp-kaleido",
+  ".workbuddy", ".codebuddy", "openspec", "build", "dist",
+]
+
+[tool.ruff.lint]
+# E=pycodestyle errors, F=pyflakes(未用导入/变量/未定义名),
+# I=isort, UP=pyupgrade（项目已用 X|None 风格，UP 多数已满足）
+select = ["E", "F", "I", "UP"]
+ignore = [
+  "E501",  # 行长交给 ruff format，不作 lint 错误（避免对存量长行的大规模改动）
+  "E402",  # 项目刻意用函数内 lazy import 避免循环依赖，module-level 顺序不强制
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]  # 测试断言串可超长
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
