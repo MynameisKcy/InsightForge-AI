@@ -1,0 +1,21 @@
+# pre-commit 钩子：与 CI 同 ruff 版本，本地提交门禁。
+# 首次使用：pre-commit install（之后 git commit 自动触发）。
+# 手动全量：pre-commit run --all-files
+minimum_pre_commit_version: "3.0"
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.3  # 与 CI / pyproject.toml ruff 版本对齐，防规则漂移
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=500]  # 防 chroma_db / data/tmp* 误入版本库

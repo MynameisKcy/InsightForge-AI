@@ -31,16 +31,25 @@ conda is NOT on PATH — prefix every command with:
 eval "$('C:/ProgramData/anaconda3/Scripts/conda.exe' shell.bash hook)" && conda activate AnalysisAgent
 ```
 
-(System Python is 3.8 — too old; the project needs the env's Python 3.10+.)
+(System Python is 3.8 — too old; the project needs the env's Python 3.10+. `pyproject.toml`
+`requires-python >=3.10` now enforces this at install time.)
 
 ```bash
 python -m api.fastapi_server        # FastAPI server, port 8502, serves api/static/ frontend
 python -m pytest tests/ -v          # full suite (~60s, offline, LLM 100% mocked)
 python -m pytest tests/test_rag_service.py -v   # single file
+ruff check .                        # lint (E/F/I/UP, 忽略 E501 行长与 E402 lazy import)
+ruff format .                       # 格式化（行长由它管，非 lint 错误）
+pre-commit install                  # 首次：装本地提交门禁（ruff + format + 通用清理）
+pre-commit run --all-files          # 手动全量跑钩子
 ```
 
+CI (`.github/workflows/ci.yml`) on push(dev/main) & PR(main) runs `ruff check .` +
+`pytest tests/`; PR must be green to merge.
+
 - Use **pytest**, not `python -m unittest discover` (misses pytest-style function tests).
-- No lint/typecheck tooling is configured (no ruff/mypy/black configs).
+- Lint/format: ruff (config in `pyproject.toml` `[tool.ruff]`); no mypy/black.
+  pre-commit gates commits; CI gates push/PR.
 
 ## Import & path rules
 

@@ -46,3 +46,13 @@ tmp-kaleido/
 .tmp/
 .zcode/
 *.db.bak
+
+# OpenSpec spec-driven 规划产物与 IDE 集成（本地保留，不入库）
+openspec/
+.codebuddy/
+
+# WorkBuddy agent 本地状态 / 记忆
+.workbuddy/
+
+# 测试运行残留的临时 CSV（data/tmp*.csv）
+data/tmp*.csv
