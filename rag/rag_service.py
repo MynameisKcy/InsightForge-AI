@@ -21,7 +21,9 @@ from utils.logger_handler import logger
 class RagSummarizerService(object):
     def __init__(self):
         self.vector_store = VectorStoreService()
-        self.retriever = self.vector_store.get_retriver()
+        # 注意：不构造无 owner 过滤的 retriever——检索一律走
+        # retriever_docs → _coarse_retrieve → similarity_search(user_id=...)，
+        # 按 owner 隔离（自己 + 公共 system）；无过滤 retriever 属泄漏旁路，已删除。
         # rerank 配置（来自 config/rag.yml，复用 .env 的 DASHSCOPE_API_KEY）
         self.rerank_model = rag_conf.get("rerank_model", "gte-rerank")
         # 粗召回数量：向量检索返回的候选池（rerank 前）

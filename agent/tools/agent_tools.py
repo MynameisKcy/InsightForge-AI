@@ -197,14 +197,16 @@ def quick_data_insight(query: str) -> str:
 
 @tool(description="从图表知识库和外部搜索中获取分析建议。结合历史图表数据和外部信息，为当前分析提供深度洞察。参数 query 为分析问题，如'销售下降原因分析'、'如何优化产品定价'")
 def get_chart_insights(query: str) -> str:
-    """从图表知识库检索历史图表数据，结合外部搜索生成分析建议。"""
+    """从图表知识库检索历史图表数据，结合外部搜索生成分析建议（owner 隔离）。"""
     from rag.chart_knowledge import chart_knowledge
+    from utils.request_context import get_user_id
 
     parts = []
 
-    # 1. 从图表知识库检索相关历史图表
+    # 1. 从图表知识库检索相关历史图表（仅当前用户 + 公共 system，他人记录不可见）
     try:
-        chart_context = chart_knowledge.get_chart_context_for_rag(query, max_charts=5)
+        chart_context = chart_knowledge.get_chart_context_for_rag(
+            query, max_charts=5, user_id=get_user_id())
         if chart_context and "暂无" not in chart_context:
             parts.append(chart_context)
     except Exception as e:

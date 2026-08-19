@@ -108,7 +108,8 @@ class VisualizationAgent(BaseAgent):
                 }
                 charts.append(chart_entry)
 
-                # 存入图表知识库（RAG 内部资料）
+                # 存入图表知识库（RAG 内部资料，owner 隔离：
+                # 流水线传入的 user_id 优先，缺省时 save_chart 内部回退请求上下文）
                 try:
                     chart_knowledge.save_chart({
                         "chart_type": spec.get("chart_type", "bar"),
@@ -119,7 +120,7 @@ class VisualizationAgent(BaseAgent):
                         "analysis_text": spec.get("reason", ""),
                         "chart_path": chart_path,
                         "task_context": task,
-                    })
+                    }, user_id=input_data.get("user_id"))
                 except Exception as e:
                     logger.warning(f"Failed to save chart to knowledge base: {e}")
 

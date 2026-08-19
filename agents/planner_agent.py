@@ -466,6 +466,8 @@ class PlannerAgent(BaseAgent):
             "dataframe_json": pctx.dataframe_json,
             "task": task,
             "extra_data": extra,
+            # 图表知识库 owner 隔离：图表生成时记录归属用户
+            "user_id": ctx.user_id,
         })
 
     def _run_report(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:

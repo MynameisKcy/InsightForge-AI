@@ -13,6 +13,8 @@
 | 3 | SQL 沙箱资源上限 | `d15d3c8` | `config/agent.yml` `duckdb` 节（1GB 内存 / 2 线程 / 1 万行 / 30s 超时），连接配置 + 行上限报错喂 `_fix_sql` 自愈 + `conn.interrupt()` watchdog |
 | 4 | SSE 断连服务端取消 | `ebb6f61` | `utils/cancel_token.py` 协作式取消：心跳必检 + 每 20 chunk 抽检断连，ReactAgent 流循环 / PlannerAgent 步骤边界退出（不抢占单次 LLM 调用） |
 | 5 | 拆分 fastapi_server 巨石 | `0ad20ce` | 1252 行 → 组装根（~110 行）+ `api/deps.py`（服务接缝）+ `api/sse.py` + `api/serialization.py` + `api/routes/` 八模块 |
+| 6 | 图表知识库按用户隔离 | `f67b5a3` | `rag/chart_knowledge.py` `chart_archive` 加 `owner_user_id` 列；`save_chart` 记录归属（显式参数 > 请求上下文 > default）；四条检索路径 + `clear_old_data` 按"自己 + 公共 system"过滤；旧库打开即幂等迁移存量为 system；`get_chart_insights` 工具与可视化存图链路接入 owner。OpenSpec change `rag-isolation-duckdb-pool`（spec: `chart-knowledge-isolation`）。注：向量库半项（#6 向量库部分）先前已落地。 |
+| 8 | DuckDB 实例池上限 | `f67b5a3` | `database/duckdb_manager.py` `_duckdb_instances` 改 `OrderedDict` + `_instances_lock`，超 `instance_pool_cap`（`config/agent.yml` `duckdb` 节，默认 50）LRU 驱逐最久未用并 close；被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建。OpenSpec change `rag-isolation-duckdb-pool`（spec: `duckdb-instance-pool`）。 |
 
 配套架构收敛（数据库安全接缝 / MemoryService 外观 / 共享 rerank / 模型注入 / 回退契约 / 删死模块 / 包根扁平化）同期完成，见 CHANGELOG「未发布」。
 
@@ -20,20 +22,10 @@
 
 ## 待办方向
 
-### 6. RAG 知识库 / 图表知识库按用户隔离 —— 价值中 / 工作量中
-
-- **证据**：`docs/SECURITY_AND_LIMITATIONS.md`：RAG 向量库与图表知识库全局共享，任意用户上传的知识可被他人检索。同文档也给出先例——跨会话记忆的 ChromaDB `memory` collection 已用 shared-collection + `user_id` owner 过滤（`memory/long_term.py`）。
-- **建议**：复用记忆层的 owner 过滤模式改造 `rag/vector_store.py`（478 行）与 `chart_knowledge`。
-
 ### 7. 流水线并行与阶段级容错 —— 价值中 / 工作量大
 
 - **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「架构层面」：严格顺序执行，`depends_on` 只用于跳过未就绪步骤，不调度并发；无跨代理重试/fallback。
 - **建议**：分两步——先加阶段级超时与降级输出（失败阶段产出"本阶段不可用"占位，不阻断报告）；再考虑对 `depends_on` 无交集的步骤用线程池并发。收益取决于真实负载，建议放后。
-
-### 8. DuckDB 实例池上限 —— 价值中 / 工作量低
-
-- **证据**：`docs/SECURITY_AND_LIMITATIONS.md`：`_duckdb_instances` 为无上限 dict，高用户 churn 下内存只增不减。
-- **建议**：仿照 Session Memory 已有的 LRU 池做 LRU/TTL 淘汰（表结构可从 `datasources.db` 重建，`_reload_datasets_into_instance` 机制已存在，驱逐成本低）。
 
 ### 9. 工程化工具链 —— 价值中 / 工作量低
 
@@ -59,6 +51,6 @@
 
 ## 建议路线
 
-1. **#6 知识库按用户隔离**为下一优先（安全侧，记忆层已有可复用先例）；#8 DuckDB 实例池上限同为防御性小改，可打包一个小版本。
+1. ~~#6 知识库按用户隔离~~ / ~~#8 DuckDB 实例池上限~~ 已完成（OpenSpec change `rag-isolation-duckdb-pool`，本次实现待提交）。
 2. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。
 3. #9/#10/#11 可作为新贡献者的入门任务（good first issue）。

@@ -21,7 +21,7 @@
 ### 安全层面
 
 - "沙箱"是 **SQL 语句级 AST 校验**，非进程 / 容器 / 虚拟化隔离。查询通道带连接级资源上限（`config/agent.yml` `duckdb` 节：`memory_limit` 1GB / `threads` 2 经连接配置应用，`max_result_rows` 10000 超限报错喂 `_fix_sql` 自愈，`query_timeout_seconds` 30 由 watchdog `conn.interrupt()` 中断），可缓解但**非硬隔离**——磁盘占用（内存超限落盘临时文件）与进程级总量仍无上限。
-- RAG 向量库与图表知识库为**全局共享**，无按用户隔离（任意用户的上传知识可被他人检索到）；但**跨会话记忆召回**的 ChromaDB `memory` collection 采用 shared-collection + `user_id` owner 过滤（`include_public=False`），按用户隔离。
+- RAG 跨会话记忆召回的 ChromaDB `memory` collection 采用 shared-collection + `user_id` owner 过滤（`include_public=False`），按用户隔离；**知识库向量库**（`rag/vector_store.py`）同样以 shared-collection + owner 过滤隔离（`PUBLIC_OWNER="system"` 公共知识对所有用户可见，存量分片经 `_migrate_legacy_owner` 迁移）；**图表知识库**（`rag/chart_knowledge.py`）`chart_archive` 表带 `owner_user_id` 列，写入记录归属、检索仅返回"自己 + 公共 system"、`clear_old_data` 仅清自己与公共的过期行，旧库打开即幂等迁移存量行为 system 公共。owner 解析统一走 contextvars（`utils/request_context.get_user_id()`），@tool 工具签名不暴露 user_id。
 - 无 CSRF token、无限流 / 登录防爆破、无 CORS 配置（同源）、无 CSP；图表 iframe 无 `sandbox` 属性；前端 XSS 防护为自研 `escapeHtml` + URL 协议白名单（未用 DOMPurify）。
 - 客户端中断 SSE 后有**协作式服务端取消**（`utils/cancel_token.py`）：主协程检测到断连（心跳必检 / 每 20 chunk 抽检 `request.is_disconnected()`）即置 `CancelToken`，`ReactAgent` 流循环与 `PlannerAgent` 步骤边界轮询退出，`run_full_analysis` 工具不吞取消异常。**不抢占**：单次进行中的 LLM 调用仍会完成（无安全中断 API），取消发生在下一个边界。
 
@@ -34,5 +34,5 @@
 - 记忆为两级（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)）：Session Memory 按 `session_id` 隔离 + DB 回灌 + 跨会话召回注入系统提示（详见 DESIGN_DETAILS §4）——原"摘要写入不回灌 / 短期按 user_id 索引跨会话串扰 / summarizer 的 LLM 固定为首个 `user_id`"三项限制**已解决**（`MemoryService` 现以 `llm_factory(user_id)` + per-user summarizer 工厂按请求用户解析模型）；`MemoryService` 仍为进程级单例，但不再持有用户态。
 - `get_weather` / `get_user_id` / `get_user_location` 三个工具为**演示桩**（返回硬编码 / 随机值）。
 - 审计通道 `[AUDIT]` / `[CONTEXT]` 仅有前端解析、无后端产出，处于 dormant 状态。
-- `_duckdb_instances` 为无上限 dict，高用户 churn 下内存只增不减。
+- `_duckdb_instances` 为 **LRU 有上限** 的 `OrderedDict`（`config/agent.yml` `duckdb.instance_pool_cap`，默认 50，下限 1）：超上限驱逐最久未访问用户的实例（关闭连接），被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建；同步路由在线程池并发触达，加 `_instances_lock` 串行化 LRU 操作。`close_duckdb` 显式关闭语义与 LRU 正交。
 - 日志按日落盘但**无轮转 / 容量上限**。
