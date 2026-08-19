@@ -16,6 +16,7 @@
 | 6 | 图表知识库按用户隔离 | `83eafd3` | `rag/chart_knowledge.py` `chart_archive` 加 `owner_user_id` 列；`save_chart` 记录归属（显式参数 > 请求上下文 > default）；四条检索路径 + `clear_old_data` 按"自己 + 公共 system"过滤；旧库打开即幂等迁移存量为 system；`get_chart_insights` 工具与可视化存图链路接入 owner。注：向量库半项（#6 向量库部分）先前已落地。 |
 | 8 | DuckDB 实例池上限 | `83eafd3` | `database/duckdb_manager.py` `_duckdb_instances` 改 `OrderedDict` + `_instances_lock`，超 `instance_pool_cap`（`config/agent.yml` `duckdb` 节，默认 50）LRU 驱逐最久未用并 close；被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建。 |
 | 9 | 工程化工具链 | （本次实现，待提交） | `pyproject.toml`（`requires-python>=3.10` + `[tool.ruff]` E/F/I/UP 忽略 E501/E402 + pytest testpaths，保留 requirements.txt 为安装清单）；ruff 首跑 `--fix --unsafe-fixes` 清 162 处（未用导入/import 顺序/Optional→X\|None 等）+ 5 处探测导入 noqa；`.pre-commit-config.yaml`（ruff+format+通用清理）；`.github/workflows/ci.yml`（Ubuntu+Py3.10 跑 ruff+pytest）；`.gitignore` 补 openspec/.codebuddy/.workbuddy/data/tmp*.csv。 |
+| 10 | 日志轮转 | （本次实现，待提交） | `utils/logger_handler.py` `FileHandler` → `TimedRotatingFileHandler(when="midnight", backupCount=30)`；活动文件 `agent.log`，午夜轮转为 `agent.log.YYYY-MM-DD`；`LOG_BACKUP_COUNT=30` 限容量。 |
 
 配套架构收敛（数据库安全接缝 / MemoryService 外观 / 共享 rerank / 模型注入 / 回退契约 / 删死模块 / 包根扁平化）同期完成，见 CHANGELOG「未发布」。
 
@@ -27,11 +28,6 @@
 
 - **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「架构层面」：严格顺序执行，`depends_on` 只用于跳过未就绪步骤，不调度并发；无跨代理重试/fallback。
 - **建议**：分两步——先加阶段级超时与降级输出（失败阶段产出"本阶段不可用"占位，不阻断报告）；再考虑对 `depends_on` 无交集的步骤用线程池并发。收益取决于真实负载，建议放后。
-
-### 10. 日志轮转 —— 价值低 / 工作量极低
-
-- **证据**：`docs/SECURITY_AND_LIMITATIONS.md`：日志按日落盘但无轮转/容量上限。
-- **建议**：`TimedRotatingFileHandler(backupCount=...)` 一行改动。
 
 ### 11. 演示桩与 dormant 协议清理 —— 价值低 / 工作量极低
 
@@ -49,5 +45,6 @@
 
 1. ~~#6 知识库按用户隔离~~ / ~~#8 DuckDB 实例池上限~~ 已完成（`83eafd3`）。
 2. ~~#9 工程化工具链~~ 已完成（pyproject + ruff + CI + pre-commit，本次实现待提交）。
-3. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。
-4. #10/#11 可作为新贡献者的入门任务（good first issue）。
+3. ~~#10 日志轮转~~ 已完成（TimedRotatingFileHandler backupCount=30，本次实现待提交）。
+4. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。
+5. #11 可作为新贡献者的入门任务（good first issue）。

@@ -35,4 +35,4 @@
 - `get_weather` / `get_user_id` / `get_user_location` 三个工具为**演示桩**（返回硬编码 / 随机值）。
 - 审计通道 `[AUDIT]` / `[CONTEXT]` 仅有前端解析、无后端产出，处于 dormant 状态。
 - `_duckdb_instances` 为 **LRU 有上限** 的 `OrderedDict`（`config/agent.yml` `duckdb.instance_pool_cap`，默认 50，下限 1）：超上限驱逐最久未访问用户的实例（关闭连接），被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建；同步路由在线程池并发触达，加 `_instances_lock` 串行化 LRU 操作。`close_duckdb` 显式关闭语义与 LRU 正交。
-- 日志按日落盘但**无轮转 / 容量上限**。
+- 日志按天 `TimedRotatingFileHandler(when="midnight", backupCount=30)` 轮转，保留最近 30 个历史文件（`utils/logger_handler.py` `LOG_BACKUP_COUNT`），超出自动删除。
