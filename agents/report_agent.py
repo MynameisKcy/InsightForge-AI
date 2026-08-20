@@ -121,6 +121,12 @@ class ReportAgent(BaseAgent):
         risk = kwargs.get("risk_result", {})
         charts = kwargs.get("charts", [])
 
+        # 降级占位识别（pipeline-fault-tolerance spec）：阶段失败/无数据时结果含
+        # error 键 → 报告渲染显式"本阶段不可用"，而非静默 N/A 缺数据。
+        trend_error = (trend.get("error") or "") if isinstance(trend, dict) else ""
+        product_error = (product.get("error") or "") if isinstance(product, dict) else ""
+        risk_error = (risk.get("error") or "") if isinstance(risk, dict) else ""
+
         # 解析图表路径：优先 PNG（导出/报告预览用栅格图），无则回退 HTML（交互式）
         trend_chart = ""
         product_chart = ""
@@ -158,6 +164,7 @@ class ReportAgent(BaseAgent):
             "title": kwargs.get("title", "数据分析报告"),
             "generated_at": kwargs.get("generated_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             "executive_summary": kwargs.get("executive_summary", ""),
+            "trend_error": trend_error,
             "direction": trend.get("direction", "N/A"),
             "overall_growth_pct": trend.get("overall_growth_pct", "N/A"),
             "start_value": trend.get("start_value", "N/A"),
@@ -166,6 +173,7 @@ class ReportAgent(BaseAgent):
             "anomaly_months_detail": anomaly_months_detail,
             "trend_insight": trend.get("insight", trend.get("trend_summary", "")),
             "trend_chart": trend_chart,
+            "product_error": product_error,
             "product_insight": product.get("insight", ""),
             "top_products": safe_list(product, "top_products")[:10],
             "category_summary": safe_list(product, "category_summary")[:10],
@@ -177,6 +185,7 @@ class ReportAgent(BaseAgent):
             "dimension_label": product.get("dimension_label") or "项",
             "category_label": product.get("category_label") or "类别",
             "measure_label": product.get("measure_label") or "度量值",
+            "risk_error": risk_error,
             "risk_level": risk.get("risk_level", "N/A"),
             "risk_assessment": risk.get("risk_assessment", ""),
             "key_risks": safe_list(risk, "key_risks"),
@@ -315,70 +324,82 @@ def _basic_markdown_report(data: dict) -> str:
         "",
         "## 二、总体趋势分析",
         "",
-        str(data.get('trend_insight', '')),
-        "",
-        f"- 整体趋势方向: {data.get('direction', 'N/A')}",
-        f"- 总体变化幅度: {data.get('overall_growth_pct', 'N/A')}%",
-        f"- 起始值: {data.get('start_value', 'N/A')}",
-        f"- 结束值: {data.get('end_value', 'N/A')}",
-        "",
     ]
 
-    if data.get("anomaly_months_detail"):
+    if data.get("trend_error"):
+        lines.append(f"> ⚠️ {data['trend_error']}")
+        lines.append("")
+    else:
         lines.extend([
-            "### 异常月份",
+            str(data.get('trend_insight', '')),
             "",
-            str(data["anomaly_months_detail"]),
+            f"- 整体趋势方向: {data.get('direction', 'N/A')}",
+            f"- 总体变化幅度: {data.get('overall_growth_pct', 'N/A')}%",
+            f"- 起始值: {data.get('start_value', 'N/A')}",
+            f"- 结束值: {data.get('end_value', 'N/A')}",
             "",
         ])
-
-    if data.get("trend_chart"):
-        lines.append(f"![趋势图]({data['trend_chart']})")
-        lines.append("")
+        if data.get("anomaly_months_detail"):
+            lines.extend([
+                "### 异常月份",
+                "",
+                str(data["anomaly_months_detail"]),
+                "",
+            ])
+        if data.get("trend_chart"):
+            lines.append(f"![趋势图]({data['trend_chart']})")
+            lines.append("")
 
     lines.extend([
         "---",
         "",
         "## 三、分组对比分析",
         "",
-        str(data.get('product_insight', '')),
-        "",
     ])
 
-    top_products = data.get("top_products", [])
-    if top_products:
-        dim_col = data.get("dimension_col")
-        meas_col = data.get("measure_col", "total_revenue")
-        meas_label = data.get("measure_label", "度量值")
-        lines.append("### TOP 项")
+    if data.get("product_error"):
+        lines.append(f"> ⚠️ {data['product_error']}")
         lines.append("")
-        for i, p in enumerate(top_products[:10], 1):
-            name = p.get(dim_col, "Unknown") if dim_col else "Unknown"
-            val = p.get(meas_col, "N/A")
-            lines.append(f"{i}. {name} - {meas_label}: {val}")
+    else:
+        lines.append(str(data.get('product_insight', '')))
         lines.append("")
-
-    if data.get("product_chart"):
-        lines.append(f"![分组对比图]({data['product_chart']})")
-        lines.append("")
+        top_products = data.get("top_products", [])
+        if top_products:
+            dim_col = data.get("dimension_col")
+            meas_col = data.get("measure_col", "total_revenue")
+            meas_label = data.get("measure_label", "度量值")
+            lines.append("### TOP 项")
+            lines.append("")
+            for i, p in enumerate(top_products[:10], 1):
+                name = p.get(dim_col, "Unknown") if dim_col else "Unknown"
+                val = p.get(meas_col, "N/A")
+                lines.append(f"{i}. {name} - {meas_label}: {val}")
+            lines.append("")
+        if data.get("product_chart"):
+            lines.append(f"![分组对比图]({data['product_chart']})")
+            lines.append("")
 
     lines.extend([
         "---",
         "",
         "## 四、风险分析",
         "",
-        f"**风险等级**: {data.get('risk_level', 'N/A')}",
-        "",
-        str(data.get('risk_assessment', '')),
-        "",
     ])
 
-    key_risks = data.get("key_risks", [])
-    if key_risks:
-        lines.append("### 主要风险点")
-        for r in key_risks:
-            lines.append(f"- {r}")
+    if data.get("risk_error"):
+        lines.append(f"> ⚠️ {data['risk_error']}")
         lines.append("")
+    else:
+        lines.append(f"**风险等级**: {data.get('risk_level', 'N/A')}")
+        lines.append("")
+        lines.append(str(data.get('risk_assessment', '')))
+        lines.append("")
+        key_risks = data.get("key_risks", [])
+        if key_risks:
+            lines.append("### 主要风险点")
+            for r in key_risks:
+                lines.append(f"- {r}")
+            lines.append("")
 
     lines.extend([
         "---",

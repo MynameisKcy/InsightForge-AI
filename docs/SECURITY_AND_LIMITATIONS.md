@@ -15,7 +15,7 @@
 ### 架构层面
 
 - 子代理为**静态注册**（`_agent_map` 硬编码），无动态插件 / 注册表 / 磁盘加载机制；新增代理需改 `planner_agent.py` + `agents/__init__.py`；但新增**分析类型**只需加一个 `AnalysisModule` 适配器（`analysis/analysis_module.py`）。
-- 流水线**严格顺序执行**，无并行；`depends_on` 仅用于"跳过未就绪步骤"，不调度并发。
+- 流水线**严格顺序执行**，无并行（Phase B 并行未做，见 IMPROVEMENT_DIRECTIONS #7）；`depends_on` 仅用于"跳过未就绪步骤"，不调度并发。**阶段级容错已就位**（pipeline-fault-tolerance spec）：单阶段异常/超时（`config/agent.yml` `stage_timeout_seconds`，默认 120，线程池放弃语义，沿用 #4"不抢占 LLM"约束）写降级占位 `{"error":...}`、不进 `completed_steps`、依赖者跳过、后续非依赖步骤继续；`ReportAgent` 识别 `error` 键渲染显式"⚠️ 本阶段不可用"而非静默缺数据。
 - 无跨代理重试 / fallback；仅 `SQLAgent._fix_sql` 内部错误回灌重生成（最多 3 次）。
 
 ### 安全层面
