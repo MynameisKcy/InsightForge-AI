@@ -17,6 +17,7 @@
 | 8 | DuckDB 实例池上限 | `83eafd3` | `database/duckdb_manager.py` `_duckdb_instances` 改 `OrderedDict` + `_instances_lock`，超 `instance_pool_cap`（`config/agent.yml` `duckdb` 节，默认 50）LRU 驱逐最久未用并 close；被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建。 |
 | 9 | 工程化工具链 | （本次实现，待提交） | `pyproject.toml`（`requires-python>=3.10` + `[tool.ruff]` E/F/I/UP 忽略 E501/E402 + pytest testpaths，保留 requirements.txt 为安装清单）；ruff 首跑 `--fix --unsafe-fixes` 清 162 处（未用导入/import 顺序/Optional→X\|None 等）+ 5 处探测导入 noqa；`.pre-commit-config.yaml`（ruff+format+通用清理）；`.github/workflows/ci.yml`（Ubuntu+Py3.10 跑 ruff+pytest）；`.gitignore` 补 openspec/.codebuddy/.workbuddy/data/tmp*.csv。 |
 | 10 | 日志轮转 | （本次实现，待提交） | `utils/logger_handler.py` `FileHandler` → `TimedRotatingFileHandler(when="midnight", backupCount=30)`；活动文件 `agent.log`，午夜轮转为 `agent.log.YYYY-MM-DD`；`LOG_BACKUP_COUNT=30` 限容量。 |
+| 11 | 演示桩与 dormant 协议清理 | （本次实现，待提交） | 删除 3 个硬编码演示桩工具（`get_weather`/`get_user_location`/`get_user_id`，含 `user_ids`/`random` 导入）及 react_agent 工具注册 + 状态映射；`report_prompt` 把"调 `get_user_id`"改为"向用户询问"（防随机 ID 误导）；摘除 `app.js` 中 `[CONTEXT]`/`[AUDIT:]` dormant 解析分支（后端本就无产出）。 |
 
 配套架构收敛（数据库安全接缝 / MemoryService 外观 / 共享 rerank / 模型注入 / 回退契约 / 删死模块 / 包根扁平化）同期完成，见 CHANGELOG「未发布」。
 
@@ -28,11 +29,6 @@
 
 - **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「架构层面」：严格顺序执行，`depends_on` 只用于跳过未就绪步骤，不调度并发；无跨代理重试/fallback。
 - **建议**：分两步——先加阶段级超时与降级输出（失败阶段产出"本阶段不可用"占位，不阻断报告）；再考虑对 `depends_on` 无交集的步骤用线程池并发。收益取决于真实负载，建议放后。
-
-### 11. 演示桩与 dormant 协议清理 —— 价值低 / 工作量极低
-
-- **证据**：`get_weather` / `get_user_id` / `get_user_location` 三个工具为硬编码演示桩；`[AUDIT]` / `[CONTEXT]` SSE token 仅前端解析、后端无产出（dormant）。
-- **建议**：桩工具要么删除要么在工具描述里标注"演示用途"防 LLM 误信；dormant token 前后端一起摘除。
 
 ### 12. 跨平台（去 Windows-only 假设）—— 价值视部署目标 / 工作量中
 
@@ -46,5 +42,5 @@
 1. ~~#6 知识库按用户隔离~~ / ~~#8 DuckDB 实例池上限~~ 已完成（`83eafd3`）。
 2. ~~#9 工程化工具链~~ 已完成（pyproject + ruff + CI + pre-commit，本次实现待提交）。
 3. ~~#10 日志轮转~~ 已完成（TimedRotatingFileHandler backupCount=30，本次实现待提交）。
-4. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。
-5. #11 可作为新贡献者的入门任务（good first issue）。
+4. ~~#11 演示桩与 dormant 协议清理~~ 已完成（删 3 桩 + 修 prompt + 摘 dormant 前端分支，本次实现待提交）。
+5. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。

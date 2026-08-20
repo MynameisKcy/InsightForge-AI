@@ -11,7 +11,7 @@
 
 ## 报告数据获取流程
 1. 如果用户已经提供 `user_id` 和 `month`，直接调用 `get_external_data` 获取外部使用记录。
-2. 如果用户没有提供 `user_id`，调用 `get_user_id` 获取用户 ID。
+2. 如果用户没有提供 `user_id`，向用户询问 `user_id`（不要自行编造或随机选择）。
 3. 如果用户没有提供 `month`，调用 `get_current_month` 获取当前月份。
 4. 拿到 `user_id` 和 `month` 后，必须调用 `get_external_data` 查询用户使用记录。
 5. 如果报告需要专业背景、设备维护、安全建议或机器人使用建议，再调用 `rag_sumarize` 获取知识库参考信息。

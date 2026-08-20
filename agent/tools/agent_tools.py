@@ -1,5 +1,4 @@
 import csv
-import random
 from datetime import date
 
 from langchain_core.tools import tool
@@ -12,8 +11,6 @@ from utils.path_tool import get_abs_path
 
 rag = RagSummarizerService()
 
-user_ids = ["1001","1002","1003","1004","1005","1006","1007","1008","1009","1010"]
-
 
 def _external_data_path() -> str:
     return get_abs_path(agent_conf["external_data_path"])
@@ -24,17 +21,6 @@ def rag_sumarize(query:str) -> str:
     # owner 隔离：从请求上下文取当前 user_id，仅检索该用户 + 公共 system 知识
     return rag.rag_summarize(query, _current_user_id())
 
-@tool(description="获取城市天气")
-def get_weather(city:str) -> str:
-    return f"城市{city}天气为晴天，气温25摄氏度，空气适度50%"
-
-@tool(description="获取用户所在城市，以纯字符形式返回")
-def get_user_location() -> str:
-    return random.choice(["深圳","青岛","北京"])
-
-@tool(description="获取用户ID，，以纯字符形式返回")
-def get_user_id() -> str:
-    return random.choice(user_ids)
 
 @tool(description="获取当前月份，以纯字符形式返回")
 def get_current_month() -> str:

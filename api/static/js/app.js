@@ -530,22 +530,6 @@ async function streamChat(text, bubble) {
       return false;
     }
 
-    if (data.startsWith('[CONTEXT]')) return false;
-
-    if (data.startsWith('[AUDIT:')) {
-      fullText += '\n> 📋 ' + data.slice(7, -1).trim() + '\n';
-      // 首次收到实际内容时，关闭思考和转圈
-      if (thinking) {
-        thinking = false;
-        if (statusEl) statusEl.style.display = 'none';
-        bubble.innerHTML = '';
-      }
-      bubble.innerHTML = renderMarkdown(fullText);
-      _syncRaw(bubble, fullText);
-      scrollToBottom();
-      return false;
-    }
-
     // 正常内容：流式追加
     if (thinking) {
       // 首次收到实际内容：关闭思考状态和转圈

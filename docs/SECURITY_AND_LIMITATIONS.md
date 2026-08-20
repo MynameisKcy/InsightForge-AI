@@ -32,7 +32,6 @@
 - 导出 4 种格式（Word / MD / PDF / HTML）均已实现；`ExportAgent` 按用户请求文本解析格式（`_resolve_export_formats`），未指定时回退 `md+html`，也可经 `POST /api/report/export` 端点直接指定 `format` 下载。PDF 已注册中文字体 + 渲染表格 + 图片占位（不再整丢表格）。
 - `DocumentReportAgent` **不走 RAG**，直接把原文截断至 8000 字塞给 LLM。
 - 记忆为两级（[ADR-0003](adr/0003-two-tier-memory-session-and-user-scoped.md)）：Session Memory 按 `session_id` 隔离 + DB 回灌 + 跨会话召回注入系统提示（详见 DESIGN_DETAILS §4）——原"摘要写入不回灌 / 短期按 user_id 索引跨会话串扰 / summarizer 的 LLM 固定为首个 `user_id`"三项限制**已解决**（`MemoryService` 现以 `llm_factory(user_id)` + per-user summarizer 工厂按请求用户解析模型）；`MemoryService` 仍为进程级单例，但不再持有用户态。
-- `get_weather` / `get_user_id` / `get_user_location` 三个工具为**演示桩**（返回硬编码 / 随机值）。
-- 审计通道 `[AUDIT]` / `[CONTEXT]` 仅有前端解析、无后端产出，处于 dormant 状态。
+- 审计通道 `[AUDIT]` / `[CONTEXT]` SSE token 已摘除（前端 dormant 分支删除，后端本就无产出）。演示桩工具 `get_weather` / `get_user_id` / `get_user_location` 已删除（`get_user_id` 桩返回随机 ID 会误导 LLM，`report_prompt` 改为向用户询问）。
 - `_duckdb_instances` 为 **LRU 有上限** 的 `OrderedDict`（`config/agent.yml` `duckdb.instance_pool_cap`，默认 50，下限 1）：超上限驱逐最久未访问用户的实例（关闭连接），被驱逐用户下次访问经 `_reload_datasets_into_instance` 透明重建；同步路由在线程池并发触达，加 `_instances_lock` 串行化 LRU 操作。`close_duckdb` 显式关闭语义与 LRU 正交。
 - 日志按天 `TimedRotatingFileHandler(when="midnight", backupCount=30)` 轮转，保留最近 30 个历史文件（`utils/logger_handler.py` `LOG_BACKUP_COUNT`），超出自动删除。

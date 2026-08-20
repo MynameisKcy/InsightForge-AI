@@ -123,7 +123,7 @@ LLM 生成的 SQL 在执行前必须通过 `_assert_read_only(sql)`（`duckdb_ma
 | `[DONE]` | `api/routes/chat.py` | 流结束 |
 | `[ERROR] {msg}` | `api/routes/chat.py` | 流式异常 |
 
-> `[CONTEXT]` 与 `[AUDIT:]` 在前端 `app.js` 有解析分支，但**后端无任何产出方**——为预留的 dormant 分支。审计通道目前未启用。
+> `[CONTEXT]` 与 `[AUDIT:]` 的前端 dormant 解析分支已删除（后端本就无产出方）；审计通道未启用，未来如需启用再按 SSE 协议补回前后端。
 
 > **协作式服务端取消**（`utils/cancel_token.py`）：主协程在心跳超时与每 20 个 chunk 处抽检 `request.is_disconnected()`，断连即置 `CancelToken`（event + contextvar），`ReactAgent` 流循环与 `PlannerAgent` 步骤边界轮询退出，`run_full_analysis` 不吞取消异常；取消后不发 `[DONE]`、不写记忆。**不抢占**：单次进行中的 LLM 调用仍会完成，取消发生在下一个边界。
 
