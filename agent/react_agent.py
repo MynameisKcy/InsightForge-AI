@@ -11,9 +11,6 @@ from agent.tools.agent_tools import (
     get_customer_stats_tool,
     get_data_overview,
     get_external_data,
-    get_user_id,
-    get_user_location,
-    get_weather,
     list_user_files,
     quick_data_insight,
     rag_sumarize,
@@ -30,10 +27,10 @@ class ReactAgent:
         self.agent = create_agent(
             model=get_chat_model(user_id),
             system_prompt=load_system_prompts(),
-            tools=[rag_sumarize, get_weather, get_user_id, get_user_location,
-                   get_current_month, get_external_data, fill_report_context_for_report,
-                   run_full_analysis, get_data_overview, quick_data_insight,
-                   get_chart_insights, get_customer_overview_tool, get_customer_stats_tool,
+            tools=[rag_sumarize, get_current_month, get_external_data,
+                   fill_report_context_for_report, run_full_analysis,
+                   get_data_overview, quick_data_insight, get_chart_insights,
+                   get_customer_overview_tool, get_customer_stats_tool,
                    list_user_files, document_report],
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
@@ -109,7 +106,6 @@ class ReactAgent:
             "rag_sumarize": "正在检索知识库...",
             "get_chart_insights": "正在检索图表知识库...",
             "get_external_data": "正在获取外部数据...",
-            "get_weather": "正在查询天气...",
             "get_customer_overview_tool": "正在查询客户数据...",
             "get_customer_stats_tool": "正在统计客户分布...",
         }

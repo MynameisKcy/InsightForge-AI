@@ -72,7 +72,7 @@ All analysis agents extend `BaseAgent` (`agents/base.py`) which provides `_call_
 
 ### FastAPI SSE Protocol
 
-The `/api/chat` endpoint streams events with special tokens: `[THINKING]`, `[SESSION]`, `[SESSIONS_RELOAD]`, `[CHART:url]`, `[STEP:{json}]` (pipeline step progress), `[KEEPALIVE]` (15s heartbeat), `[CONTEXT]`, `[AUDIT:text]`, `[DONE]`, `[ERROR]`. Frontend is static files under `api/static/` (served with no-cache middleware + versioned query strings) — no separate frontend build.
+The `/api/chat` endpoint streams events with special tokens: `[THINKING]`, `[SESSION]`, `[SESSIONS_RELOAD]`, `[CHART:url]`, `[STEP:{json}]` (pipeline step progress), `[KEEPALIVE]` (15s heartbeat), `[DONE]`, `[ERROR]`. (`[CONTEXT]` / `[AUDIT:text]` dormant branches removed — backend never emitted them.) Frontend is static files under `api/static/` (served with no-cache middleware + versioned query strings) — no separate frontend build.
 
 ### Dataset Management API (new)
 
