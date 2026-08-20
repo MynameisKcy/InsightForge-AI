@@ -18,6 +18,7 @@
 | 9 | 工程化工具链 | （本次实现，待提交） | `pyproject.toml`（`requires-python>=3.10` + `[tool.ruff]` E/F/I/UP 忽略 E501/E402 + pytest testpaths，保留 requirements.txt 为安装清单）；ruff 首跑 `--fix --unsafe-fixes` 清 162 处（未用导入/import 顺序/Optional→X\|None 等）+ 5 处探测导入 noqa；`.pre-commit-config.yaml`（ruff+format+通用清理）；`.github/workflows/ci.yml`（Ubuntu+Py3.10 跑 ruff+pytest）；`.gitignore` 补 openspec/.codebuddy/.workbuddy/data/tmp*.csv。 |
 | 10 | 日志轮转 | （本次实现，待提交） | `utils/logger_handler.py` `FileHandler` → `TimedRotatingFileHandler(when="midnight", backupCount=30)`；活动文件 `agent.log`，午夜轮转为 `agent.log.YYYY-MM-DD`；`LOG_BACKUP_COUNT=30` 限容量。 |
 | 11 | 演示桩与 dormant 协议清理 | （本次实现，待提交） | 删除 3 个硬编码演示桩工具（`get_weather`/`get_user_location`/`get_user_id`，含 `user_ids`/`random` 导入）及 react_agent 工具注册 + 状态映射；`report_prompt` 把"调 `get_user_id`"改为"向用户询问"（防随机 ID 误导）；摘除 `app.js` 中 `[CONTEXT]`/`[AUDIT:]` dormant 解析分支（后端本就无产出）。 |
+| 7a | 流水线阶段级容错（超时 + 降级） | （本次实现，待提交） | `PlannerAgent._execute_step` 共享助手折叠 `run()`/流式两路径；阶段级超时（`config/agent.yml` `stage_timeout_seconds` 默认 120，`ThreadPoolExecutor` 放弃语义，沿用 #4"不抢占 LLM"）；失败/超时/未知 agent 写降级占位 `{"error":"本阶段不可用（reason）"}` 到对应 `pctx.*_result`；`ReportAgent` + 模板/basic markdown 识别 `error` 键渲染"⚠️ 本阶段不可用"；修复流式路径失败 yield `step_error`（原误 yield `step_done`）。Phase A only。 |
 
 配套架构收敛（数据库安全接缝 / MemoryService 外观 / 共享 rerank / 模型注入 / 回退契约 / 删死模块 / 包根扁平化）同期完成，见 CHANGELOG「未发布」。
 
@@ -25,10 +26,11 @@
 
 ## 待办方向
 
-### 7. 流水线并行与阶段级容错 —— 价值中 / 工作量大
+### 7b. 流水线并行（Phase B）—— 价值视真实负载 / 工作量大
 
-- **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「架构层面」：严格顺序执行，`depends_on` 只用于跳过未就绪步骤，不调度并发；无跨代理重试/fallback。
-- **建议**：分两步——先加阶段级超时与降级输出（失败阶段产出"本阶段不可用"占位，不阻断报告）；再考虑对 `depends_on` 无交集的步骤用线程池并发。收益取决于真实负载，建议放后。
+- **证据**：`docs/SECURITY_AND_LIMITATIONS.md`「架构层面」：严格顺序执行，`depends_on` 只用于跳过未就绪步骤，不调度并发。
+- **建议**：对 `depends_on` 无交集的步骤用线程池并发。Phase A（阶段级超时 + 降级）已就位为本项前提；收益取决于真实负载，建议放后。
+- **状态**：Phase A 已完成（见已完成表 #7a）；本 Phase B 待办。
 
 ### 12. 跨平台（去 Windows-only 假设）—— 价值视部署目标 / 工作量中
 
@@ -43,4 +45,4 @@
 2. ~~#9 工程化工具链~~ 已完成（pyproject + ruff + CI + pre-commit，本次实现待提交）。
 3. ~~#10 日志轮转~~ 已完成（TimedRotatingFileHandler backupCount=30，本次实现待提交）。
 4. ~~#11 演示桩与 dormant 协议清理~~ 已完成（删 3 桩 + 修 prompt + 摘 dormant 前端分支，本次实现待提交）。
-5. 结构性投资（#7 并行）放在有测试保护之后（端点测试已就位）。
+5. ~~#7a 流水线阶段级容错~~ 已完成（超时 + 降级 + 流式 bug 修复，本次实现待提交）；#7b 并行待办（Phase A 前提已就位，收益视真实负载）。

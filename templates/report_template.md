@@ -12,6 +12,9 @@
 
 ## 二、总体趋势分析
 
+{% if trend_error %}
+> ⚠️ {{ trend_error }}
+{% else %}
 {{ trend_insight }}
 
 ### 关键指标
@@ -32,11 +35,15 @@
 {% if trend_chart %}
 ![趋势图]({{ trend_chart }})
 {% endif %}
+{% endif %}
 
 ---
 
 ## 三、分组对比分析
 
+{% if product_error %}
+> ⚠️ {{ product_error }}
+{% else %}
 {{ product_insight }}
 
 {% if top_products %}
@@ -62,11 +69,15 @@
 {% if product_chart %}
 ![分组对比图]({{ product_chart }})
 {% endif %}
+{% endif %}
 
 ---
 
 ## 四、风险分析
 
+{% if risk_error %}
+> ⚠️ {{ risk_error }}
+{% else %}
 **风险等级**: {{ risk_level }}
 
 {{ risk_assessment }}
@@ -83,6 +94,7 @@
 {% for a in measure_anomalies.anomaly_months %}
 - {{ a.month }}: 值 {{ a.value }} (IQR异常: {{ a.iqr_flag }}, Z-score异常: {{ a.zscore_flag }})
 {% endfor %}
+{% endif %}
 {% endif %}
 
 ---

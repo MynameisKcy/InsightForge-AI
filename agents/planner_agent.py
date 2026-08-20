@@ -4,6 +4,8 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 
 import os
 import traceback
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FuturesTimeout
 
 from agents.analysis_agent import AnalysisAgent
 from agents.base import BaseAgent
@@ -22,6 +24,31 @@ from memory.short_term import get_session
 from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
 from utils.logger_handler import logger
 from utils.progress_emitter import get_progress_emitter
+
+# ── 阶段级容错（pipeline-fault-tolerance spec）──
+# agent_name → PipelineContext 结果字段：失败时向该字段写降级占位 {"error":...}，
+# 供 ReportAgent 渲染显式"本阶段不可用"而非静默缺数据。
+_STAGE_RESULT_FIELD = {
+    "sql_query": "sql_result",
+    "trend_analysis": "trend_result",
+    "product_analysis": "product_result",
+    "risk_analysis": "risk_result",
+    "visualization": "visualization_result",
+    "report": "report_result",
+    "export": "export_result",
+}
+
+# 阶段级超时默认值（config/agent.yml stage_timeout_seconds 缺失时回退）
+_DEFAULT_STAGE_TIMEOUT = 120
+
+
+def _stage_timeout_seconds() -> float:
+    """读取阶段级超时（防御式：配置缺失/非法回退默认，<=0 禁用）。"""
+    try:
+        from utils.config_handler import agent_conf
+        return float((agent_conf or {}).get("stage_timeout_seconds", _DEFAULT_STAGE_TIMEOUT))
+    except Exception:
+        return float(_DEFAULT_STAGE_TIMEOUT)
 
 
 class RequestContext:
@@ -232,35 +259,21 @@ class PlannerAgent(BaseAgent):
                 raise
 
             agent_name = step.get("agent", "")
-            task = step.get("task", query)
-            depends = step.get("depends_on", [])
             step_num = step.get("step", 0)
 
-            # 检查依赖是否完成
-            if not all(d in pctx.completed_steps for d in depends):
-                logger.warning(f"Step {step_num} depends on {depends} which is not ready, skipping")
+            # 检查依赖是否完成（失败步骤不进 completed_steps，其依赖者自动跳过）
+            if not self._deps_ready(step, pctx):
+                logger.warning(f"Step {step_num} depends on {step.get('depends_on', [])} "
+                               f"which is not ready, skipping")
                 continue
 
-            logger.info(f"Executing step {step_num}: {agent_name} - {task}")
-
+            logger.info(f"Executing step {step_num}: {agent_name} - {step.get('task', query)}")
             self._emit_progress("step_start", {"step": step_num})
-            step_ok = False
-            try:
-                handler = self._agent_map.get(agent_name)
-                if handler:
-                    handler(task, pctx, ctx)
-                    # 将结果写入 PipelineContext（handler 已通过 pctx 写入）
-                    pctx.completed_steps.add(step_num)
-                    step_ok = True
-                else:
-                    pctx.errors.append(f"Unknown agent: {agent_name}")
-            except Exception as e:
-                logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
-                logger.error(traceback.format_exc())
-                pctx.errors.append(f"Step {step_num} failed: {e}")
-            # 仅成功才标记完成；失败（异常或未知 agent）标记 error，
-            # 避免 UI 把失败步骤误显示为 ✓（前端 step-progress step_error 分支）
-            if step_ok:
+
+            status = self._execute_step(step, pctx, ctx)
+            # 仅成功才标记完成（_execute_step 内部已 add completed_steps）；
+            # 失败标记 error，避免 UI 把失败步骤误显示为 ✓
+            if status == "ok":
                 self._emit_progress("step_done", {"step": step_num})
             else:
                 self._emit_progress("step_error", {"step": step_num})
@@ -355,32 +368,25 @@ class PlannerAgent(BaseAgent):
 
             agent_name = step.get("agent", "")
             task = step.get("task", query)
-            depends = step.get("depends_on", [])
 
             step_num = step.get("step", 0)
 
             # 检查依赖
-            if not all(d in pctx.completed_steps for d in depends):
-                logger.warning(f"Step {step_num} depends on {depends} which is not ready, skipping")
+            if not self._deps_ready(step, pctx):
+                logger.warning(f"Step {step_num} depends on {step.get('depends_on', [])} "
+                               f"which is not ready, skipping")
                 continue
 
             yield ("step_start", {"step": step_num, "agent": agent_name, "task": task})
             yield ("status", f"步骤 {step_num}: {task}...")
 
-            try:
-                handler = self._agent_map.get(agent_name)
-                if handler:
-                    handler(task, pctx, ctx)
-                    pctx.completed_steps.add(step_num)
-                    yield ("step_done", {"step": step_num, "agent": agent_name})
-                else:
-                    pctx.errors.append(f"Unknown agent: {agent_name}")
-                    yield ("step_done", {"step": step_num, "agent": agent_name})
-            except Exception as e:
-                logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
-                logger.error(traceback.format_exc())
-                pctx.errors.append(f"Step {step_num} failed: {e}")
+            status = self._execute_step(step, pctx, ctx)
+            # 修复：失败步骤 yield step_error（非 step_done），与 run() 一致，
+            # 避免前端把失败步骤误显示为 ✓
+            if status == "ok":
                 yield ("step_done", {"step": step_num, "agent": agent_name})
+            else:
+                yield ("step_error", {"step": step_num, "agent": agent_name})
 
         # 3. 输出图表
         if pctx.charts:
@@ -412,6 +418,71 @@ class PlannerAgent(BaseAgent):
         yield ("done", final_result)
 
     # ── Agent 执行方法 ──
+
+    @staticmethod
+    def _deps_ready(step: dict, pctx: PipelineContext) -> bool:
+        """步骤的 depends_on 是否全部已完成。"""
+        return all(d in pctx.completed_steps for d in step.get("depends_on", []))
+
+    def _execute_step(self, step: dict, pctx: PipelineContext,
+                      ctx: "RequestContext") -> str:
+        """执行单步（依赖已由调用方检查）：阶段级超时 + try/except + 降级占位。
+
+        返回 "ok" | "failed"。进度发射（step_done/step_error）由调用方按路径
+        各自处理，本方法只返回状态。沿用 #4 SSE 取消的"不抢占 LLM"约束：
+        超时仅放弃线程（残留完成、结果丢弃），不中断进行中的 LLM 调用。
+        """
+        agent_name = step.get("agent", "")
+        task = step.get("task", "")
+        step_num = step.get("step", 0)
+        handler = self._agent_map.get(agent_name)
+        if handler is None:
+            pctx.errors.append(f"Unknown agent: {agent_name}")
+            self._write_degradation(pctx, agent_name, f"未知 agent: {agent_name}")
+            return "failed"
+
+        timeout = _stage_timeout_seconds()
+        try:
+            if timeout and timeout > 0:
+                # 每步独立单线程池（串行执行，池仅用于超时控制）；with 会 wait=True
+                # 阻塞至残留线程完成——违背放弃语义，故手动 shutdown(wait=False)。
+                ex = ThreadPoolExecutor(max_workers=1)
+                fut = ex.submit(handler, task, pctx, ctx)
+                try:
+                    fut.result(timeout=timeout)
+                except _FuturesTimeout:
+                    ex.shutdown(wait=False)
+                    logger.warning(f"Step {step_num} ({agent_name}) timed out after {timeout}s")
+                    pctx.errors.append(f"Step {step_num} ({agent_name}) timeout after {timeout}s")
+                    self._write_degradation(pctx, agent_name, f"超时（{timeout}s）")
+                    return "failed"
+                ex.shutdown(wait=False)
+            else:
+                handler(task, pctx, ctx)
+            pctx.completed_steps.add(step_num)
+            return "ok"
+        except Exception as e:
+            logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
+            logger.error(traceback.format_exc())
+            pctx.errors.append(f"Step {step_num} ({agent_name}) failed: {e}")
+            self._write_degradation(pctx, agent_name, str(e))
+            return "failed"
+
+    @staticmethod
+    def _write_degradation(pctx: PipelineContext, agent_name: str, reason: str) -> None:
+        """向失败阶段对应的 pctx 结果字段写降级占位 {"error":...}。
+
+        ReportAgent 识别 error 键渲染显式"本阶段不可用"，而非静默缺数据。
+        未知 agent（无对应字段）仅记 errors，不写占位。
+        """
+        field = _STAGE_RESULT_FIELD.get(agent_name)
+        if not field:
+            return
+        setattr(pctx, field, {
+            "error": f"本阶段不可用（{reason}）",
+            "stage": agent_name,
+            "reason": reason,
+        })
 
     def _run_sql(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行 SQL 查询（按 ctx.user_id 隔离数据层）。"""

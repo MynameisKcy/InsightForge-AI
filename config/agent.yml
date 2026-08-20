@@ -1,5 +1,11 @@
 external_data_path: data/external/records.csv
 
+# 分析流水线阶段级超时（pipeline-fault-tolerance spec）：单阶段超过此秒数按失败
+# 处理（写降级占位、跳过依赖者、继续后续步骤）。线程池放弃语义——沿用 #4 SSE
+# 取消的"不抢占 LLM"约束：超时仅放弃线程（残留完成、结果丢弃），不中断进行中
+# 的 LLM 调用。<=0 禁用（直接同步执行，仅受客户端断连取消约束）。
+stage_timeout_seconds: 120
+
 # DuckDB 查询通道资源上限（只读沙箱的 DoS 防护补全；对每用户 :memory: 连接生效。
 # memory_limit/threads 经连接配置应用——SET/PRAGMA 被沙箱双拒不能走 SQL）
 duckdb:
