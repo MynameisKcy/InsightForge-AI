@@ -1,0 +1,73 @@
+"""RAG 评估用例：20 条基于受控语料（eval_knowledge.md）的事实型问答。
+
+字段：
+- question: 用户问题（检索 + 生成的输入）
+- ground_truth: 标准答案（ragas faithfulness/relevancy 依据）
+- keywords: 检索命中率判定关键词（至少一个命中 retrieved contexts 视为检索成功）
+"""
+TEST_CASES = [
+    # ── 定价 ──
+    {"question": "云帆CRM标准版多少钱一个月？",
+     "ground_truth": "标准版每席每月 299 元。",
+     "keywords": ["299"]},
+    {"question": "专业版的价格是多少？",
+     "ground_truth": "专业版每席每月 899 元。",
+     "keywords": ["899"]},
+    {"question": "旗舰版每个席位多少钱？",
+     "ground_truth": "旗舰版每席每月 2999 元。",
+     "keywords": ["2999"]},
+    {"question": "按年付费有优惠吗？",
+     "ground_truth": "年付享全版本统一 85 折优惠。",
+     "keywords": ["85"]},
+    {"question": "免费试用多久？需要绑卡吗？",
+     "ground_truth": "30 天免费试用，试用期内不需要绑定银行卡。",
+     "keywords": ["30"]},
+    # ── 功能 ──
+    {"question": "线索是怎么自动去重的？",
+     "ground_truth": "按手机号加公司名双键自动去重。",
+     "keywords": ["手机号", "公司名"]},
+    {"question": "销售管道最多能配多少个阶段？",
+     "ground_truth": "单个管道最多可配置 20 个阶段。",
+     "keywords": ["20"]},
+    {"question": "自定义字段有上限吗？",
+     "ground_truth": "单个企业最多可创建 200 个自定义字段。",
+     "keywords": ["200"]},
+    {"question": "有手机App吗？支持哪些系统？",
+     "ground_truth": "提供 iOS、Android 与鸿蒙三平台原生 App。",
+     "keywords": ["鸿蒙"]},
+    {"question": "能跟哪些即时通讯工具打通？",
+     "ground_truth": "开箱即用支持企业微信、钉钉、飞书。",
+     "keywords": ["企业微信", "钉钉", "飞书"]},
+    # ── 限制 ──
+    {"question": "单个附件最大能传多大？",
+     "ground_truth": "单个附件大小上限 100MB。",
+     "keywords": ["100MB"]},
+    {"question": "一个客户档案下附件总量限制是多少？",
+     "ground_truth": "单个客户档案的附件总量上限 2GB。",
+     "keywords": ["2GB"]},
+    {"question": "标准版API调用频率限制是多少？",
+     "ground_truth": "标准版 API 限流 60 次/分钟。",
+     "keywords": ["60"]},
+    {"question": "专业版每分钟可以调多少次API？",
+     "ground_truth": "专业版 300 次/分钟。",
+     "keywords": ["300"]},
+    {"question": "旗舰版API限流多少？",
+     "ground_truth": "旗舰版 1200 次/分钟。",
+     "keywords": ["1200"]},
+    {"question": "删掉的客户数据还能找回吗？",
+     "ground_truth": "删除后在回收站保留 90 天，期间可恢复。",
+     "keywords": ["90"]},
+    # ── 安全与服务 ──
+    {"question": "产品有哪些安全认证？",
+     "ground_truth": "已通过等级保护三级与 ISO 27001 认证。",
+     "keywords": ["等保三级", "ISO 27001"]},
+    {"question": "数据加密用的什么算法？",
+     "ground_truth": "采用 AES-256 加密。",
+     "keywords": ["AES-256"]},
+    {"question": "哪个版本支持私有化部署？",
+     "ground_truth": "旗舰版支持私有化部署。",
+     "keywords": ["私有化"]},
+    {"question": "旗舰版的服务等级协议SLA是多少？",
+     "ground_truth": "旗舰版 SLA 99.99%，7×24 小时专属客服。",
+     "keywords": ["99.99"]},
+]

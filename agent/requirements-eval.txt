@@ -1,0 +1,6 @@
+# RAG 评估专用依赖（与主环境隔离，避免 ragas 依赖链污染运行时）
+# 安装：pip install -r agent/requirements-eval.txt
+# 说明：ragas 0.1.x 依赖老版 langchain API 与项目 langchain 1.x 冲突，
+#       使用 0.2.x（自带 LangchainLLMWrapper，对新版 langchain 友好）。
+ragas>=0.2.0,<0.3
+datasets>=2.14.0
