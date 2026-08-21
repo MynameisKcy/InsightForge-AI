@@ -5,6 +5,7 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 import json
 import os
 import sys
+import time
 import traceback
 from typing import Any
 
@@ -34,6 +35,11 @@ try:
     from utils.progress_emitter import get_progress_emitter
 except ModuleNotFoundError:
     from agent.utils.progress_emitter import get_progress_emitter
+
+try:
+    from utils.tracing import get_tracer, record_exception
+except ModuleNotFoundError:
+    from agent.utils.tracing import get_tracer, record_exception
 
 
 class RequestContext:
@@ -210,10 +216,20 @@ class PlannerAgent(BaseAgent):
         # 详见 docs/adr/0002-query-rewriting-two-points.md
         plan_query = self._rewrite_query(query, ctx.user_id)
 
-        plan_data = self._create_plan(plan_query, history)
-        plan = plan_data.get("plan", [])
-        title = plan_data.get("title", "数据分析报告")
-        reasoning = plan_data.get("reasoning", "")
+        tracer = get_tracer()
+        with tracer.start_as_current_span("planner.plan") as plan_span:
+            plan_span.set_attribute("planner.query_length", len(plan_query))
+            try:
+                plan_data = self._create_plan(plan_query, history)
+                plan = plan_data.get("plan", [])
+                title = plan_data.get("title", "数据分析报告")
+                reasoning = plan_data.get("reasoning", "")
+                plan_span.set_attribute("planner.step_count", len(plan))
+                plan_span.set_attribute("planner.title", title[:100])
+                plan_span.set_attribute("planner.reasoning", reasoning[:200])
+            except Exception as e:
+                record_exception(plan_span, e)
+                raise
 
         if not plan:
             # 如果 LLM 规划失败，使用默认计划
@@ -261,21 +277,28 @@ class PlannerAgent(BaseAgent):
 
             self._emit_progress("step_start", {"step": step.get("step")})
             step_ok = False
-            try:
-                handler = self._agent_map.get(agent_name)
-                if handler:
-                    step_result = handler(task, results, ctx)
-                    results[step_key] = step_result
-                    results[f"{agent_name}_result"] = step_result
-                    step_ok = True
-                else:
-                    errors.append(f"Unknown agent: {agent_name}")
+            _step_ts = time.perf_counter()
+            with tracer.start_as_current_span("planner.step") as step_span:
+                step_span.set_attribute("planner.step_index", step.get("step"))
+                step_span.set_attribute("planner.agent_name", agent_name)
+                try:
+                    handler = self._agent_map.get(agent_name)
+                    if handler:
+                        step_result = handler(task, results, ctx)
+                        results[step_key] = step_result
+                        results[f"{agent_name}_result"] = step_result
+                        step_ok = True
+                    else:
+                        errors.append(f"Unknown agent: {agent_name}")
+                        results[step_key] = None
+                except Exception as e:
+                    record_exception(step_span, e)
+                    logger.error(f"Step {step.get('step')} ({agent_name}) failed: {e}")
+                    logger.error(traceback.format_exc())
+                    errors.append(f"Step {step.get('step')} failed: {e}")
                     results[step_key] = None
-            except Exception as e:
-                logger.error(f"Step {step.get('step')} ({agent_name}) failed: {e}")
-                logger.error(traceback.format_exc())
-                errors.append(f"Step {step.get('step')} failed: {e}")
-                results[step_key] = None
+                step_span.set_attribute("planner.duration_ms", round((time.perf_counter() - _step_ts) * 1000, 1))
+                step_span.set_attribute("status", "success" if step_ok else "error")
             # 仅成功才标记完成；失败（异常或未知 agent）标记 error，
             # 避免 UI 把失败步骤误显示为 ✓（前端 step-progress step_error 分支）
             if step_ok:

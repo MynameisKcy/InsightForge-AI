@@ -1,0 +1,14 @@
+# InsightForge AI — 可观测性 + 应用编排
+# 用法：docker-compose up -d
+#   Demo:   http://localhost:8502
+#   Jaeger: http://localhost:16686
+#
+# 应用服务（insightforge）在 Week 2 加入（见 docs/specs/2026-08-21-enterprise-observability-plan.md §3）。
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: insightforge-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4318:4318"    # OTLP HTTP 接收
+    restart: unless-stopped
