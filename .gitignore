@@ -39,5 +39,8 @@ agent/data/*.docx
 docs/superpowers/
 docs/specs/
 docs/plans/
-scripts/
+# scripts/ 下本地实验脚本不入库，但部署/基准脚本需要随仓库分发
+scripts/*
+!scripts/deploy.sh
+!scripts/benchmark.py
 claude.md

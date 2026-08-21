@@ -1,0 +1,42 @@
+# ── 本机数据与运行产物（挂卷/本地生成，不进镜像）──
+data/
+chroma_db/
+logs/
+reports/
+*.db
+md5.text
+
+# ── 密钥与本地配置 ──
+.env
+
+# ── 版本控制 / IDE / 代理目录 ──
+.git/
+.gitignore
+.claude/
+.zcode/
+.codebuddy/
+.workbuddy/
+openspec/
+
+# ── 文档与规范（运行不需要）──
+docs/
+*.md
+!agent/README.md
+
+# ── Python 缓存 ──
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# ── 测试（镜像只跑服务）──
+agent/tests/
+
+# ── 本机临时/杂项 ──
+tmp-kaleido/
+.tmp/
+scripts/
+docker-compose.yml
+Dockerfile
+.dockerignore
