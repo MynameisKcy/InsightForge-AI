@@ -45,13 +45,27 @@ class BaseAgent:
         tracer = get_tracer()
         with tracer.start_as_current_span("llm.call") as span:
             span.set_attribute("agent.name", self.name)
-            span.set_attribute("llm.prompt_length", sum(len(m["content"]) for m in messages))
+            prompt_len = sum(len(m["content"]) for m in messages)
+            span.set_attribute("llm.prompt_length", prompt_len)
             start = time.perf_counter()
             try:
                 response = self.model.invoke(lc_messages)
                 span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
                 span.set_attribute("status", "success")
-                record_usage(span, getattr(response, "usage_metadata", None))
+                usage = getattr(response, "usage_metadata", None)
+                record_usage(span, usage)
+                # Token 统计（session 累计 + SSE [METRICS] 推送）
+                try:
+                    from utils.token_counter import get_token_counter
+                    model_name = (getattr(response, "response_metadata", None) or {}).get("model_name", "")
+                    counter = get_token_counter()
+                    if usage:
+                        counter.record_usage(usage, model_name)
+                    else:
+                        counter.record_estimated("\n".join(m["content"] for m in messages),
+                                                 str(response.content), model_name)
+                except Exception:
+                    pass
                 return response.content.strip()
             except Exception as e:
                 record_exception(span, e)

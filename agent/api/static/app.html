@@ -137,6 +137,21 @@
     </div>
   </div>
 
+  <!-- ── 会话统计（Token/成本看板，消费 SSE [METRICS] 事件）── -->
+  <div class="metrics-section">
+    <div class="metrics-header" onclick="toggleSection('metrics')">
+      <h2><span class="section-chevron collapsed" id="chevronMetrics">▾</span> 会话统计</h2>
+    </div>
+    <div class="section-body collapsed" id="sectionBodyMetrics">
+      <div class="metrics-body">
+        <div class="metric-row"><span>输入 Token</span><span id="tokenInput">0</span></div>
+        <div class="metric-row"><span>输出 Token</span><span id="tokenOutput">0</span></div>
+        <div class="metric-row"><span>LLM 调用</span><span id="tokenCalls">0</span></div>
+        <div class="metric-row"><span>估算成本 (¥)</span><span id="tokenCost">0.0000</span></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── 账号设置 ── -->
   <div class="set-section">
     <div class="set-header" onclick="toggleSection('set')">
