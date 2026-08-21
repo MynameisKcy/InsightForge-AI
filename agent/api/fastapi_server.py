@@ -4,6 +4,7 @@ FastAPI Server: 为 AI Data Analyst Multi-Agent System 提供 Web API 和页面�
 """
 
 import asyncio
+import contextvars
 import json
 import os
 import re as re_module
@@ -59,7 +60,10 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
 
-    t = threading.Thread(target=_producer, daemon=True)
+    # 把当前 contextvars（含 OTel trace 上下文）复制进后台线程：
+    # 裸 Thread 不继承 contextvar，不复制则线程内所有 Span 会与请求根 Span 断链
+    producer_ctx = contextvars.copy_context()
+    t = threading.Thread(target=lambda: producer_ctx.run(_producer), daemon=True)
     t.start()
     try:
         while True:
@@ -114,6 +118,15 @@ except ModuleNotFoundError:
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 _long_term_memory = LongTermMemory()
+
+# ── 可观测性：OpenTelemetry 初始化（OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
+try:
+    from utils.tracing import (init_tracing, get_tracer, span_context, record_exception,
+                               attach_current_span, detach_current_span)
+except ModuleNotFoundError:
+    from agent.utils.tracing import (init_tracing, get_tracer, span_context, record_exception,
+                                     attach_current_span, detach_current_span)
+init_tracing()
 
 
 # ── 静态资源禁用浏览器强缓存 ──
@@ -369,6 +382,12 @@ async def api_chat(request: Request, user=Depends(require_auth)):
 
     async def generate() -> AsyncGenerator[str, None]:
         full_response = ""
+        # ── 请求级根 Span：SSE 流式期间保持打开，子 Span 经 copy_context 关联 ──
+        root_span, _root_token = attach_current_span("http.request")
+        root_span.set_attribute("http.route", "/api/chat")
+        root_span.set_attribute("http.user_id", user_id)
+        root_span.set_attribute("http.session_id", session_id)
+        root_span.set_attribute("http.query_length", len(query))
         # ── 记录分析前已有的图表文件，用于后续检测新图表 ──
         charts_dir = get_abs_path("reports/charts")
         existing_charts = set()
@@ -377,8 +396,11 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                 if f.endswith(".html"):
                     existing_charts.add(os.path.join(charts_dir, f))
         try:
-            # 通知前端 session_id
+            # 通知前端 session_id + trace_id（可在 Jaeger 中直接检索本次请求链路）
             yield f"data: [SESSION]{session_id}\n\n"
+            trace_id = span_context()
+            if trace_id:
+                yield f"data: [TRACE]{trace_id}\n\n"
             if new_session:
                 yield f"data: [SESSIONS_RELOAD]\n\n"
 
@@ -441,8 +463,12 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     logger.warning(f"Failed to save conversation to long-term memory: {e}")
             yield "data: [DONE]\n\n"
         except Exception as e:
+            record_exception(root_span, e)
             logger.error(f"Chat streaming error: {e}")
             yield f"data: [ERROR] {str(e)}\n\n"
+        finally:
+            detach_current_span(_root_token)
+            root_span.end()
 
     return StreamingResponse(
         generate(),

@@ -44,5 +44,10 @@ PyYAML==6.0.3
 python-dotenv==1.2.2
 bcrypt==5.0.0
 
+# ── 可观测性（OTel 链路追踪，OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
+
 # 用户配置加密（需求①）
 cryptography

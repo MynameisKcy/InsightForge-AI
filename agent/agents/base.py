@@ -25,8 +25,15 @@ class BaseAgent:
         self.model = get_chat_model(user_id)
 
     def _call_llm(self, messages: list[dict]) -> str:
-        """调用 LLM 并返回文本结果。"""
+        """调用 LLM 并返回文本结果（带 OTel Span：agent.name + token usage）。"""
+        import time
+
         from langchain_core.messages import HumanMessage, SystemMessage
+
+        try:
+            from agent.utils.tracing import get_tracer, record_exception, record_usage
+        except ModuleNotFoundError:
+            from utils.tracing import get_tracer, record_exception, record_usage
 
         lc_messages = []
         for m in messages:
@@ -34,8 +41,21 @@ class BaseAgent:
                 lc_messages.append(SystemMessage(content=m["content"]))
             elif m["role"] == "user":
                 lc_messages.append(HumanMessage(content=m["content"]))
-        response = self.model.invoke(lc_messages)
-        return response.content.strip()
+
+        tracer = get_tracer()
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute("agent.name", self.name)
+            span.set_attribute("llm.prompt_length", sum(len(m["content"]) for m in messages))
+            start = time.perf_counter()
+            try:
+                response = self.model.invoke(lc_messages)
+                span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
+                span.set_attribute("status", "success")
+                record_usage(span, getattr(response, "usage_metadata", None))
+                return response.content.strip()
+            except Exception as e:
+                record_exception(span, e)
+                raise
 
     def _parse_json(self, text: str) -> dict:
         """从 LLM 返回的文本中提取 JSON。"""

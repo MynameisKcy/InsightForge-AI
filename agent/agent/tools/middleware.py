@@ -1,14 +1,21 @@
+import time
+
 from langchain.agents import AgentState
 from langgraph.runtime import Runtime
 
 from agent.utils.logger_handler import logger
-from langchain.agents.middleware import wrap_tool_call, before_model, dynamic_prompt, ModelRequest
+from langchain.agents.middleware import wrap_tool_call, wrap_model_call, before_model, dynamic_prompt, ModelRequest
 from typing import Callable
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.utils.prompt_loader import load_report_prompts, load_system_prompts
+
+try:
+    from agent.utils.tracing import get_tracer, record_exception, record_usage
+except ModuleNotFoundError:
+    from utils.tracing import get_tracer, record_exception, record_usage
 
 
 @wrap_tool_call
@@ -19,19 +26,55 @@ def monitor_tool(
         handler:Callable[[ToolCallRequest], ToolMessage | Command],
 
 ) -> ToolMessage | Command:
-    logger.info(f"monitor_tool called with {request.tool_call['name']}")
+    tool_name = request.tool_call['name']
+    logger.info(f"monitor_tool called with {tool_name}")
     logger.info(f"monitor_tool called with parameters :{request.tool_call['args']}")
 
-    try:
-        result = handler(request)
-        logger.info(f"monitor_tool called with result :{result}")
+    tracer = get_tracer()
+    with tracer.start_as_current_span(f"tool.{tool_name}") as span:
+        span.set_attribute("tool.name", tool_name)
+        span.set_attribute("tool.args", str(request.tool_call['args'])[:500])
+        start = time.perf_counter()
+        try:
+            result = handler(request)
+            span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
+            span.set_attribute("status", "success")
+            # 结果摘要截 200，便于 Jaeger 中直接判断调用是否符合预期
+            span.set_attribute("tool.result_summary", str(getattr(result, "content", result))[:200])
+            logger.info(f"monitor_tool called with result :{result}")
 
-        if request.tool_call['name'] == 'fill_report_context_for_report':
-            request.runtime.context["report"] = True
-        return result
-    except Exception as e:
-        logger.error(f"monitor_tool called with exception :{str(e)}")
-        raise e
+            if tool_name == 'fill_report_context_for_report':
+                request.runtime.context["report"] = True
+            return result
+        except Exception as e:
+            record_exception(span, e)
+            logger.error(f"monitor_tool called with exception :{str(e)}")
+            raise e
+
+
+@wrap_model_call
+def trace_model_call(
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], object],
+):
+    """ReactAgent 每次模型调用的追踪（决策 D5）：Span agent.reason + token usage。
+
+    handler 返回 ModelResponse（structured_response 为 AIMessage）或 AIMessage 本身，
+    两种形态都从其上读 usage_metadata。
+    """
+    tracer = get_tracer()
+    with tracer.start_as_current_span("agent.reason") as span:
+        start = time.perf_counter()
+        try:
+            response = handler(request)
+            span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
+            span.set_attribute("status", "success")
+            msg = getattr(response, "structured_response", response)
+            record_usage(span, getattr(msg, "usage_metadata", None))
+            return response
+        except Exception as e:
+            record_exception(span, e)
+            raise
 
 @before_model
 def log_before_model(

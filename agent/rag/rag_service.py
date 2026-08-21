@@ -34,6 +34,11 @@ try:
 except ModuleNotFoundError:
     from agent.utils.logger_handler import logger
 
+try:
+    from utils.tracing import get_tracer, record_exception
+except ModuleNotFoundError:
+    from agent.utils.tracing import get_tracer, record_exception
+
 
 class RagSummarizerService(object):
     def __init__(self):
@@ -73,6 +78,20 @@ class RagSummarizerService(object):
         # 候选数已不多于 top_n 时无需 rerank
         if len(docs) <= self.rerank_top_n:
             return docs[: self.rerank_top_n]
+
+        # start_span（非 current）：Span 内不产生子 Span，仅需挂到当前父 Span 之下
+        span = get_tracer().start_span("rag.rerank")
+        span.set_attribute("rag.coarse_count", len(docs))
+        span.set_attribute("rag.top_n", self.rerank_top_n)
+        span.set_attribute("rag.score_threshold", self.rerank_score_threshold)
+        try:
+            final = self._rerank_call(query, docs, span)
+            return final
+        finally:
+            span.end()
+
+    def _rerank_call(self, query: str, docs: list[Document], span) -> list[Document]:
+        """rerank 实际调用与降级（Span 由 _rerank 持有，降级路径记 fallback 属性）。"""
         try:
             from dashscope import TextReRank
             import os as _os
@@ -94,6 +113,7 @@ class RagSummarizerService(object):
                     "rerank 调用未返回有效结果 (status=%s code=%s msg=%s)，回退粗召回前 %d 条",
                     status, code, message, self.rerank_top_n,
                 )
+                span.set_attribute("rag.fallback", True)
                 return docs[: self.rerank_top_n]
             results = output.get("results", [])
             reranked: list[Document] = []
@@ -112,8 +132,13 @@ class RagSummarizerService(object):
                 "rerank: 粗召回 %d 条 -> 精排 %d 条 (阈值 %.2f)",
                 len(docs), len(reranked), self.rerank_score_threshold,
             )
-            return reranked if reranked else docs[: self.rerank_top_n]
+            final = reranked if reranked else docs[: self.rerank_top_n]
+            span.set_attribute("rag.kept_count", len(final))
+            span.set_attribute("rag.fallback", not reranked)
+            return final
         except Exception as e:
+            record_exception(span, e)
+            span.set_attribute("rag.fallback", True)
             logger.error("rerank 调用失败，回退粗召回: %s", str(e))
             return docs[: self.rerank_top_n]
 
@@ -140,18 +165,30 @@ class RagSummarizerService(object):
     def retriever_docs(self, query: str, user_id: str | None = None) -> list[Document]:
         # 多查询扩展 + 粗召回大候选池 + rerank 精排，提升中文检索召回率与相关性
         # （详见 docs/adr/0002-query-rewriting-two-points.md）
-        queries = self._expand_queries(query, user_id)
-        seen_ids: set[str] = set()
-        coarse: list[Document] = []
-        for q in queries:
-            for doc in self._coarse_retrieve(q, user_id):
-                did = self._doc_id(doc)
-                if did in seen_ids:
-                    continue
-                seen_ids.add(did)
-                coarse.append(doc)
-        # 精排仍用原始 query 打分（改写只为扩大召回，不参与排序）
-        return self._rerank(query, coarse)
+        with get_tracer().start_as_current_span("rag.retrieve") as span:
+            span.set_attribute("rag.query", query[:200])
+            span.set_attribute("rag.k", self.retrieve_k)
+            span.set_attribute("rag.user_id", user_id or "")
+            try:
+                queries = self._expand_queries(query, user_id)
+                span.set_attribute("rag.expanded_query_count", len(queries))
+                seen_ids: set[str] = set()
+                coarse: list[Document] = []
+                for q in queries:
+                    for doc in self._coarse_retrieve(q, user_id):
+                        did = self._doc_id(doc)
+                        if did in seen_ids:
+                            continue
+                        seen_ids.add(did)
+                        coarse.append(doc)
+                span.set_attribute("rag.coarse_count", len(coarse))
+                # 精排仍用原始 query 打分（改写只为扩大召回，不参与排序）
+                final = self._rerank(query, coarse)
+                span.set_attribute("rag.results_count", len(final))
+                return final
+            except Exception as e:
+                record_exception(span, e)
+                raise
 
     @staticmethod
     def _format_doc_source(doc: Document, index: int) -> str:

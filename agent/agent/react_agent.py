@@ -19,7 +19,7 @@ try:
                                                run_full_analysis,get_data_overview,quick_data_insight,
                                                get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
                                                list_user_files,document_report)
-    from agent.agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
+    from agent.agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch,trace_model_call
 except ModuleNotFoundError:
     from model.factory import get_chat_model
     from utils.prompt_loader import load_system_prompts
@@ -28,7 +28,7 @@ except ModuleNotFoundError:
                                          run_full_analysis,get_data_overview,quick_data_insight,
                                          get_chart_insights,get_customer_overview_tool,get_customer_stats_tool,
                                          list_user_files,document_report)
-    from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch
+    from agent.tools.middleware import monitor_tool,log_before_model,report_prompt_switch,trace_model_call
 
 
 class ReactAgent:
@@ -41,7 +41,7 @@ class ReactAgent:
                    run_full_analysis, get_data_overview, quick_data_insight,
                    get_chart_insights, get_customer_overview_tool, get_customer_stats_tool,
                    list_user_files, document_report],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            middleware=[monitor_tool, log_before_model, report_prompt_switch, trace_model_call],
         )
 
     def execute_stream(self, query: str, history: list[dict] | None = None,
