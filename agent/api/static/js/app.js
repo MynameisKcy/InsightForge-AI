@@ -82,7 +82,7 @@ async function saveProfile() {
 
 // ── 可折叠侧边栏分区 ──
 function toggleSection(name) {
-  var suffix = {ds:'Ds', kb:'Kb', set:'Set'}[name];
+  var suffix = {ds:'Ds', kb:'Kb', set:'Set', metrics:'Metrics'}[name];
   if (!suffix) return;
   var body = document.getElementById('sectionBody' + suffix);
   var chevron = document.getElementById('chevron' + suffix);
@@ -403,6 +403,20 @@ async function streamChat(text, bubble) {
     }
   }
 
+  // ── Token/成本看板（SSE [METRICS] 事件驱动，面板缺失时静默）──
+  function updateMetricsPanel(m) {
+    try {
+      document.getElementById('tokenInput').textContent = (m.input_tokens || 0).toLocaleString();
+      document.getElementById('tokenOutput').textContent = (m.output_tokens || 0).toLocaleString();
+      document.getElementById('tokenCalls').textContent = m.calls || 0;
+      document.getElementById('tokenCost').textContent = (Number(m.cost_cny) || 0).toFixed(4);
+    } catch (e) { /* 面板不存在 */ }
+  }
+
+  function resetMetricsPanel() {
+    updateMetricsPanel({});
+  }
+
   // ── 单行 SSE 事件处理（抽成闭包，供跨 chunk 缓冲复用）──
   // 返回 true 表示遇到 [ERROR]，应终止整条流
   function processLine(line) {
@@ -471,6 +485,14 @@ async function streamChat(text, bubble) {
       return true;
     }
 
+    if (data.startsWith('[METRICS:')) {
+      // Token/成本看板：值为该会话的服务端累计值，直接覆盖显示
+      var m;
+      try { m = JSON.parse(data.slice(9, -1).trim()); } catch (e) { return false; }
+      updateMetricsPanel(m);
+      return false;
+    }
+
     if (data.startsWith('[THINKING]')) {
       const status = data.slice(10);
       if (statusEl) {
@@ -482,7 +504,9 @@ async function streamChat(text, bubble) {
     }
 
     if (data.startsWith('[SESSION]')) {
-      currentSessionId = data.slice(9);
+      var newSid = data.slice(9);
+      if (newSid !== currentSessionId) resetMetricsPanel();   // 换会话看板归零
+      currentSessionId = newSid;
       updateActiveSession();
       return false;
     }

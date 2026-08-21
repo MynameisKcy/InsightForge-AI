@@ -418,6 +418,11 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     yield value
                     continue
                 if kind == "progress":
+                    # 进度事件按 type 路由：metrics→Token 看板；其余→步骤清单（前端既有行为）
+                    etype = value.get("type", "")
+                    if etype == "metrics":
+                        yield f"data: [METRICS:{json.dumps(value, ensure_ascii=False)}]\n\n"
+                        continue
                     # 步骤进度事件：下发 [STEP:json]，前端渲染步骤清单
                     yield f"data: [STEP:{json.dumps(value, ensure_ascii=False)}]\n\n"
                     continue
@@ -607,6 +612,12 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     if owner is None or owner != user_id:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
     _long_term_memory.delete_session(session_id)
+    # 同步清掉该会话的 Token 统计（看板数据不留死键）
+    try:
+        from utils.token_counter import get_token_counter
+        get_token_counter().clear_session(session_id)
+    except Exception:
+        pass
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 

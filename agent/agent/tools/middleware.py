@@ -70,7 +70,19 @@ def trace_model_call(
             span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
             span.set_attribute("status", "success")
             msg = getattr(response, "structured_response", response)
-            record_usage(span, getattr(msg, "usage_metadata", None))
+            usage = getattr(msg, "usage_metadata", None)
+            record_usage(span, usage)
+            # Token 统计（session 累计 + SSE [METRICS] 推送）
+            try:
+                from utils.token_counter import get_token_counter
+                model_name = (getattr(msg, "response_metadata", None) or {}).get("model_name", "")
+                if usage:
+                    get_token_counter().record_usage(usage, model_name)
+                else:
+                    content = str(getattr(msg, "content", ""))
+                    get_token_counter().record_estimated(str(getattr(request, "system_prompt", "") or ""), content, model_name)
+            except Exception as e:
+                logger.debug(f"token counter record failed: {e}")
             return response
         except Exception as e:
             record_exception(span, e)
