@@ -17,6 +17,35 @@ try:
 except ModuleNotFoundError:
     from utils.tracing import get_tracer, record_exception, record_usage
 
+try:
+    from utils.decision_log import make_decision, log_decision, emit_decision
+except ModuleNotFoundError:
+    from agent.utils.decision_log import make_decision, log_decision, emit_decision
+
+
+def _log_tool_decision(tool_name: str, tool_args, duration_ms: float,
+                       result_summary: str, error: str = "") -> None:
+    """工具决策：JSONL 落盘 + SSE [DECISION] 推送（旁路能力，失败静默）。"""
+    try:
+        decision = make_decision(
+            source="tool_call",
+            tool_selected=tool_name,
+            tool_args=tool_args if isinstance(tool_args, dict) else {"raw": str(tool_args)[:200]},
+            execution_time_ms=round(duration_ms, 1),
+            result_summary=(error or result_summary)[:200],
+        )
+        log_decision(decision)
+        emit_decision({
+            "source": "tool_call",
+            "tool": tool_name,
+            "timing_ms": decision.execution_time_ms,
+            "args": decision.tool_args,
+            "result_summary": decision.result_summary,
+            "error": bool(error),
+        })
+    except Exception as e:
+        logger.debug(f"decision log failed: {e}")
+
 
 @wrap_tool_call
 def monitor_tool(
@@ -37,10 +66,13 @@ def monitor_tool(
         start = time.perf_counter()
         try:
             result = handler(request)
-            span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            span.set_attribute("duration_ms", duration_ms)
             span.set_attribute("status", "success")
             # 结果摘要截 200，便于 Jaeger 中直接判断调用是否符合预期
-            span.set_attribute("tool.result_summary", str(getattr(result, "content", result))[:200])
+            result_summary = str(getattr(result, "content", result))
+            span.set_attribute("tool.result_summary", result_summary[:200])
+            _log_tool_decision(tool_name, request.tool_call['args'], duration_ms, result_summary)
             logger.info(f"monitor_tool called with result :{result}")
 
             if tool_name == 'fill_report_context_for_report':
@@ -48,6 +80,8 @@ def monitor_tool(
             return result
         except Exception as e:
             record_exception(span, e)
+            _log_tool_decision(tool_name, request.tool_call['args'],
+                               round((time.perf_counter() - start) * 1000, 1), "", error=str(e))
             logger.error(f"monitor_tool called with exception :{str(e)}")
             raise e
 

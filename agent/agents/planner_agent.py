@@ -238,9 +238,20 @@ class PlannerAgent(BaseAgent):
 
         logger.info(f"Planner created plan with {len(plan)} steps: {[s['agent'] for s in plan]}")
 
-        # 进度：把完整计划下发给前端，供步骤清单渲染（无 emitter 时 no-op）
+        # 进度：把完整计划下发给前端，供步骤清单渲染（无 emitter 时 no-op）；
+        # 附带规划理由（reasoning）——前端在步骤清单上方渲染"为什么这么拆"
+        try:
+            from utils.decision_log import make_decision, log_decision
+            log_decision(make_decision(
+                source="planner", reasoning=reasoning[:500],
+                tool_selected="planner.plan",
+                tool_args={"step_count": len(plan), "steps": [s.get("agent", "") for s in plan]},
+            ))
+        except Exception:
+            pass
         self._emit_progress("plan", {
             "title": title,
+            "reasoning": reasoning[:500],
             "steps": [
                 {
                     "step": s.get("step"),

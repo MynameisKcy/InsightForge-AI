@@ -417,6 +417,33 @@ async function streamChat(text, bubble) {
     updateMetricsPanel({});
   }
 
+  // ── 决策卡片（SSE [DECISION] 事件驱动；LLM 输出一律 escapeHtml 防 XSS）──
+  function renderDecisionCard(bubble, d) {
+    try {
+      var body = '';
+      if (d.reasoning) body += '<div class="decision-reasoning">' + escapeHtml(d.reasoning) + '</div>';
+      if (d.tool) body += '<div class="decision-tool">调用工具 <code>' + escapeHtml(String(d.tool)) + '</code></div>';
+      if (d.args && Object.keys(d.args).length) {
+        body += '<div class="decision-args"><code>' +
+                escapeHtml(JSON.stringify(d.args).slice(0, 300)) + '</code></div>';
+      }
+      if (d.result_summary) body += '<div class="decision-result">' + escapeHtml(d.result_summary) + '</div>';
+      if (!body) return;   // 空决策不渲染
+
+      var head = '<div class="decision-header"><span class="decision-icon">' +
+                 (d.source === 'planner' ? '🧭' : (d.tool ? '🛠' : '💭')) + '</span>' +
+                 '<span class="decision-label">' +
+                 (d.source === 'planner' ? '规划理由' : (d.tool ? '工具调用' : 'LLM 思考')) + '</span>';
+      if (d.timing_ms != null) head += '<span class="decision-timing">' + d.timing_ms + ' ms</span>';
+      head += '</div>';
+
+      var card = document.createElement('div');
+      card.className = 'decision-card' + (d.error ? ' decision-card--error' : '');
+      card.innerHTML = head + body;
+      bubble.appendChild(card);
+    } catch (e) { /* 渐进增强 */ }
+  }
+
   // ── 单行 SSE 事件处理（抽成闭包，供跨 chunk 缓冲复用）──
   // 返回 true 表示遇到 [ERROR]，应终止整条流
   function processLine(line) {
@@ -441,6 +468,9 @@ async function streamChat(text, bubble) {
       var prog = bubble.querySelector('.step-progress');
       if (stepData.type === 'plan') {
         bubble.innerHTML = '';   // 清除 typing dots，展示步骤清单
+        if (stepData.reasoning) {
+          renderDecisionCard(bubble, {source: 'planner', reasoning: stepData.reasoning});
+        }
         prog = document.createElement('div');
         prog.className = 'step-progress';
         (stepData.steps || []).forEach(function (s) {
@@ -490,6 +520,15 @@ async function streamChat(text, bubble) {
       var m;
       try { m = JSON.parse(data.slice(9, -1).trim()); } catch (e) { return false; }
       updateMetricsPanel(m);
+      return false;
+    }
+
+    if (data.startsWith('[DECISION:')) {
+      // Agent 决策卡片：LLM 推理 / 工具调用决策（渐进增强，渲染失败不影响对话流）
+      var d;
+      try { d = JSON.parse(data.slice(10, -1).trim()); } catch (e) { return false; }
+      renderDecisionCard(bubble, d);
+      scrollToBottom();
       return false;
     }
 

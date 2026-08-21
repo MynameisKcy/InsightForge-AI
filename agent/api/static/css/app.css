@@ -803,6 +803,58 @@ body {
 }
 .metric-row:last-child span:last-child { color: var(--color-accent-2); }
 
+/* ── 决策卡片（SSE [DECISION] 事件：LLM 思考/工具调用/规划理由）── */
+.decision-card {
+  background: var(--color-paper-emit);
+  border: 1px solid var(--color-rule);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2xs) var(--space-sm);
+  margin: var(--space-2xs) 0;
+  font-size: var(--text-xs);
+}
+.decision-card--error { border-left-color: var(--color-error, #ef4444); }
+.decision-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-bottom: var(--space-3xs);
+}
+.decision-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-mono);
+  text-transform: uppercase;
+  color: var(--color-ink-2);
+}
+.decision-timing {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-ink-3);
+}
+.decision-reasoning {
+  color: var(--color-ink-2);
+  font-style: italic;
+  margin-bottom: var(--space-3xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.decision-tool, .decision-args, .decision-result {
+  margin-top: var(--space-3xs);
+  color: var(--color-ink-3);
+  word-break: break-word;
+}
+.decision-card code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-3xs);
+}
+
 /* ── Datasets ── */
 .ds-body {
   padding: 0 var(--space-sm) var(--space-2xs);

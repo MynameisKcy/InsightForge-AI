@@ -136,10 +136,17 @@ class ReactAgent:
                 if tool_name in local_tool_names:
                     displayed_tool_messages.discard(tool_name)
 
-            # 输出 AI 回复内容（过滤内部推理）
+            # 输出 AI 回复内容（过滤内部推理：转决策事件推送前端，不再静默丢弃）
             if isinstance(latest, AIMessage) and latest.content:
                 text = latest.content.strip()
                 if _is_internal_monologue(text):
+                    if len(text) >= 10:   # 过短过渡句仍静默
+                        try:
+                            from utils.decision_log import make_decision, log_decision, emit_decision
+                            log_decision(make_decision(source="react_agent", reasoning=text[:500]))
+                            emit_decision({"source": "react_agent", "reasoning": text[:500]})
+                        except Exception:
+                            pass
                     continue
                 yield text + "\n"
 
