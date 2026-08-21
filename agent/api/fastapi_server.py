@@ -418,10 +418,13 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     yield value
                     continue
                 if kind == "progress":
-                    # 进度事件按 type 路由：metrics→Token 看板；其余→步骤清单（前端既有行为）
+                    # 进度事件按 type 路由：metrics→Token 看板；decision→决策卡片；其余→步骤清单
                     etype = value.get("type", "")
                     if etype == "metrics":
                         yield f"data: [METRICS:{json.dumps(value, ensure_ascii=False)}]\n\n"
+                        continue
+                    if etype == "decision":
+                        yield f"data: [DECISION:{json.dumps(value, ensure_ascii=False)}]\n\n"
                         continue
                     # 步骤进度事件：下发 [STEP:json]，前端渲染步骤清单
                     yield f"data: [STEP:{json.dumps(value, ensure_ascii=False)}]\n\n"
