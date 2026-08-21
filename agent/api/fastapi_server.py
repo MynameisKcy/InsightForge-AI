@@ -749,7 +749,8 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
         # 获取样本数据（前5行）
         try:
             sample_df = db.query_df(f"SELECT * FROM {qname} LIMIT 5")
-            sample_data = sample_df.to_dict(orient="records")
+            # to_json 把日期列转 ISO 字符串；to_dict 会保留 pd.Timestamp，导致响应 JSON 序列化 500
+            sample_data = json.loads(sample_df.to_json(orient="records", force_ascii=False))
         except Exception:
             sample_data = []
 
