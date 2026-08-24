@@ -2,6 +2,7 @@
 
 ### 未发布
 
+- refactor(export): 报告 Markdown 方言解析收口——新增 `agents/markdown_blocks.py` 纯函数块解析器(标题/竖线表格/图片引用/列表/分隔线/空行 → Block, 零 FS 访问), `ExportAgent` Word/PDF/HTML 三份遍历器折叠为其上的薄渲染 adapter, 行内标记转换语义留各格式; 顺修三处副本漂移: Word 对 `---` 渲染分隔线(原字面横杠段落)、表格分隔行判定统一为逐格含 `--`(原 Word/PDF 整行子串匹配)、HTML 图片引用解析失败改输出占位文字(原输出破图 `<img>`); 无分隔行表格 HTML 表头/表体归位(原全渲染成 th)。MD 直通内联路径不变
 - refactor(cleanup): 删 fastapi_server 兼容再导出层——测试引用迁至属主模块(`api.sse._stream_with_heartbeat` / `api.deps._get_vector_store` / `database.user_settings_db`), `conftest._swap` 收敛为 deps 单属主(缺名即断言失败), auth 导入缩减为实际使用项; `.gitignore` 删已不存在的 plans/specs/superpowers 条目并忽略本机产物(`tmp-kaleido/` `.tmp/` `.zcode/` `*.db.bak`)
 - refactor(api): 拆分 fastapi_server 巨石——1252 行组装根收敛为 ~110 行 + `api/deps.py`(服务接缝) + `api/sse.py`(线程->异步流式桥) + `api/serialization.py` + `api/routes/` 八模块(chat/analysis/datasets/knowledge/sessions/settings/users/pages)；测试换桩目标从 `api.fastapi_server` 迁至属主模块(conftest `_swap` 优先 `api.deps`)
 - refactor(architecture): 架构重构 Tier1 收敛(候选1-8)——database 抽 `safety.py`/`schema.py`/`customer_profiles.py` 统一 SQL 安全与画像接缝, profile-cache 收口 `_invalidate_profile()`; `MemoryService` 外观收口记忆三层操作(会话读/改名/删除协调 + `_assert_owner` IDOR 前置); rag 抽共享 `rerank_docs`(gte-rerank-v2) 供 recall/rag_service 复用; `BaseAgent`/子 Agent/`PlannerAgent` 构造期模型注入(删 reach-around 赋值); 洞察回退契约归位各 `AnalysisModule` 适配器(删 9 键并集硬编); 删死模块 ProductAgent/RiskAgent 与 `PipelineContext.dataframe` 死属性

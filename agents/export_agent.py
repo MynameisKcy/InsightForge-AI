@@ -1,5 +1,10 @@
 """
 Export Agent: Markdown → Word/PDF/HTML/Markdown 导出。
+
+Markdown 方言的解析统一走 agents/markdown_blocks.py（块解析器，纯函数）；
+本文件只保留各格式的渲染 adapter：Block → python-docx / reportlab / HTML。
+行内 **粗**/*斜*/`码` 的转换语义各格式不同，由本文件的 _strip_inline_md /
+_pdf_inline / _md_to_html 各自负责——解析器不做行内转换。
 """
 
 import base64
@@ -8,6 +13,16 @@ import re
 from datetime import datetime
 
 from agents.base import BaseAgent
+from agents.markdown_blocks import (
+    Blank,
+    Heading,
+    HorizontalRule,
+    Image as MdImage,
+    ListItem,
+    Paragraph as MdParagraph,
+    Table as MdTable,
+    parse_markdown_blocks,
+)
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
@@ -16,6 +31,8 @@ _docx_available = True
 try:
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
     from docx.shared import Inches, Pt, RGBColor  # noqa: F401  # 可用性探测导入
 except ImportError:
     _docx_available = False
@@ -211,59 +228,8 @@ class ExportAgent(BaseAgent):
         heading = doc.add_heading(title, level=0)
         heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # 按行解析 Markdown
-        lines = markdown.split("\n")
-        i = 0
-        while i < len(lines):
-            line = lines[i].rstrip()
-
-            if not line:
-                doc.add_paragraph("")
-                i += 1
-                continue
-
-            # 标题
-            if line.startswith("# "):
-                doc.add_heading(line[2:], level=1)
-            elif line.startswith("## "):
-                doc.add_heading(line[3:], level=2)
-            elif line.startswith("### "):
-                doc.add_heading(line[4:], level=3)
-            # 表格
-            elif line.startswith("|"):
-                table_lines = []
-                while i < len(lines) and lines[i].strip().startswith("|"):
-                    table_lines.append(lines[i].strip())
-                    i += 1
-                i -= 1  # 回退，因为循环会 +1
-                self._add_docx_table(doc, table_lines)
-            # 图片引用
-            elif line.startswith("!["):
-                match = re.match(r"!\[(.*?)\]\((.*?)\)", line.strip())
-                if match:
-                    alt, ref = match.group(1), match.group(2)
-                    png = self._resolve_chart_image(ref)
-                    if png:
-                        try:
-                            doc.add_picture(png, width=Inches(5.5))
-                        except Exception as e:
-                            logger.warning(f"docx add_picture failed ({png}): {e}")
-                            doc.add_paragraph(f"（图表：{alt or '图'}，无法嵌入）")
-                    else:
-                        doc.add_paragraph(f"（图表：{alt or '图'}）")
-            # 普通段落
-            else:
-                # 移除 Markdown 标记
-                clean = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-                clean = re.sub(r"\*(.+?)\*", r"\1", clean)
-                clean = re.sub(r"`(.+?)`", r"\1", clean)
-                if clean.startswith("- "):
-                    doc.add_paragraph(clean[2:], style="List Bullet")
-                elif re.match(r"^\d+\.\s", clean):
-                    doc.add_paragraph(re.sub(r"^\d+\.\s", "", clean), style="List Number")
-                else:
-                    doc.add_paragraph(clean)
-            i += 1
+        for block in parse_markdown_blocks(markdown):
+            self._render_docx_block(doc, block)
 
         output_dir = _ensure_export_dir("word")
         filename = _make_filename(title, "docx")
@@ -272,30 +238,68 @@ class ExportAgent(BaseAgent):
         logger.info(f"Word exported to {filepath}")
         return filepath
 
-    def _add_docx_table(self, doc, table_lines: list[str]):
-        """在 Word 文档中添加表格。"""
-        if len(table_lines) < 2:
-            return
-        # 解析表头
-        header_cells = [c.strip() for c in table_lines[0].split("|") if c.strip()]
-        # 跳过分隔行
-        data_start = 2 if len(table_lines) > 1 and "---" in table_lines[1] else 1
-        rows = []
-        for line in table_lines[data_start:]:
-            cells = [c.strip() for c in line.split("|") if c.strip()]
-            if cells:
-                rows.append(cells)
+    @staticmethod
+    def _strip_inline_md(text: str) -> str:
+        """剥离行内 Markdown 标记（Word 走纯文本，不加粗/斜体 run）。"""
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
+        text = re.sub(r"`(.+?)`", r"\1", text)
+        return text
 
-        if header_cells:
-            table = doc.add_table(rows=1 + len(rows), cols=len(header_cells), style="Light List Accent 1")
-            # 表头
-            for j, cell_text in enumerate(header_cells):
-                table.rows[0].cells[j].text = cell_text
-            # 数据行
-            for i, row in enumerate(rows):
-                for j in range(min(len(row), len(header_cells))):
-                    table.rows[i + 1].cells[j].text = row[j]
+    def _render_docx_block(self, doc, block) -> None:
+        """单个 Block → Word 元素。"""
+        if isinstance(block, Blank):
             doc.add_paragraph("")
+        elif isinstance(block, Heading):
+            doc.add_heading(block.text, level=block.level)
+        elif isinstance(block, MdTable):
+            self._add_docx_table(doc, block)
+        elif isinstance(block, HorizontalRule):
+            self._add_docx_hr(doc)
+        elif isinstance(block, MdImage):
+            png = self._resolve_chart_image(block.ref)
+            if png:
+                try:
+                    doc.add_picture(png, width=Inches(5.5))
+                except Exception as e:
+                    logger.warning(f"docx add_picture failed ({png}): {e}")
+                    doc.add_paragraph(f"（图表：{block.alt or '图'}，无法嵌入）")
+            else:
+                doc.add_paragraph(f"（图表：{block.alt or '图'}）")
+        elif isinstance(block, ListItem):
+            style = "List Number" if block.ordered else "List Bullet"
+            doc.add_paragraph(self._strip_inline_md(block.text), style=style)
+        else:  # MdParagraph
+            doc.add_paragraph(self._strip_inline_md(block.text))
+
+    @staticmethod
+    def _add_docx_hr(doc):
+        """在 Word 中画一条水平分隔线（段落底边框实现）。"""
+        p = doc.add_paragraph()
+        p_pr = p._p.get_or_add_pPr()
+        p_bdr = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "auto")
+        p_bdr.append(bottom)
+        p_pr.append(p_bdr)
+
+    def _add_docx_table(self, doc, table: MdTable):
+        """在 Word 文档中添加表格。"""
+        header_cells = table.header
+        if not header_cells:
+            return
+        table_obj = doc.add_table(rows=1 + len(table.rows), cols=len(header_cells), style="Light List Accent 1")
+        # 表头
+        for j, cell_text in enumerate(header_cells):
+            table_obj.rows[0].cells[j].text = cell_text
+        # 数据行
+        for i, row in enumerate(table.rows):
+            for j in range(min(len(row), len(header_cells))):
+                table_obj.rows[i + 1].cells[j].text = row[j]
+        doc.add_paragraph("")
 
     def _export_pdf(self, markdown: str, title: str) -> str | None:
         """导出为 PDF 文件。"""
@@ -326,61 +330,11 @@ class ExportAgent(BaseAgent):
         body_style = ParagraphStyle("CustomBody", parent=styles["Normal"],
                                     fontName=font_for_pdf, fontSize=10, leading=14, spaceAfter=6)
 
-        styles_dict = {"font_name": font_for_pdf}
-
-        # 添加标题
         story.append(Paragraph(title, title_style))
         story.append(Spacer(1, 6*mm))
 
-        # 按行解析
-        lines = markdown.split("\n")
-        i = 0
-        while i < len(lines):
-            line = lines[i].rstrip()
-            if not line:
-                story.append(Spacer(1, 3*mm))
-                i += 1
-                continue
-
-            clean = self._clean_md_for_pdf(line)
-            if not clean:
-                i += 1
-                continue
-
-            if line.startswith("# "):
-                story.append(Paragraph(clean, h1_style))
-            elif line.startswith("## "):
-                story.append(Paragraph(clean, h2_style))
-            elif line.startswith("### "):
-                story.append(Paragraph(clean, styles["Heading3"]))
-            elif line.startswith("- "):
-                story.append(Paragraph(f"• {clean}", body_style))
-            elif line.startswith("---"):
-                story.append(Spacer(1, 4*mm))
-            elif line.startswith("!["):
-                match = re.match(r"!\[(.*?)\]\((.*?)\)", line.strip())
-                if match:
-                    alt, ref = match.group(1), match.group(2)
-                    png = self._resolve_chart_image(ref)
-                    if png:
-                        try:
-                            story.append(self._scaled_image(png))
-                            story.append(Spacer(1, 4 * mm))
-                        except Exception as e:
-                            logger.warning(f"pdf image failed ({png}): {e}")
-                            story.append(Paragraph(f"（图表：{alt or '图'}，无法嵌入）", body_style))
-                    else:
-                        story.append(Paragraph(f"（图表：{alt or '图'}）", body_style))
-            elif line.startswith("|"):
-                table_lines = []
-                while i < len(lines) and lines[i].strip().startswith("|"):
-                    table_lines.append(lines[i].strip())
-                    i += 1
-                i -= 1
-                self._add_pdf_table(story, table_lines, styles_dict)
-            else:
-                story.append(Paragraph(clean, body_style))
-            i += 1
+        for block in parse_markdown_blocks(markdown):
+            self._render_pdf_block(story, block, font_for_pdf, styles, title_style, h1_style, h2_style, body_style)
 
         try:
             doc.build(story)
@@ -390,23 +344,55 @@ class ExportAgent(BaseAgent):
             logger.error(f"PDF build failed: {e}")
             return None
 
-    def _add_pdf_table(self, story, table_lines: list, styles: dict):
-        """把 markdown 表格行渲染为 reportlab Table。"""
-        if len(table_lines) < 2:
+    @staticmethod
+    def _pdf_inline(text: str) -> str:
+        """行内标记 → reportlab 支持的迷你 HTML 标签。"""
+        text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+        text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+        text = re.sub(r"`(.+?)`", r"<font face='Courier'>\1</font>", text)
+        return text
+
+    def _render_pdf_block(self, story, block, font_for_pdf, styles,
+                          title_style, h1_style, h2_style, body_style) -> None:
+        """单个 Block → reportlab story 元素。"""
+        if isinstance(block, Blank):
+            story.append(Spacer(1, 3*mm))
+        elif isinstance(block, Heading):
+            style = {1: h1_style, 2: h2_style}.get(block.level, styles["Heading3"])
+            story.append(Paragraph(self._pdf_inline(block.text), style))
+        elif isinstance(block, MdTable):
+            self._add_pdf_table(story, block, font_for_pdf)
+        elif isinstance(block, HorizontalRule):
+            story.append(Spacer(1, 4*mm))
+        elif isinstance(block, MdImage):
+            png = self._resolve_chart_image(block.ref)
+            if png:
+                try:
+                    story.append(self._scaled_image(png))
+                    story.append(Spacer(1, 4 * mm))
+                except Exception as e:
+                    logger.warning(f"pdf image failed ({png}): {e}")
+                    story.append(Paragraph(f"（图表：{block.alt or '图'}，无法嵌入）", body_style))
+            else:
+                story.append(Paragraph(f"（图表：{block.alt or '图'}）", body_style))
+        elif isinstance(block, ListItem):
+            clean = self._pdf_inline(block.text)
+            if block.ordered:
+                # 历史行为：有序列表项按普通正文渲染，保留编号
+                story.append(Paragraph(f"{block.marker} {clean}", body_style))
+            else:
+                story.append(Paragraph(f"• {clean}", body_style))
+        else:  # MdParagraph
+            clean = self._pdf_inline(block.text)
+            if clean:
+                story.append(Paragraph(clean, body_style))
+
+    def _add_pdf_table(self, story, table: MdTable, font_name: str):
+        """把解析后的表格渲染为 reportlab Table。"""
+        if not table.header:
             return
-        header_cells = [c.strip() for c in table_lines[0].split("|") if c.strip()]
-        data_start = 2 if len(table_lines) > 1 and "---" in table_lines[1] else 1
-        rows = []
-        for line in table_lines[data_start:]:
-            cells = [c.strip() for c in line.split("|") if c.strip()]
-            if cells:
-                rows.append(cells)
-        if not header_cells:
-            return
-        # 列数对齐
-        col_count = len(header_cells)
-        table_data = [header_cells] + [r[:col_count] + [""] * (col_count - len(r)) for r in rows]
-        font_name = styles.get("font_name", "Helvetica")
+        col_count = len(table.header)
+        table_data = [table.header] + [r[:col_count] + [""] * (col_count - len(r)) for r in table.rows]
         style = TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f2f2f2")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
@@ -419,15 +405,6 @@ class ExportAgent(BaseAgent):
         tbl = Table(table_data, style=style, hAlign="LEFT")
         story.append(tbl)
         story.append(Spacer(1, 4 * mm))
-
-    def _clean_md_for_pdf(self, text: str) -> str:
-        """清理 Markdown 标记，转为纯文本 + HTML 标签（reportlab 支持的）。"""
-        text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-        text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
-        text = re.sub(r"`(.+?)`", r"<font face='Courier'>\1</font>", text)
-        # 移除标题标记
-        text = re.sub(r"^#{1,3}\s+", "", text)
-        return text
 
     def _export_html(self, markdown: str, title: str) -> str:
         """导出为 HTML 文件（用基本 Markdown→HTML 转换）。"""
@@ -443,7 +420,6 @@ class ExportAgent(BaseAgent):
 
     def _md_to_html(self, markdown: str, title: str) -> str:
         """将 Markdown 转为基本 HTML。"""
-        lines = markdown.split("\n")
         html_lines = [
             "<!DOCTYPE html>",
             "<html><head><meta charset='utf-8'>",
@@ -458,98 +434,63 @@ class ExportAgent(BaseAgent):
             "img { max-width: 100%; }",
             "</style></head><body>",
         ]
+        state = {"in_table": False}
 
-        in_table = False
-        in_thead = False
-        skip_next = False
+        def close_table():
+            if state["in_table"]:
+                html_lines.append("</tbody></table>")
+                state["in_table"] = False
 
-        for i, line in enumerate(lines):
-            stripped = line.rstrip()
-
-            if skip_next:
-                skip_next = False
-                continue
-
-            if not stripped:
-                if in_table:
-                    html_lines.append("</tbody></table>")
-                    in_table = False
+        for block in parse_markdown_blocks(markdown):
+            if isinstance(block, Blank):
+                close_table()
                 html_lines.append("")
-                continue
-
-            # 标题
-            if stripped.startswith("# "):
-                if in_table:
-                    html_lines.append("</tbody></table>")
-                    in_table = False
-                html_lines.append(f"<h1>{stripped[2:]}</h1>")
-            elif stripped.startswith("## "):
-                if in_table:
-                    html_lines.append("</tbody></table>")
-                    in_table = False
-                html_lines.append(f"<h2>{stripped[3:]}</h2>")
-            elif stripped.startswith("### "):
-                if in_table:
-                    html_lines.append("</tbody></table>")
-                    in_table = False
-                html_lines.append(f"<h3>{stripped[4:]}</h3>")
-            # 表格
-            elif stripped.startswith("|"):
-                if not in_table:
+            elif isinstance(block, Heading):
+                close_table()
+                html_lines.append(f"<h{block.level}>{block.text}</h{block.level}>")
+            elif isinstance(block, MdTable):
+                if not state["in_table"]:
                     html_lines.append("<table><thead>")
-                    in_table = True
-                    in_thead = True
-                if in_thead:
-                    cells = [c.strip() for c in stripped.split("|") if c.strip()]
-                    if all("---" in c for c in cells):
-                        html_lines.append("</thead><tbody>")
-                        in_thead = False
-                        continue
-                    cleaned = [self._html_clean(c) for c in cells]
-                    html_lines.append(f"<tr><th>{'</th><th>'.join(cleaned)}</th></tr>")
-                else:
-                    cells = [c.strip() for c in stripped.split("|") if c.strip()]
-                    cleaned = [self._html_clean(c) for c in cells]
+                    state["in_table"] = True
+                cleaned_header = [self._html_clean(c) for c in block.header]
+                html_lines.append(f"<tr><th>{'</th><th>'.join(cleaned_header)}</th></tr>")
+                html_lines.append("</thead><tbody>")
+                for row in block.rows:
+                    cleaned = [self._html_clean(c) for c in row]
                     html_lines.append(f"<tr><td>{'</td><td>'.join(cleaned)}</td></tr>")
-            # 图片
-            elif stripped.startswith("!["):
-                match = re.match(r"!\[(.*?)\]\((.*?)\)", stripped)
-                if match:
-                    alt, src = match.group(1), match.group(2)
-                    png = self._resolve_chart_image(src)
-                    if png:
-                        try:
-                            src = self._png_data_uri(png)
-                        except Exception as e:
-                            logger.warning(f"html image data-uri failed ({png}): {e}")
-                            src = ""
-                    if src:
-                        html_lines.append(f'<img src="{src}" alt="{self._html_clean(alt)}">')
-                    else:
-                        html_lines.append(f"<p>（图表：{alt or '图'}）</p>")
-            # 分隔线
-            elif stripped == "---":
+            elif isinstance(block, HorizontalRule):
+                close_table()
                 html_lines.append("<hr>")
-            # 普通段落 / 列表
-            else:
-                if in_table:
-                    html_lines.append("</tbody></table>")
-                    in_table = False
-                clean = self._html_clean(stripped)
+            elif isinstance(block, MdImage):
+                close_table()
+                png = self._resolve_chart_image(block.ref)
+                src = ""
+                if png:
+                    try:
+                        src = self._png_data_uri(png)
+                    except Exception as e:
+                        logger.warning(f"html image data-uri failed ({png}): {e}")
+                        src = ""
+                if src:
+                    html_lines.append(f'<img src="{src}" alt="{self._html_clean(block.alt)}">')
+                else:
+                    html_lines.append(f"<p>（图表：{block.alt or '图'}）</p>")
+            elif isinstance(block, ListItem):
+                close_table()
+                clean = self._html_clean(block.text)
                 clean = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", clean)
                 clean = re.sub(r"\*(.+?)\*", r"<em>\1</em>", clean)
                 clean = re.sub(r"`(.+?)`", r"<code>\1</code>", clean)
-                if stripped.startswith("- "):
-                    html_lines.append(f"<li>{clean[2:]}</li>")
-                elif re.match(r"^\d+\.\s", stripped):
-                    numbered_clean = re.sub(r'^\d+\.\s', '', clean)
-                    html_lines.append(f"<li>{numbered_clean}</li>")
-                else:
-                    html_lines.append(f"<p>{clean}</p>")
+                html_lines.append(f"<li>{clean}</li>")
+            else:  # MdParagraph
+                close_table()
+                clean = self._html_clean(block.text)
+                clean = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", clean)
+                clean = re.sub(r"\*(.+?)\*", r"<em>\1</em>", clean)
+                clean = re.sub(r"`(.+?)`", r"<code>\1</code>", clean)
+                html_lines.append(f"<p>{clean}</p>")
 
-        if in_table:
-            html_lines.append("</tbody></table>")
-
+        close_table()
         html_lines.append("</body></html>")
         return "\n".join(html_lines)
 
