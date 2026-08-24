@@ -2,6 +2,7 @@
 Agent base class: provides common utilities for all agents.
 """
 
+import contextlib
 import json
 import os
 import sys
@@ -54,8 +55,8 @@ class BaseAgent:
                 span.set_attribute("status", "success")
                 usage = getattr(response, "usage_metadata", None)
                 record_usage(span, usage)
-                # Token 统计（session 累计 + SSE [METRICS] 推送）
-                try:
+                # Token 统计（session 累计 + SSE [METRICS] 推送）；失败不影响 LLM 调用本身
+                with contextlib.suppress(Exception):
                     from utils.token_counter import get_token_counter
                     model_name = (getattr(response, "response_metadata", None) or {}).get("model_name", "")
                     counter = get_token_counter()
@@ -64,8 +65,6 @@ class BaseAgent:
                     else:
                         counter.record_estimated("\n".join(m["content"] for m in messages),
                                                  str(response.content), model_name)
-                except Exception:
-                    pass
                 return response.content.strip()
             except Exception as e:
                 record_exception(span, e)
@@ -101,3 +100,34 @@ class BaseAgent:
     def run(self, input_data: dict) -> dict:
         """子类实现具体任务逻辑。"""
         raise NotImplementedError
+
+
+def parse_json_list(text: str) -> list:
+    """从 LLM 输出中提取 JSON 数组。
+
+    _parse_json 只覆盖对象（花括号提取），数组场景（如图表规格列表）需要
+    独立实现：qwen3.7 等模型会把 JSON 数组包在 ```json 围栏里输出，
+    直接 json.loads 失败后须依次尝试围栏剥离与方括号提取。
+    解析失败或结果不是 list 时返回 []。
+    """
+    import re
+
+    text = (text or "").strip()
+    candidates = [text]
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fence:
+        candidates.append(fence.group(1).strip())
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end > start:
+        candidates.append(text[start : end + 1])
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    return []
