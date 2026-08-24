@@ -24,13 +24,19 @@ pip install -r requirements.txt
 # Run FastAPI server (recommended, port 8502)
 conda activate AnalysisAgent && python -m api.fastapi_server
 
-# Run existing tests
-conda activate AnalysisAgent && python -m pytest tests/ -v
-# or: python -m unittest discover tests -v
-
-# Run a single test file
-conda activate AnalysisAgent && python -m unittest tests/test_rag_service.py -v
+# Run tests — targeted first (default): only the files related to the change.
+# The full suite is ~340 tests / ~70s; run it only when necessary
+# (cross-module refactors, or one final green run before claiming completion).
+conda activate AnalysisAgent && python -m pytest tests/test_export_agent.py -q   # targeted
+conda activate AnalysisAgent && python -m pytest tests/ -q                       # full suite
 ```
+
+## Git Workflow
+
+- 日常开发一律在 `dev` 分支进行并直接提交——**不再按任务新开分支**。`dev` 上验证无误后合并回 `main`（合并时机与用户确认）。
+- 提交信息沿用 conventional commit 前缀 + 中文描述（如 `refactor(export): …`、`fix(api): …`）。
+- 推送（`git push`）需用户明确要求后才执行。
+
 
 ## Architecture
 
