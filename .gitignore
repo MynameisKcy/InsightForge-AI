@@ -52,3 +52,10 @@ tmp-kaleido/
 .tmp/
 .zcode/
 *.db.bak
+
+# DuckDB 导入的运行时临时 CSV（data_resolver 中间产物）
+data/tmp*.csv
+
+# AI 工具本地目录（命令/技能/记忆，仅本机）
+.codebuddy/
+.workbuddy/
