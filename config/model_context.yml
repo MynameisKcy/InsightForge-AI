@@ -1,0 +1,22 @@
+# 模型上下文窗口与压缩阈值（ADR-0003 Phase 2）
+#
+# 用途：Session Memory 的 90% 上下文压缩触发，替代固定 MAX_TURNS=30。
+# key = 模型名（与 CHAT_MODEL_NAME / 用户配置的 llm_model_name 对应）-> 该模型最大输入 token 数。
+# 未列出的模型走 default。
+#
+# ⚠️ 各模型上下文窗口值请以 DashScope 官方文档为准并按需校准；值偏大会导致压缩触发偏晚
+#    （可能溢出），偏小则触发偏早（浪费上下文）。90% 阈值已留 10% 余量，另配 80% 字符兜底。
+default: 32768
+
+# Qwen 系列（输入 token 上限，以 DashScope 文档为准）
+qwen-plus: 131072
+qwen-max: 32768
+qwen3.7-max-preview: 131072   # Qwen3-Max 系列支持 128K；预览模型，未核实，按需校准
+qwen-turbo: 1000000
+
+# 压缩策略
+compress_threshold: 0.9        # 估算 prompt >= 该比例 * context_window 触发压缩（实测 token 路径）
+char_fallback_threshold: 0.8   # 无实测 token 时，字符启发式估算 >= 该比例触发（更保守）
+target_ratio: 0.5              # 压缩后目标占比（折半折叠，近似压到 ~50%）
+chars_per_token: 2.5           # 中英混合粗略启发式：1 token ≈ 2.5 字符（中文偏保守）
+min_keep_turns: 3              # 压缩后至少保留的最近轮数

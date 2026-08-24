@@ -1,0 +1,55 @@
+# InsightForge AI — Multi-Agent Data Analysis System
+# Python 3.10+  |  推荐使用 conda 环境 AnalysisAgent
+# 安装: pip install -r requirements.txt
+
+# ── AI 框架 ──
+langchain==1.3.14
+langchain-core==1.4.9
+langchain-community==0.4.2
+langchain-chroma==1.1.0
+langchain-text-splitters==1.1.2
+langgraph==1.2.9
+langchain-openai  # 用户自定义 base_url 接入 OpenAI 兼容端点（不只限千问）
+
+# ── LLM / 向量 / 分词（DashScope 通义千问 + ChromaDB + jieba）──
+dashscope==1.26.3
+chromadb==1.5.9
+jieba==0.42.1
+
+# ── Web 服务（FastAPI SSE 流式 + 文件上传）──
+fastapi==0.139.2
+uvicorn==0.51.0
+python-multipart==0.0.32
+websockets==15.0.1
+
+# ── 数据处理 / 数据库 ──
+pandas==2.3.3
+numpy==2.2.6
+duckdb==1.5.4
+openpyxl==3.1.5  # Excel(.xlsx/.xlsm) 读取引擎，pandas.read_excel 依赖
+xlrd==2.0.1  # Excel(.xls 老版二进制) 读取引擎，pandas.read_excel 依赖
+sqlglot==30.12.0  # SQL 沙箱 AST 校验（防多语句/文件读/SSRF/DDL 注入）
+SQLAlchemy==2.0.51
+
+# ── 可视化 ──
+plotly==6.9.0
+kaleido==1.3.0  # Plotly 静态图导出（图表 -> PNG），供报告 Word/PDF/MD/HTML 嵌入栅格图
+
+# ── 报告导出 ──
+python-docx==1.2.0
+reportlab==5.0.0
+Jinja2==3.1.6
+Pillow  # 图像尺寸读取（PDF 嵌图保比缩放）+ 通用图像处理
+
+# ── 配置 / 安全 ──
+PyYAML==6.0.3
+python-dotenv==1.2.2
+bcrypt==5.0.0
+
+# ── 可观测性（OTel 链路追踪，OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
+opentelemetry-api==1.27.0
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
+
+# 用户配置加密（需求①）
+cryptography
