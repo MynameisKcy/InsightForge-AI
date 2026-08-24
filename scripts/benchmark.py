@@ -61,7 +61,7 @@ def ensure_dataset(base_url: str, token: str) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["订单日期", "区域", "产品", "销售额", "数量"])
-    today = date.today()
+    today = date.today()  # noqa: DTZ011  （基准脚本用本地日期生成样例数据）
     for i in range(200):
         d = today - timedelta(days=random.randint(0, 180))
         writer.writerow([d.isoformat(), random.choice(regions), random.choice(products),
@@ -76,13 +76,19 @@ def ensure_dataset(base_url: str, token: str) -> str:
     return name
 
 
-def run_one(base_url: str, token: str, query: str, session_id: str) -> tuple[float, dict | None, str]:
-    """跑一次对话，返回 (总延迟秒, 最后一条 METRICS, 错误信息)。"""
+def run_one(base_url: str, token: str, query: str) -> tuple[float, dict | None, str]:
+    """跑一次对话（每次新会话），返回 (总延迟秒, 该轮最终 METRICS, 错误信息)。
+
+    session_id 传空串让服务端新建会话：传自造 ID 会命中 IDOR 防护直接 404
+    （会话不存在即拒绝，且 404 响应体非 SSE，须按 HTTP 状态码判失败）。
+    """
     headers = {"Authorization": f"Bearer {token}"}
     start = time.perf_counter()
     last_metrics, error = None, ""
     resp = requests.post(f"{base_url}/api/chat", headers=headers, stream=True, timeout=600,
-                         json={"query": query, "session_id": session_id})
+                         json={"query": query, "session_id": ""})
+    if resp.status_code != 200:
+        return time.perf_counter() - start, None, f"HTTP {resp.status_code}: {resp.text[:80]}"
     for raw in resp.iter_lines():
         if not raw:
             continue
@@ -131,16 +137,17 @@ def main():
     for query in QUERIES:
         for _ in range(args.iterations):
             seq += 1
-            latency, metrics, error = run_one(args.base_url, token, query, f"bench-{seq}")
+            latency, metrics, error = run_one(args.base_url, token, query)
             latencies.append(latency)
             status = f"{latency:.2f}s" if not error else f"FAIL ({error[:40]})"
             print(f"  [{seq:2d}] {query[:18]:<20} {status}")
             if error:
                 failures.append(query)
+            # 每轮独立新会话：取该轮最后一条 METRICS（本轮累计），跨轮求和
             if metrics:
-                total_in = metrics.get("input_tokens", total_in)
-                total_out = metrics.get("output_tokens", total_out)
-                cost = metrics.get("cost_cny", cost)
+                total_in += metrics.get("input_tokens", 0)
+                total_out += metrics.get("output_tokens", 0)
+                cost += metrics.get("cost_cny", 0)
 
     ok_latencies = sorted(latencies)
     mean = statistics.mean(latencies)

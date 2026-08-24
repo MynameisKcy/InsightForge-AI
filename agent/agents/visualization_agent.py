@@ -14,9 +14,10 @@ for path in (PROJECT_ROOT, os.path.dirname(PROJECT_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from agents.base import BaseAgent
-from visualization.charts import ChartGenerator
 from utils.logger_handler import logger
+from visualization.charts import ChartGenerator
+
+from agents.base import BaseAgent, parse_json_list
 
 try:
     from rag.chart_knowledge import chart_knowledge
@@ -140,8 +141,16 @@ class VisualizationAgent(BaseAgent):
         """验证并修正列名：如果 col_name 不存在，在 df 中找最接近的匹配列。
         prefer: "number" 优先数值列, "object" 优先文本列, "any" 任意列。
         """
-        if not col_name:
-            return None
+        if not col_name or not isinstance(col_name, str):
+            # 空/非字符串（如漏网的列表列名）：交由 prefer 默认列兜底
+            col_name = None
+            if prefer == "number":
+                num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+                return num_cols[0] if num_cols else (df.columns[0] if len(df.columns) else None)
+            if prefer == "object":
+                obj_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+                return obj_cols[0] if obj_cols else (df.columns[0] if len(df.columns) else None)
+            return df.columns[0] if len(df.columns) else None
         if col_name in df.columns:
             return col_name
         # 模糊匹配：检查实际列名是否包含请求的关键词
@@ -200,12 +209,16 @@ class VisualizationAgent(BaseAgent):
         for k, v in spec.items():
             if k in ("chart_type", "title", "reason"):
                 continue
+            if isinstance(v, list):
+                # 模型可能给多序列列表（如 y_col: ["华东","华南"]）；
+                # ChartGenerator 按单列实现（dropna/labels 不接受 list），
+                # 逐个解析取第一个有效列，避免 hash(list) TypeError
+                v = next((item for item in v
+                          if isinstance(item, str) and item in df.columns), v[0] if v else None)
             if k in ("x_col", "names_col", "labels_col"):
                 validated[k] = self._resolve_column(df, v, prefer="object")
             elif k in ("y_col", "values_col"):
                 validated[k] = self._resolve_column(df, v, prefer="number")
-            elif k in ("x_label", "y_label"):
-                validated[k] = v
             else:
                 validated[k] = v
         return ChartGenerator.auto_chart(df, chart_type, title=title, **validated)
@@ -220,18 +233,15 @@ class VisualizationAgent(BaseAgent):
         messages = [{"role": "user", "content": prompt}]
         response = self._call_llm(messages)
 
-        # 解析 JSON 数组
-        try:
-            parsed = json.loads(response)
-            if isinstance(parsed, list):
-                return parsed
-            return []
-        except json.JSONDecodeError:
-            # 尝试提取
-            result = self._parse_json(response)
-            if isinstance(result, dict) and "raw" not in result:
-                return [result]
-            return []
+        # 解析 JSON 数组：qwen3.7 等模型会加 ```json 围栏，parse_json_list 统一容忍
+        specs = [s for s in parse_json_list(response) if isinstance(s, dict)]
+        if specs:
+            return specs
+        # 兼容对象型输出（单图规格）：包一层返回
+        result = self._parse_json(response)
+        if isinstance(result, dict) and "raw" not in result:
+            return [result]
+        return []
 
     def _data_summary(self, df: pd.DataFrame) -> dict:
         """构建喂给 LLM 的数据概况：列/dtype + 数值列统计 + 类别列高频值。"""
