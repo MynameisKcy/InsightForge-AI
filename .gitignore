@@ -59,3 +59,6 @@ data/tmp*.csv
 # AI 工具本地目录（命令/技能/记忆，仅本机）
 .codebuddy/
 .workbuddy/
+
+# OpenSpec 工作流目录（规格/变更提案留本地，不入库）
+openspec/
