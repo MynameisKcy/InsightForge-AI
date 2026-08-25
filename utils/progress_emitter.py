@@ -42,6 +42,19 @@ def get_progress_emitter() -> Optional["ProgressEmitter"]:
     return _progress_emitter.get()
 
 
+def emitter_bridge(channel: str):
+    """组合根接线用：生成把 payload 推到当前请求进度通道的发布器。
+
+    供 token_counter / decision_log 经 set_*_publisher 注入，使观测模块
+    不感知 SSE 传输（见架构评审 R2 候选4）。无进度通道/推送失败均静默。
+    """
+    def _publish(payload: dict) -> None:
+        emitter = get_progress_emitter()
+        if emitter is not None:
+            emitter.emit(channel, payload)
+    return _publish
+
+
 class ProgressEmitter:
     """线程安全的进度发射器：后台线程 emit -> 主协程 asyncio.Queue。"""
 

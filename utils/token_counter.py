@@ -1,25 +1,23 @@
 """Token 统计与成本估算（进程级单例，按 session_id 累计）。
 
 挂点（决策 D2，见 docs/specs/2026-08-21-enterprise-observability-plan.md §4.2⑤）：
-- agents/base.py `_call_llm`：覆盖全部子 Agent（planner/sql/trend/...）
-- agent/agent/tools/middleware.py `trace_model_call`：覆盖 ReactAgent 每次模型调用
+- agents/base.py `_call_llm`：经 account_response 覆盖全部子 Agent（planner/sql/trend/...）
+- agent/tools/middleware.py `trace_model_call`：经 account_response 覆盖 ReactAgent 每次模型调用
 session_id 取自 request_context（contextvar，随线程传播）。
 RAG chain（返回 str 拿不到 usage）一期未覆盖。
 
-每次累计后经 ProgressEmitter 推送 SSE `[METRICS:{json}]` 事件，前端侧边栏看板消费。
+SSE 解耦：本模块不感知传输层——组合根（api/fastapi_server.py）经
+set_metrics_publisher 注入发布器（progress_emitter.emitter_bridge("metrics")）；
+未接线时事件静默丢弃。
 局限：进程内 dict（单副本 uvicorn 够用），重启清零；不落盘。
 """
 import contextlib
 import os
 import threading
 from dataclasses import dataclass
+from typing import Callable
 
-try:
-    from utils.progress_emitter import get_progress_emitter
-    from utils.request_context import get_session_id
-except ModuleNotFoundError:
-    from agent.utils.progress_emitter import get_progress_emitter
-    from agent.utils.request_context import get_session_id
+from utils.request_context import get_session_id
 
 # DashScope 通义千问定价（元/千 token，input/output；随官方调价更新此处即可）
 PRICE_TABLE_CNY_PER_K = {
@@ -107,19 +105,20 @@ class TokenCounter:
 
     @staticmethod
     def _emit(session_id: str, model_name: str, usage: TokenUsage, estimated: bool) -> None:
-        """推送 SSE [METRICS] 事件（无进度通道/推送失败均静默，不影响业务）。"""
+        """经注入的发布器外发 [METRICS] payload（未接线/失败均静默，不影响业务）。"""
+        publisher = _publisher
+        if publisher is None or not session_id:
+            return
         with contextlib.suppress(Exception):
-            emitter = get_progress_emitter()
-            if emitter is not None and session_id:
-                emitter.emit("metrics", {
-                    "session_id": session_id,
-                    "model": model_name,
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "cost_cny": round(usage.estimated_cost_cny, 4),
-                    "calls": usage.calls,
-                    "estimated": estimated,
-                })
+            publisher({
+                "session_id": session_id,
+                "model": model_name,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cost_cny": round(usage.estimated_cost_cny, 4),
+                "calls": usage.calls,
+                "estimated": estimated,
+            })
 
     def get_session_usage(self, session_id: str) -> TokenUsage | None:
         """获取会话累计使用量。"""
@@ -134,6 +133,7 @@ class TokenCounter:
 
 
 _counter = None
+_publisher: Callable[[dict], None] | None = None
 
 
 def get_token_counter() -> TokenCounter:
@@ -141,3 +141,32 @@ def get_token_counter() -> TokenCounter:
     if _counter is None:
         _counter = TokenCounter()
     return _counter
+
+
+def set_metrics_publisher(publisher: Callable[[dict], None]) -> None:
+    """注入 [METRICS] 发布器（组合根接线；传 None 撤销）。"""
+    global _publisher
+    _publisher = publisher
+
+
+def account_response(response, fallback_prompt: str = "",
+                     fallback_output: str = "") -> dict | None:
+    """LLM 响应记账唯一入口：提取 usage/model 并累计（缺失时按兜底文本估算）。
+
+    兼容两种响应形态：裸 AIMessage，或 ReactAgent 中间件的 ModelResponse
+    （真消息挂 structured_response 上）。返回 usage dict 供调用方写 Span；
+    无 usage 时返回 None。内部静默——记账失败绝不影响业务调用。
+    """
+    try:
+        msg = getattr(response, "structured_response", response)
+        usage = getattr(msg, "usage_metadata", None)
+        model_name = (getattr(msg, "response_metadata", None) or {}).get("model_name", "")
+        counter = get_token_counter()
+        if usage:
+            counter.record_usage(usage, model_name)
+        else:
+            content = fallback_output or str(getattr(msg, "content", ""))
+            counter.record_estimated(fallback_prompt, content, model_name)
+        return usage
+    except Exception:
+        return None

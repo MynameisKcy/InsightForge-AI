@@ -1,4 +1,3 @@
-import contextlib
 import time
 from collections.abc import Callable
 
@@ -19,7 +18,8 @@ from utils.decision_log import emit_decision, log_decision, make_decision
 from utils.logger_handler import logger
 from utils.prompt_loader import load_report_prompts, load_system_prompts
 from utils.request_context import get_session_id, get_user_id
-from utils.tracing import get_tracer, record_exception, record_usage
+from utils.token_counter import account_response
+from utils.tracing import record_usage, traced
 
 
 def _log_tool_decision(tool_name: str, tool_args, duration_ms: float,
@@ -58,31 +58,29 @@ def monitor_tool(
     logger.info(f"monitor_tool called with {tool_name}")
     logger.info(f"monitor_tool called with parameters :{request.tool_call['args']}")
 
-    tracer = get_tracer()
-    with tracer.start_as_current_span(f"tool.{tool_name}") as span:
-        span.set_attribute("tool.name", tool_name)
-        span.set_attribute("tool.args", str(request.tool_call['args'])[:500])
-        start = time.perf_counter()
+    start = time.perf_counter()
+    with traced(f"tool.{tool_name}", attrs={
+            "tool.name": tool_name,
+            "tool.args": str(request.tool_call['args'])[:500],
+    }) as span:
         try:
             result = handler(request)
-            duration_ms = round((time.perf_counter() - start) * 1000, 1)
-            span.set_attribute("duration_ms", duration_ms)
-            span.set_attribute("status", "success")
-            # 结果摘要截 200，便于 Jaeger 中直接判断调用是否符合预期
-            result_summary = str(getattr(result, "content", result))
-            span.set_attribute("tool.result_summary", result_summary[:200])
-            _log_tool_decision(tool_name, request.tool_call['args'], duration_ms, result_summary)
-            logger.info(f"monitor_tool called with result :{result}")
-
-            if tool_name == 'fill_report_context_for_report':
-                request.runtime.context["report"] = True
-            return result
         except Exception as e:
-            record_exception(span, e)
+            # 决策日志需错误分支的耗时数据，故此处自计；span 状态/异常由 traced 收尾
             _log_tool_decision(tool_name, request.tool_call['args'],
                                round((time.perf_counter() - start) * 1000, 1), "", error=str(e))
             logger.error(f"monitor_tool called with exception :{str(e)}")
-            raise e
+            raise
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        # 结果摘要截 200，便于 Jaeger 中直接判断调用是否符合预期
+        result_summary = str(getattr(result, "content", result))
+        span.set_attribute("tool.result_summary", result_summary[:200])
+        _log_tool_decision(tool_name, request.tool_call['args'], duration_ms, result_summary)
+        logger.info(f"monitor_tool called with result :{result}")
+
+        if tool_name == 'fill_report_context_for_report':
+            request.runtime.context["report"] = True
+        return result
 
 
 @wrap_model_call
@@ -95,29 +93,12 @@ def trace_model_call(
     handler 返回 ModelResponse（structured_response 为 AIMessage）或 AIMessage 本身，
     两种形态都从其上读 usage_metadata。
     """
-    tracer = get_tracer()
-    with tracer.start_as_current_span("agent.reason") as span:
-        start = time.perf_counter()
-        try:
-            response = handler(request)
-            span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
-            span.set_attribute("status", "success")
-            msg = getattr(response, "structured_response", response)
-            usage = getattr(msg, "usage_metadata", None)
-            record_usage(span, usage)
-            # Token 统计（session 累计 + SSE [METRICS] 推送）
-            with contextlib.suppress(Exception):
-                from utils.token_counter import get_token_counter
-                model_name = (getattr(msg, "response_metadata", None) or {}).get("model_name", "")
-                if usage:
-                    get_token_counter().record_usage(usage, model_name)
-                else:
-                    content = str(getattr(msg, "content", ""))
-                    get_token_counter().record_estimated(str(getattr(request, "system_prompt", "") or ""), content, model_name)
-            return response
-        except Exception as e:
-            record_exception(span, e)
-            raise
+    with traced("agent.reason") as span:
+        response = handler(request)
+        # Token 统计（session 累计 + SSE [METRICS] 推送）+ span 属性；内部静默不影响业务
+        record_usage(span, account_response(
+            response, fallback_prompt=str(getattr(request, "system_prompt", "") or "")))
+        return response
 
 @before_model
 def log_before_model(

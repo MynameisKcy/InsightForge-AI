@@ -2,10 +2,11 @@
 Agent base class: provides common utilities for all agents.
 """
 
-import contextlib
 import json
 
 from model.factory import get_chat_model
+from utils.token_counter import account_response
+from utils.tracing import record_usage, traced
 
 
 class BaseAgent:
@@ -19,14 +20,7 @@ class BaseAgent:
 
     def _call_llm(self, messages: list[dict]) -> str:
         """调用 LLM 并返回文本结果（带 OTel Span：agent.name + token usage）。"""
-        import time
-
         from langchain_core.messages import HumanMessage, SystemMessage
-
-        try:
-            from agent.utils.tracing import get_tracer, record_exception, record_usage
-        except ModuleNotFoundError:
-            from utils.tracing import get_tracer, record_exception, record_usage
 
         lc_messages = []
         for m in messages:
@@ -35,32 +29,14 @@ class BaseAgent:
             elif m["role"] == "user":
                 lc_messages.append(HumanMessage(content=m["content"]))
 
-        tracer = get_tracer()
-        with tracer.start_as_current_span("llm.call") as span:
-            span.set_attribute("agent.name", self.name)
-            prompt_len = sum(len(m["content"]) for m in messages)
-            span.set_attribute("llm.prompt_length", prompt_len)
-            start = time.perf_counter()
-            try:
-                response = self.model.invoke(lc_messages)
-                span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
-                span.set_attribute("status", "success")
-                usage = getattr(response, "usage_metadata", None)
-                record_usage(span, usage)
-                # Token 统计（session 累计 + SSE [METRICS] 推送）；失败不影响 LLM 调用本身
-                with contextlib.suppress(Exception):
-                    from utils.token_counter import get_token_counter
-                    model_name = (getattr(response, "response_metadata", None) or {}).get("model_name", "")
-                    counter = get_token_counter()
-                    if usage:
-                        counter.record_usage(usage, model_name)
-                    else:
-                        counter.record_estimated("\n".join(m["content"] for m in messages),
-                                                 str(response.content), model_name)
-                return response.content.strip()
-            except Exception as e:
-                record_exception(span, e)
-                raise
+        with traced("llm.call", attrs={"agent.name": self.name}) as span:
+            span.set_attribute("llm.prompt_length",
+                               sum(len(m["content"]) for m in messages))
+            response = self.model.invoke(lc_messages)
+            # Token 统计（session 累计 + SSE [METRICS] 推送）+ span 属性；内部静默不影响业务
+            record_usage(span, account_response(
+                response, fallback_prompt="\n".join(m["content"] for m in messages)))
+            return response.content.strip()
 
     def _parse_json(self, text: str) -> dict:
         """从 LLM 返回的文本中提取 JSON。"""

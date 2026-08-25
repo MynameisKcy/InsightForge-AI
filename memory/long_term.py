@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
+from utils.tracing import traced
 
 DB_PATH = get_abs_path("database/memory.db")
 
@@ -122,11 +123,8 @@ class LongTermMemory:
 
     def get_recent_summaries(self, user_id: str, limit: int = 5) -> list[dict]:
         """获取用户最近的对话摘要（含 session_id，便于按会话归属；带 OTel Span：memory.recall）。"""
-        from utils.tracing import get_tracer
-
-        with get_tracer().start_as_current_span("memory.recall") as span:
-            span.set_attribute("memory.user_id", user_id)
-            span.set_attribute("memory.limit", limit)
+        with traced("memory.recall", attrs={"memory.user_id": user_id,
+                                            "memory.limit": limit}) as span:
             with self._get_conn() as conn:
                 rows = conn.execute(
                     "SELECT session_id, summary, turn_count, created_at FROM memory_summaries "

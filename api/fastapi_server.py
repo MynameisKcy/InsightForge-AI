@@ -27,13 +27,20 @@ from fastapi.staticfiles import StaticFiles
 
 from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
 from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
+from utils.decision_log import set_decision_publisher
 from utils.path_tool import get_abs_path
+from utils.progress_emitter import emitter_bridge
+from utils.token_counter import set_metrics_publisher
 from utils.tracing import init_tracing
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
 
 # ── 可观测性：OpenTelemetry 初始化（OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
 init_tracing()
+# 观测模块不感知 SSE 传输：[METRICS]/[DECISION] 事件经发布器注入，
+# 桥接到当前请求的进度通道（chat_stream 内 ProgressEmitter）
+set_metrics_publisher(emitter_bridge("metrics"))
+set_decision_publisher(emitter_bridge("decision"))
 
 
 # ── 静态资源禁用浏览器强缓存 ──
