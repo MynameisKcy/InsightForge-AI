@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator
 
 from api.serialization import _to_web_path
 from api.sse import _split_sentences, _stream_with_heartbeat
+from utils import sse_protocol as sp
 from utils.logger_handler import logger
 from utils.progress_emitter import ProgressEmitter
 from utils.tracing import (
@@ -24,26 +25,25 @@ from utils.tracing import (
     span_context,
 )
 
-_THINKING_MARKER = "[THINKING]"
-_KEEPALIVE_FRAME = "data: [KEEPALIVE]\n\n"
+_KEEPALIVE_FRAME = sp.frame(sp.KEEPALIVE)
 
 
 def progress_event_token(event: dict) -> str:
     """进度事件按 type 路由为 SSE 帧：metrics→看板 / decision→决策卡 / 其余→步骤清单。"""
     etype = event.get("type", "")
     if etype == "metrics":
-        return f"data: [METRICS:{json.dumps(event, ensure_ascii=False)}]\n\n"
+        return sp.frame(sp.METRICS, json.dumps(event, ensure_ascii=False))
     if etype == "decision":
-        return f"data: [DECISION:{json.dumps(event, ensure_ascii=False)}]\n\n"
-    return f"data: [STEP:{json.dumps(event, ensure_ascii=False)}]\n\n"
+        return sp.frame(sp.DECISION, json.dumps(event, ensure_ascii=False))
+    return sp.frame(sp.STEP, json.dumps(event, ensure_ascii=False))
 
 
 def thinking_token(chunk: str) -> str | None:
     """思考状态指示帧；非 THINKING 块返回 None。"""
     stripped = chunk.strip()
-    if stripped.startswith(_THINKING_MARKER):
-        payload = stripped[len(_THINKING_MARKER):]
-        return f"data: {_THINKING_MARKER}{payload}\n\n"
+    marker = f"[{sp.THINKING}]"
+    if stripped.startswith(marker):
+        return sp.frame(sp.THINKING, stripped[len(marker):])
     return None
 
 
@@ -99,12 +99,12 @@ async def stream_chat_sse(
     existing_charts = snapshot_charts(charts_dir)
     try:
         # 通知前端 session_id + trace_id（可在 Jaeger 中直接检索本次请求链路）
-        yield f"data: [SESSION]{session_id}\n\n"
+        yield sp.frame(sp.SESSION, session_id)
         trace_id = span_context()
         if trace_id:
-            yield f"data: [TRACE]{trace_id}\n\n"
+            yield sp.frame(sp.TRACE, trace_id)
         if new_session:
-            yield "data: [SESSIONS_RELOAD]\n\n"
+            yield sp.frame(sp.SESSIONS_RELOAD)
 
         emitter = ProgressEmitter()
         cancelled = False
@@ -176,9 +176,9 @@ async def stream_chat_sse(
         # ── 检测新生成的图表文件并发送给前端，URL 嵌入正文供历史会话恢复 ──
         chart_urls = diff_new_charts(charts_dir, existing_charts)
         for url in chart_urls:
-            yield f"data: [CHART:{url}]\n\n"
+            yield sp.frame(sp.CHART, url)
         if chart_urls:
-            full_response += "\n\n" + "\n".join(f"[CHART:{u}]" for u in chart_urls)
+            full_response += "\n\n" + "\n".join(f"[{sp.CHART}:{u}]" for u in chart_urls)
 
         # 存入短期 + 长期记忆（由 MemoryService 外观统一编排）
         cleaned = full_response.strip()
@@ -187,11 +187,11 @@ async def stream_chat_sse(
                 user_id, session_id, query, cleaned,
                 input_tokens=getattr(agent, '_last_input_tokens', None),
             )
-        yield "data: [DONE]\n\n"
+        yield sp.frame(sp.DONE)
     except Exception as e:
         record_exception(root_span, e)
         logger.error(f"Chat streaming error: {e}")
-        yield f"data: [ERROR] {str(e)}\n\n"
+        yield sp.frame(sp.ERROR, str(e))
     finally:
         detach_current_span(_root_token)
         root_span.end()

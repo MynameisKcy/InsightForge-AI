@@ -6,6 +6,42 @@ let authToken = Auth.getToken();
 let accountName = '';
 let currentSessionId = '';
 
+// ── SSE 协议词汇（与 utils/sse_protocol.py 锁步，tests/test_sse_protocol.py 校验）──
+// 服务端是发射方；本表是前端消费侧唯一词表，业务代码禁止散写 '[XXX]' 字面量。
+var SSE_PROTOCOL = {
+  THINKING:        '[THINKING]',
+  SESSION:         '[SESSION]',
+  SESSIONS_RELOAD: '[SESSIONS_RELOAD]',
+  TRACE:           '[TRACE]',
+  STEP:            '[STEP]',
+  KEEPALIVE:       '[KEEPALIVE]',
+  DONE:            '[DONE]',
+  ERROR:           '[ERROR]',
+  CHART:           '[CHART]',
+  METRICS:         '[METRICS]',
+  DECISION:        '[DECISION]'
+};
+// 线上词汇 '[TOKEN]' → 裸名 'TOKEN'（processLine 判定用）
+var SSE_TOKENS = {};
+(function () { for (var k in SSE_PROTOCOL) SSE_TOKENS[SSE_PROTOCOL[k].slice(1, -1)] = k; })();
+
+// 统一帧解析：'[TOKEN]payload' 或 '[TOKEN:payload]' → {token, payload}；
+// 非 token 行返回 null（调用方回落正文）。语义与 Python 侧 parse_frame 一致：
+// 包裹式（STEP/METRICS/DECISION/CHART）行尾最后一个 ']' 是终结符，
+// payload 内部可含 ']'；裸式 payload 为 ']' 后的全部文本。
+function parseSSEFrame(data) {
+  var m = /^\[([A-Z_]+)/.exec(data);
+  if (!m) return null;
+  var token = m[1], rest = data.slice(m[0].length);
+  if (rest.charAt(0) === ':') {
+    var p = rest.slice(1);
+    if (p.charAt(p.length - 1) === ']') p = p.slice(0, -1);
+    return {token: token, payload: p};
+  }
+  if (rest.charAt(0) === ']') return {token: token, payload: rest.slice(1)};
+  return null;
+}
+
 if (!authToken) { window.location.href = '/'; }
 
 document.getElementById('userDisplay').innerHTML = (window.Icons ? window.Icons.user : '👤') +
@@ -467,7 +503,13 @@ async function streamChat(text, bubble) {
     if (!line.startsWith('data: ')) return false;
     const data = line.slice(6);
 
-    if (data === '[DONE]') {
+    // 统一帧解析（词表见文件顶部 SSE_PROTOCOL）；未知 token / 非帧文本回落正文
+    const frame = parseSSEFrame(data);
+    const tok = frame ? frame.token : '';
+
+    if (tok === 'TRACE') return false;   // Jaeger 链路诊断用，前端不渲染
+
+    if (tok === 'DONE') {
       // 报告类内容（含 markdown 标题或较长正文）流结束后追加导出按钮
       if (fullText && fullText.length > 50 && /^#{1,3}\s/m.test(fullText)) {
         appendExportBar(bubble, fullText);
@@ -475,12 +517,12 @@ async function streamChat(text, bubble) {
       return false;
     }
 
-    if (data === '[KEEPALIVE]') return false;   // 心跳保活：仅 resetIdle，不渲染
+    if (tok === 'KEEPALIVE') return false;   // 心跳保活：仅 resetIdle，不渲染
 
-    if (data.startsWith('[STEP:')) {
+    if (tok === 'STEP') {
       // 分析步骤进度：在 bubble 内渲染/更新步骤清单，并同步状态行
       var stepData;
-      try { stepData = JSON.parse(data.slice(6, -1).trim()); } catch (e) { return false; }
+      try { stepData = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
       if (statusEl) statusEl.style.display = 'flex';
       var prog = bubble.querySelector('.step-progress');
       if (stepData.type === 'plan') {
@@ -526,32 +568,32 @@ async function streamChat(text, bubble) {
       return false;
     }
 
-    if (data.startsWith('[ERROR]')) {
-      bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(data.slice(7))}</span>`;
+    if (tok === 'ERROR') {
+      bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(frame.payload)}</span>`;
       errorRendered = true;
       if (statusEl) statusEl.style.display = 'none';
       return true;
     }
 
-    if (data.startsWith('[METRICS:')) {
+    if (tok === 'METRICS') {
       // Token/成本看板：值为该会话的服务端累计值，直接覆盖显示
       var m;
-      try { m = JSON.parse(data.slice(9, -1).trim()); } catch (e) { return false; }
+      try { m = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
       updateMetricsPanel(m);
       return false;
     }
 
-    if (data.startsWith('[DECISION:')) {
+    if (tok === 'DECISION') {
       // Agent 决策卡片：LLM 推理 / 工具调用决策（渐进增强，渲染失败不影响对话流）
       var d;
-      try { d = JSON.parse(data.slice(10, -1).trim()); } catch (e) { return false; }
+      try { d = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
       renderDecisionCard(bubble, d);
       scrollToBottom();
       return false;
     }
 
-    if (data.startsWith('[THINKING]')) {
-      const status = data.slice(10);
+    if (tok === 'THINKING') {
+      const status = frame.payload;
       if (statusEl) {
         statusEl.style.display = 'flex';
         statusEl.querySelector('.status-text').textContent = escapeHtml(status);
@@ -560,21 +602,21 @@ async function streamChat(text, bubble) {
       return false;
     }
 
-    if (data.startsWith('[SESSION]')) {
-      var newSid = data.slice(9);
+    if (tok === 'SESSION') {
+      var newSid = frame.payload;
       if (newSid !== currentSessionId) resetMetricsPanel();   // 换会话看板归零
       currentSessionId = newSid;
       updateActiveSession();
       return false;
     }
 
-    if (data === '[SESSIONS_RELOAD]') {
+    if (tok === 'SESSIONS_RELOAD') {
       loadSessions();
       return false;
     }
 
-    if (data.startsWith('[CHART:')) {
-      const chartUrl = data.slice(7, -1).trim();
+    if (tok === 'CHART') {
+      const chartUrl = frame.payload.trim();
       // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
       if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
         const iframe = document.createElement('iframe');
@@ -1327,8 +1369,9 @@ async function deleteFile(name, type) {
 // ── 图表标记解析：从存储文本中提取 [CHART:url] 并渲染为 iframe ──
 // 返回 { text: 剥离标记后的纯文本, chartUrls: 图表 URL 数组 }
 function _extractCharts(text) {
+  var chartTok = SSE_PROTOCOL.CHART.slice(1, -1);   // 'CHART'（词表取词，禁散写字面量）
   var chartUrls = [];
-  var re = /\[CHART:([^\]]+)\]/g;
+  var re = new RegExp('\\[' + chartTok + ':([^\\]]+)\\]', 'g');
   var m;
   while ((m = re.exec(text)) !== null) {
     var url = m[1].trim();
@@ -1336,7 +1379,7 @@ function _extractCharts(text) {
       chartUrls.push(url);
     }
   }
-  var cleaned = text.replace(/\[CHART:[^\]]+\]\n*/g, '').trim();
+  var cleaned = text.replace(new RegExp('\\[' + chartTok + ':[^\\]]+\\]\\n*', 'g'), '').trim();
   return { text: cleaned, chartUrls: chartUrls };
 }
 
