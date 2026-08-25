@@ -42,6 +42,13 @@ def test_build_trend_summary_normal_numeric_unchanged():
 from agents.trend_agent import TrendAgent
 
 
+class _SentinelModel:
+    """哨兵模型：run() 的统计路径不碰 LLM；误触即 AttributeError 显式失败。
+
+    注入它跳过 factory 构造真实 DashScope 客户端（该构造单次 ~8s，是纯浪费）。
+    """
+
+
 def _df_to_json(records):
     import json
     return json.dumps(records, ensure_ascii=False)
@@ -59,7 +66,7 @@ def test_trend_agent_text_only_df_no_crash():
         {"Country Name": "A", "Indicator Name": "foo"},
         {"Country Name": "B", "Indicator Name": "bar"},
     ])
-    result = TrendAgent().run({"dataframe_json": df_json})
+    result = TrendAgent(model=_SentinelModel()).run({"dataframe_json": df_json})
     assert "error" in result  # 入口层显式拦截,非底层非数值回退
     assert "str" not in str(result)  # 无原始 TypeError 痕迹
 
@@ -76,7 +83,7 @@ def test_trend_agent_picks_numeric_column():
         {"val": 120.0, "Country Name": "B"},
         {"val": 90.0, "Country Name": "C"},
     ])
-    result = TrendAgent().run({"dataframe_json": df_json})
+    result = TrendAgent(model=_SentinelModel()).run({"dataframe_json": df_json})
     # 不应崩溃,且应产生趋势摘要(选了 val 数值列)
     assert "trend_summary" in result
     assert "error" not in result or result.get("error") is None

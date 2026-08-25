@@ -28,10 +28,11 @@ class TrendAgent(BaseAgent):
 
     name = "trend_agent"
 
-    def __init__(self, user_id=None):
+    def __init__(self, user_id=None, model=None):
         # user_id 透传给 BaseAgent → factory 按用户解析 LLM 配置（网页设置 > .env）。
         # 不传则回退默认配置（.env 模型），多用户下会 403/串配置。
-        super().__init__(user_id=user_id)
+        # model= 注入优先（测试注入哨兵可跳过真客户端构造；与其他子 Agent 一致）。
+        super().__init__(user_id=user_id, model=model)
 
     def run(self, input_data: dict) -> dict:
         """
