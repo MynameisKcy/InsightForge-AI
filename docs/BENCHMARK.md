@@ -1,6 +1,6 @@
 # 性能基准与 RAG 评估说明
 
-两个评估入口：**端到端性能基准**（`scripts/benchmark.py`）与 **RAG 质量评估**（`agent/tests/rag_eval/`）。
+两个评估入口：**端到端性能基准**（`scripts/benchmark.py`）与 **RAG 质量评估**（`tests/rag_eval/`）。
 
 ---
 
@@ -21,7 +21,7 @@ python scripts/benchmark.py --iterations 3 --base-url http://localhost:8502
 ```
 
 脚本自动完成：注册临时 bench 用户 → 检查数据集（无则生成 200 行样例销售 CSV 并上传）→
-5 类查询（计数/趋势/对比/异常/总结）× N 轮 → 统计输出并落盘 `agent/logs/benchmark_results.json`。
+5 类查询（计数/趋势/对比/异常/总结）× N 轮 → 统计输出并落盘 `logs/benchmark_results.json`。
 
 ### 1.3 结果解读
 
@@ -48,7 +48,7 @@ python scripts/benchmark.py --iterations 3 --base-url http://localhost:8502
 
 ---
 
-## 2. RAG 质量评估（agent/tests/rag_eval/）
+## 2. RAG 质量评估（tests/rag_eval/）
 
 ### 2.1 设计
 
@@ -57,7 +57,7 @@ python scripts/benchmark.py --iterations 3 --base-url http://localhost:8502
 - **隔离**：独立 collection + 临时持久化目录（沿用 `test_vector_store_isolation.py`
   的 `__new__` 注入惯例），真实跑「查询改写 → 向量召回 → rerank 精排 → 生成」全链路，
   不污染真实知识库
-- **门控**：`rag_eval` marker 默认排除（`agent/pytest.ini`），显式运行才执行，
+- **门控**：`rag_eval` marker 默认排除（`pytest.ini`），显式运行才执行，
   存量 178 个测试与无 Key 的 CI 不受影响
 
 ### 2.2 两层评估
@@ -68,9 +68,7 @@ python scripts/benchmark.py --iterations 3 --base-url http://localhost:8502
 | 端到端（LLM judge） | `test_rag_quality.py` | + `requirements-eval.txt`（ragas） | faithfulness / answer_relevancy / context_precision | ≥ 0.80 / 0.85 / 0.75 |
 
 ```bash
-cd agent
-
-# 快速回归（推荐日常）
+# 快速回归（推荐日常，仓库根直跑）
 python -m pytest tests/rag_eval/test_rag_retrieval_hit.py -m rag_eval -v
 
 # ragas 全量（先装评估依赖）
@@ -81,7 +79,7 @@ python -m pytest tests/rag_eval/test_rag_quality.py -m rag_eval -v -s
 ### 2.3 版本说明（重要）
 
 ragas **0.1.x 依赖老版 langchain API，与本项目 langchain 1.3 冲突**，因此评估依赖
-单独放 `agent/requirements-eval.txt`（ragas 0.2.x，`LangchainLLMWrapper` 包装项目模型），
+单独放 `requirements-eval.txt`（ragas 0.2.x，`LangchainLLMWrapper` 包装项目模型），
 不进主 requirements，避免污染运行时。未安装 ragas 时 `test_rag_quality.py` 自动 skip。
 
 ### 2.4 未达标时调什么

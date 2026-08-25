@@ -15,7 +15,7 @@ cp .env.example .env          # 填入 DASHSCOPE_API_KEY
 python -m api.fastapi_server  # http://localhost:8502
 ```
 
-启用链路追踪：仓库根 `docker-compose up -d jaeger`，再在 `agent/.env` 打开
+启用链路追踪：仓库根 `docker-compose up -d jaeger`，再在仓库根 `.env` 打开
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`，重启服务。
 
 ---
@@ -35,7 +35,7 @@ docker-compose up -d          # 或 ./scripts/deploy.sh（预检 + 60s 探活重
 
 ### 数据持久化
 
-容器内 `/app` 等价于本地 `agent/` 目录，以下宿主目录为卷挂载，重启/重建容器不丢数据：
+容器内 `/app` 等价于本地仓库根目录，以下宿主目录为卷挂载，重启/重建容器不丢数据：
 
 | 宿主路径 | 容器路径 | 内容 |
 |----------|----------|------|
@@ -81,7 +81,7 @@ chmod +x scripts/deploy.sh && ./scripts/deploy.sh
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `DASHSCOPE_API_KEY` | ✅ | 通义千问 API Key（也可网页「账号设置」里配，优先级更高） |
-| `CHAT_MODEL_NAME` | — | 对话模型（默认取 `agent/config/rag.yml`） |
+| `CHAT_MODEL_NAME` | — | 对话模型（默认取 `config/rag.yml`） |
 | `EMBEDDING_MODEL_NAME` | — | 嵌入模型 |
 | `INSIGHTFORGE_SETTINGS_KEY` | — | 用户配置加密密钥（缺失自动生成） |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | **OTel 开关**：设置即启用链路上报（如 `http://jaeger:4318`） |
