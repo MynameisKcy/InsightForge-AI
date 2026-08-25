@@ -34,6 +34,19 @@ def _get_memory_service(user_id: str = "default"):
     return _memory_service
 
 
+def begin_memory_turn(user_id: str, session_id: str = "", query: str = ""):
+    """begin_turn 括号入口收口：返回 (turn, err)。
+
+    会话不存在/无权时 turn 为 None、err 为错误文案（路由统一回 404）；
+    成功时 err 为空串。chat/analysis 两路由各自的 try/except PermissionError
+    由此收敛为一处。
+    """
+    try:
+        return _get_memory_service(user_id).begin_turn(user_id, session_id, query), ""
+    except PermissionError as e:
+        return None, str(e)
+
+
 # ── Agent 实例（按 user_id 隔离：各用户独立实例，用自己的 LLM 配置） ──
 # 旧设计是进程级单例，导致 per-user LLM 配置要么失效（单例已建）要么泄漏（首次构建用
 # 某用户配置服务所有人）。改为按 user_id 缓存独立实例，配置变更时丢弃对应用户实例。

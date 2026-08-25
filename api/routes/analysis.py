@@ -25,11 +25,11 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
 
     user_id = user["user_id"]
     session_id = body.get("session_id", "").strip()
-    try:
-        turn = deps._get_memory_service(user_id).begin_turn(user_id, session_id, query)
-        session_id = turn.session_id
-    except PermissionError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+    # ── 会话管理 + Session Memory（括号入口收口于 deps.begin_memory_turn）──
+    turn, err = deps.begin_memory_turn(user_id, session_id, query)
+    if turn is None:
+        return JSONResponse({"error": err}, status_code=404)
+    session_id = turn.session_id
 
     try:
         analyst = deps._get_planner_agent(user_id)
