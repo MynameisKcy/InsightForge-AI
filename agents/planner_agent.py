@@ -3,7 +3,6 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 """
 
 import os
-import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FuturesTimeout
@@ -25,7 +24,7 @@ from memory.short_term import get_session
 from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
 from utils.logger_handler import logger
 from utils.progress_emitter import get_progress_emitter
-from utils.tracing import get_tracer, record_exception
+from utils.tracing import ATTR_STATUS, traced
 
 # ── 阶段级容错（pipeline-fault-tolerance spec）──
 # agent_name → PipelineContext 结果字段：失败时向该字段写降级占位 {"error":...}，
@@ -221,20 +220,15 @@ class PlannerAgent(BaseAgent):
         # 详见 docs/adr/0002-query-rewriting-two-points.md
         plan_query = self._rewrite_query(query, ctx.user_id, ctx.session_id)
 
-        tracer = get_tracer()
-        with tracer.start_as_current_span("planner.plan") as plan_span:
-            plan_span.set_attribute("planner.query_length", len(plan_query))
-            try:
-                plan_data = self._create_plan(plan_query, history)
-                plan = plan_data.get("plan", [])
-                title = plan_data.get("title", "数据分析报告")
-                reasoning = plan_data.get("reasoning", "")
-                plan_span.set_attribute("planner.step_count", len(plan))
-                plan_span.set_attribute("planner.title", title[:100])
-                plan_span.set_attribute("planner.reasoning", reasoning[:200])
-            except Exception as e:
-                record_exception(plan_span, e)
-                raise
+        with traced("planner.plan",
+                    attrs={"planner.query_length": len(plan_query)}) as plan_span:
+            plan_data = self._create_plan(plan_query, history)
+            plan = plan_data.get("plan", [])
+            title = plan_data.get("title", "数据分析报告")
+            reasoning = plan_data.get("reasoning", "")
+            plan_span.set_attribute("planner.step_count", len(plan))
+            plan_span.set_attribute("planner.title", title[:100])
+            plan_span.set_attribute("planner.reasoning", reasoning[:200])
 
         if not plan:
             # 如果 LLM 规划失败，使用默认计划
@@ -294,17 +288,14 @@ class PlannerAgent(BaseAgent):
             self._emit_progress("step_start", {"step": step_num})
 
             # 每步一个 planner.step span（观测）包住 _execute_step（阶段级容错）；
-            # _execute_step 吞异常降级、只回状态，故 span 状态由返回值呈现
+            # _execute_step 吞异常降级、只回状态，故 mark_success=False、span 状态由返回值呈现
             status = "failed"
-            _step_ts = time.perf_counter()
-            with get_tracer().start_as_current_span("planner.step") as step_span:
-                step_span.set_attribute("planner.step_index", step_num)
-                step_span.set_attribute("planner.agent_name", agent_name)
+            with traced("planner.step",
+                        attrs={"planner.step_index": step_num,
+                               "planner.agent_name": agent_name},
+                        mark_success=False) as step_span:
                 status = self._execute_step(step, pctx, ctx)
-                step_span.set_attribute(
-                    "planner.duration_ms",
-                    round((time.perf_counter() - _step_ts) * 1000, 1))
-                step_span.set_attribute("status", "success" if status == "ok" else "error")
+                step_span.set_attribute(ATTR_STATUS, "success" if status == "ok" else "error")
             # 仅成功才标记完成（_execute_step 内部已 add completed_steps）；
             # 失败标记 error，避免 UI 把失败步骤误显示为 ✓
             if status == "ok":

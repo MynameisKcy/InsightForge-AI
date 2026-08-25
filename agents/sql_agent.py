@@ -10,7 +10,7 @@ import pandas as pd
 from agents.base import BaseAgent
 from database.duckdb_manager import init_duckdb
 from utils.logger_handler import logger
-from utils.tracing import get_tracer, record_exception
+from utils.tracing import get_tracer, record_exception, traced
 
 SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用户的数据分析需求和数据库 Schema，生成可执行的 DuckDB SQL 语句。
 
@@ -76,13 +76,8 @@ class SQLAgent(BaseAgent):
 
         # 生成 SQL
         tracer = get_tracer()
-        with tracer.start_as_current_span("sql.generate") as gen_span:
-            gen_span.set_attribute("sql.task_length", len(task))
-            try:
-                sql = self._generate_sql(task, table_name)
-            except Exception as e:
-                record_exception(gen_span, e)
-                raise
+        with traced("sql.generate", attrs={"sql.task_length": len(task)}) as gen_span:
+            sql = self._generate_sql(task, table_name)
             gen_span.set_attribute("sql.has_joins", "JOIN" in sql.upper())
             gen_span.set_attribute("sql.length", len(sql))
         if not sql:

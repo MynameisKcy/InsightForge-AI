@@ -3,20 +3,20 @@
 开关逻辑（决策 D1）：未设置 OTEL_EXPORTER_OTLP_ENDPOINT 时保持 NoOp tracer——
 本地开发零开销零报错；docker-compose 注入 endpoint 后自动启用真实导出。
 
-使用方式：
-    try:
-        from agent.utils.tracing import get_tracer, traced
-    except ModuleNotFoundError:
-        from utils.tracing import get_tracer, traced
+使用方式（traced 是全仓唯一的 Span 生命周期入口：计时/状态/异常自动收尾）：
+    from utils.tracing import traced
 
-    @traced("sql.execute")
-    def execute(query: str) -> dict: ...
+    with traced("sql.generate", agent_name="sql") as span:
+        span.set_attribute("sql.length", len(sql))   # 块内补属性
+        ...
+状态由返回值决定的场景用 mark_success=False 自管（如 planner.step）。
+无法用 with 包裹整段的场景（异步生成器、循环多返回点）用
+attach_current_span/detach_current_span 手动对。
 """
 import contextlib
 import os
 import threading
 import time
-from functools import wraps
 
 from opentelemetry import trace
 from opentelemetry.context import attach as _ctx_attach
@@ -79,30 +79,30 @@ def record_usage(span: trace.Span, usage: dict | None) -> None:
         span.set_attribute("llm.output_tokens", usage.get("output_tokens", 0))
 
 
-def traced(span_name: str, **static_attrs):
-    """通用装饰器：同步函数 Span + 计时 + 异常记录。
+@contextlib.contextmanager
+def traced(span_name: str, attrs: dict | None = None, *, mark_success: bool = True):
+    """通用上下文管理器：Span + 计时 + 状态/异常自动收尾（全仓唯一生命周期入口）。
 
     Args:
-        span_name: Span 名称（如 "sql.execute"）
-        **static_attrs: 写入 Span 的静态属性（如 agent_name="sql"）
+        span_name: Span 名称（如 "llm.call"）
+        attrs: 进入时写入的属性字典（键用 OTel 惯例的点号风格，如 {"agent.name": "sql"}）
+        mark_success: 正常退出时是否写 status=success。状态由返回值决定的场景
+            （如 planner.step 的 ok/error）传 False 由调用方自管。
+
+    yield 出 Span 供块内补属性；异常统一 record_exception 后原样上抛。
     """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            with get_tracer().start_as_current_span(span_name) as span:
-                for k, v in static_attrs.items():
-                    span.set_attribute(k, v)
-                start = time.perf_counter()
-                try:
-                    result = func(*args, **kwargs)
-                    span.set_attribute(ATTR_DURATION_MS, round((time.perf_counter() - start) * 1000, 1))
-                    span.set_attribute(ATTR_STATUS, "success")
-                    return result
-                except Exception as e:
-                    record_exception(span, e)
-                    raise
-        return wrapper
-    return decorator
+    with get_tracer().start_as_current_span(span_name) as span:
+        for k, v in (attrs or {}).items():
+            span.set_attribute(k, v)
+        start = time.perf_counter()
+        try:
+            yield span
+            span.set_attribute(ATTR_DURATION_MS, round((time.perf_counter() - start) * 1000, 1))
+            if mark_success:
+                span.set_attribute(ATTR_STATUS, "success")
+        except Exception as e:
+            record_exception(span, e)
+            raise
 
 
 def span_context():

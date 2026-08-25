@@ -7,6 +7,10 @@
 
 文件按 日期_用户 分片（logs/decisions/2026-09-10_u_xxx.jsonl），多用户不混写。
 写入失败静默——决策日志是旁路能力，不允许影响主流程。
+
+SSE 解耦：本模块不感知传输层——组合根（api/fastapi_server.py）经
+set_decision_publisher 注入发布器（progress_emitter.emitter_bridge("decision")）；
+未接线时 [DECISION] 事件静默丢弃，JSONL 落盘不受影响。
 """
 import contextlib
 import json
@@ -16,16 +20,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
-try:
-    from utils.path_tool import get_abs_path
-except ModuleNotFoundError:
-    from agent.utils.path_tool import get_abs_path
-
-try:
-    from utils.request_context import get_session_id, get_user_id
-except ModuleNotFoundError:
-    from agent.utils.request_context import get_session_id, get_user_id
+from utils.path_tool import get_abs_path
+from utils.request_context import get_session_id, get_user_id
 
 _write_lock = threading.Lock()
 
@@ -76,10 +74,19 @@ def make_decision(**kwargs) -> AgentDecision:
     return AgentDecision(**kwargs)
 
 
+_publisher: Callable[[dict], None] | None = None
+
+
+def set_decision_publisher(publisher: Callable[[dict], None]) -> None:
+    """注入 [DECISION] 事件发布器（组合根接线；传 None 撤销）。"""
+    global _publisher
+    _publisher = publisher
+
+
 def emit_decision(payload: dict) -> None:
-    """把决策推送为 SSE [DECISION] 事件（无进度通道/失败均静默）。"""
+    """把决策经注入的发布器外发为 [DECISION] 事件（未接线/失败均静默）。"""
+    publisher = _publisher
+    if publisher is None:
+        return
     with contextlib.suppress(Exception):
-        from utils.progress_emitter import get_progress_emitter
-        emitter = get_progress_emitter()
-        if emitter is not None:
-            emitter.emit("decision", payload)
+        publisher(payload)

@@ -15,10 +15,7 @@ from utils.config_handler import rag_conf
 from utils.logger_handler import logger
 from utils.prompt_loader import load_rag_prompts
 
-try:
-    from utils.tracing import get_tracer, record_exception
-except ModuleNotFoundError:
-    from agent.utils.tracing import get_tracer, record_exception
+from utils.tracing import get_tracer, record_exception, traced
 
 
 class RagSummarizerService:
@@ -118,30 +115,27 @@ class RagSummarizerService:
     def retriever_docs(self, query: str, user_id: str | None = None) -> list[Document]:
         # 多查询扩展 + 粗召回大候选池 + rerank 精排，提升中文检索召回率与相关性
         # （详见 docs/adr/0002-query-rewriting-two-points.md）
-        with get_tracer().start_as_current_span("rag.retrieve") as span:
-            span.set_attribute("rag.query", query[:200])
-            span.set_attribute("rag.k", self.retrieve_k)
-            span.set_attribute("rag.user_id", user_id or "")
-            try:
-                queries = self._expand_queries(query, user_id)
-                span.set_attribute("rag.expanded_query_count", len(queries))
-                seen_ids: set[str] = set()
-                coarse: list[Document] = []
-                for q in queries:
-                    for doc in self._coarse_retrieve(q, user_id):
-                        did = self._doc_id(doc)
-                        if did in seen_ids:
-                            continue
-                        seen_ids.add(did)
-                        coarse.append(doc)
-                span.set_attribute("rag.coarse_count", len(coarse))
-                # 精排仍用原始 query 打分（改写只为扩大召回，不参与排序）
-                final = self._rerank(query, coarse)
-                span.set_attribute("rag.results_count", len(final))
-                return final
-            except Exception as e:
-                record_exception(span, e)
-                raise
+        with traced("rag.retrieve", attrs={
+                "rag.query": query[:200],
+                "rag.k": self.retrieve_k,
+                "rag.user_id": user_id or "",
+        }) as span:
+            queries = self._expand_queries(query, user_id)
+            span.set_attribute("rag.expanded_query_count", len(queries))
+            seen_ids: set[str] = set()
+            coarse: list[Document] = []
+            for q in queries:
+                for doc in self._coarse_retrieve(q, user_id):
+                    did = self._doc_id(doc)
+                    if did in seen_ids:
+                        continue
+                    seen_ids.add(did)
+                    coarse.append(doc)
+            span.set_attribute("rag.coarse_count", len(coarse))
+            # 精排仍用原始 query 打分（改写只为扩大召回，不参与排序）
+            final = self._rerank(query, coarse)
+            span.set_attribute("rag.results_count", len(final))
+            return final
 
     @staticmethod
     def _format_doc_source(doc: Document, index: int) -> str:
