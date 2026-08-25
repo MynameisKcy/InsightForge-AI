@@ -25,6 +25,7 @@ from agent.tools.middleware import (
 from model.factory import get_chat_model
 from utils.logger_handler import logger
 from utils.prompt_loader import load_system_prompts
+from utils.sse_protocol import inband_thinking
 
 
 class ReactAgent:
@@ -136,7 +137,7 @@ class ReactAgent:
                     tool_name = tc.get("name", "")
                     if tool_name in local_tool_names and tool_name not in displayed_tool_messages:
                         displayed_tool_messages.add(tool_name)
-                        yield f"[THINKING]{local_tool_names[tool_name]}\n"
+                        yield inband_thinking(local_tool_names[tool_name])
 
             # 检测工具返回结果
             from langchain_core.messages import ToolMessage

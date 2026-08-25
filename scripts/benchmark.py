@@ -22,6 +22,8 @@ from pathlib import Path
 
 import requests
 
+from utils.sse_protocol import DONE, ERROR, METRICS, parse_frame
+
 QUERIES = [
     "数据里一共有多少条记录？",
     "按月份统计销售额趋势",
@@ -96,14 +98,15 @@ def run_one(base_url: str, token: str, query: str) -> tuple[float, dict | None, 
         if not line.startswith("data: "):
             continue
         data = line[6:]
-        if data.startswith("[METRICS:"):
+        tok, payload = parse_frame(data)
+        if tok == METRICS:
             try:
-                last_metrics = json.loads(data[9:-1].strip())
+                last_metrics = json.loads(payload.strip())
             except json.JSONDecodeError:
                 pass
-        elif data.startswith("[ERROR]"):
-            error = data[7:]
-        elif data == "[DONE]":
+        elif tok == ERROR:
+            error = payload
+        elif tok == DONE:
             break
     return time.perf_counter() - start, last_metrics, error
 
