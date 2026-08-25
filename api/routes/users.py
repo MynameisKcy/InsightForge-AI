@@ -1,4 +1,6 @@
 """用户账号路由：注册/登录/登出/当前用户信息/昵称/改密。"""
+import contextlib
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
@@ -11,6 +13,7 @@ from api.auth import (
 )
 from database.user_db import user_db
 from utils.logger_handler import logger
+from utils.token_counter import get_token_counter
 
 router = APIRouter()
 
@@ -76,6 +79,13 @@ async def api_logout(request: Request):
     if token:
         user_db.logout(token)
         invalidate_token(token)
+    # 会话级 token 统计随登出清理（可观测性 plan §4.2⑥）；body 未带 session_id（旧客户端）时跳过
+    session_id = ""
+    with contextlib.suppress(Exception):
+        body = await request.json()
+        session_id = str(body.get("session_id") or "")
+    if session_id:
+        get_token_counter().clear_session(session_id)
     resp = JSONResponse(content={"success": True})
     # 清除会话 cookie，避免登出后仍能凭 cookie 通过 /app 导航鉴权
     resp.delete_cookie(AUTH_COOKIE_NAME, path="/")
