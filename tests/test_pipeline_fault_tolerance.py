@@ -42,7 +42,7 @@ class ExecuteStepTests(unittest.TestCase):
 
     def test_timeout_treated_as_failure_with_degradation(self):
         def slow(task, pctx, ctx):
-            time.sleep(2)  # 超时后仍残留运行，但不写 pctx → 无竞态
+            time.sleep(0.8)  # 只需明显长于 0.5s 超时；超时后仍残留运行，但不写 pctx → 无竞态
         p = _planner_with_map({"trend_analysis": slow})
         pctx = PipelineContext()
         step = {"step": 1, "agent": "trend_analysis", "task": "t", "depends_on": []}
@@ -53,7 +53,7 @@ class ExecuteStepTests(unittest.TestCase):
             elapsed = time.monotonic() - start
 
         self.assertEqual(status, "failed")
-        self.assertLess(elapsed, 1.5)  # 0.5s 超时即返回，不等满 2s
+        self.assertLess(elapsed, 1.5)  # 0.5s 超时即返回，不等满 slow 的 0.8s
         self.assertNotIn(1, pctx.completed_steps)
         self.assertIn("超时", pctx.trend_result["error"])
 

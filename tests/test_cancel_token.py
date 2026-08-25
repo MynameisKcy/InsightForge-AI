@@ -103,7 +103,7 @@ def test_stream_with_heartbeat_swallows_error_after_cancel():
 
     def gen():
         yield "开头。"
-        release.wait(2)
+        release.wait(0.3)  # 本测试从不 set release：等短超时即可触发收尾异常（原 2s 纯属等待浪费）
         token.cancel()
         raise RuntimeError("producer 收尾爆炸")
 
