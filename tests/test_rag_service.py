@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 from langchain_core.documents import Document
 
 from rag.rag_service import RagSummarizerService
+from utils.config_handler import chroma_conf
+from utils.path_tool import get_abs_path
 from utils.prompt_loader import load_rag_prompts
 from utils.report_exporter import build_report_filename, is_report_content, to_markdown_bytes
 
@@ -125,6 +128,65 @@ class RagServiceTests(unittest.TestCase):
         self.assertTrue(is_report_content(content))
         self.assertTrue(build_report_filename(content).startswith("user_report_1001_5_"))
         self.assertEqual(to_markdown_bytes(content), content.strip().encode("utf-8"))
+
+
+class FormatContextBlockTests(unittest.TestCase):
+    """上下文块格式化契约：生产 rag_summarize 与 ragas 评估共用的唯一实现
+    （架构评审 R2 候选8——评估锁步生产 prompt，生产一改格式评估自动跟随）。"""
+
+    def test_formats_docs_with_numbering_content_and_metadata(self):
+        from rag.rag_service import format_context_block
+
+        docs = [
+            Document(page_content="甲内容", metadata={"source": "a.txt"}),
+            Document(page_content="乙内容", metadata={}),
+        ]
+
+        self.assertEqual(
+            format_context_block(docs),
+            "[参考资料1] 内容:甲内容 | 元数据:{'source': 'a.txt'}\n"
+            "[参考资料2] 内容:乙内容 | 元数据:{}\n",
+        )
+
+    def test_empty_docs_returns_empty_string(self):
+        from rag.rag_service import format_context_block
+
+        self.assertEqual(format_context_block([]), "")
+
+
+class ConstructorInjectionTests(unittest.TestCase):
+    """构造期注入接缝（替代 conftest 的 monkeypatch+__new__ 隔离手法）。"""
+
+    def test_rag_summarizer_uses_injected_vector_store_and_skips_default(self):
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        stub_store = DummyVectorStore(DummyRetrieverWithInvoke())
+        # 链组装 prompt_template | model 要求 Runnable，用零网络假模型
+        with patch("rag.rag_service.get_chat_model",
+                   return_value=FakeListChatModel(responses=["ok"])), \
+             patch("rag.rag_service.VectorStoreService",
+                   side_effect=AssertionError("注入生效时不应构造默认向量库")):
+            service = RagSummarizerService(vector_store=stub_store)
+
+        self.assertIs(service.vector_store, stub_store)
+
+    def test_vector_store_persist_directory_param_overrides_config_default(self):
+        import rag.vector_store as vs_mod
+
+        recorded = {}
+
+        class RecordingChroma:
+            def __init__(self, **kwargs):
+                recorded.update(kwargs)
+
+        with patch.object(vs_mod, "Chroma", RecordingChroma), \
+             patch.object(vs_mod, "get_embed_model", return_value=object()):
+            vs_mod.VectorStoreService(collection_name="ut_iso_a", persist_directory="/tmp/iso_x")
+            self.assertEqual(recorded["persist_directory"], "/tmp/iso_x")
+
+            vs_mod.VectorStoreService(collection_name="ut_iso_b")
+            self.assertEqual(recorded["persist_directory"],
+                             get_abs_path(chroma_conf["persist_directory"]))
 
 
 class _ScriptedVectorStore:

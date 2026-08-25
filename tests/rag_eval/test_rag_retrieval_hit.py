@@ -4,7 +4,7 @@
 检查 ground_truth 关键词是否出现在检索结果中。
 可作为 ragas 评估之外的快速回归信号（只花 embedding + rerank 费用，不花 LLM 生成）。
 
-运行：cd agent && python -m pytest tests/rag_eval/test_rag_retrieval_hit.py -m rag_eval -v
+运行：python -m pytest tests/rag_eval/test_rag_retrieval_hit.py -m rag_eval -v
 """
 import pytest
 
@@ -18,8 +18,8 @@ def test_retrieval_hit_rate(retrieved_contexts):
     hits = 0
     misses = []
     for case in TEST_CASES:
-        contexts = retrieved_contexts.get(case["question"], [])
-        joined = "\n".join(contexts)
+        docs = retrieved_contexts.get(case["question"], [])
+        joined = "\n".join(d.page_content for d in docs)
         if any(kw in joined for kw in case["keywords"]):
             hits += 1
         else:

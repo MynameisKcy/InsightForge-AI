@@ -18,9 +18,24 @@ from utils.prompt_loader import load_rag_prompts
 from utils.tracing import get_tracer, record_exception, traced
 
 
+def format_context_block(docs: list[Document]) -> str:
+    """把检索文档格式化为提示词上下文块——全仓唯一实现。
+
+    生产 rag_summarize 与 ragas 评估（tests/rag_eval）共用此函数：
+    评估度量的就是生产 prompt，生产格式一改评估自动锁步（架构评审 R2 候选8）。
+    空列表返回空串。
+    """
+    context = ""
+    for counter, doc in enumerate(docs, start=1):
+        context += f"[参考资料{counter}] 内容:{doc.page_content} | 元数据:{doc.metadata}\n"
+    return context
+
+
 class RagSummarizerService:
-    def __init__(self):
-        self.vector_store = VectorStoreService()
+    def __init__(self, vector_store: VectorStoreService | None = None):
+        # 注入优先：评估/测试传隔离实例（独立 persist 目录 + 唯一 collection），
+        # 不传则构造生产向量库（默认知识库 collection）
+        self.vector_store = vector_store or VectorStoreService()
         # 注意：不构造无 owner 过滤的 retriever——检索一律走
         # retriever_docs → _coarse_retrieve → similarity_search(user_id=...)，
         # 按 owner 隔离（自己 + 公共 system）；无过滤 retriever 属泄漏旁路，已删除。
@@ -166,12 +181,7 @@ class RagSummarizerService:
 
     def rag_summarize(self, query: str, user_id: str | None = None) -> str:
         context_docs = self.retriever_docs(query, user_id)
-
-        context = ""
-        counter = 0
-        for doc in context_docs:
-            counter += 1
-            context += f"[参考资料{counter}] 内容:{doc.page_content} | 元数据:{doc.metadata}\n"
+        context = format_context_block(context_docs)
 
         answer = self._get_chain(user_id).invoke(
             {
