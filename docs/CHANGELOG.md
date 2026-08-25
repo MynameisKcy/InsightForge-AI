@@ -2,6 +2,7 @@
 
 ### 未发布
 
+- refactor(api): 聊天流线协议出路由（架构评审第2轮候选2）——新增 `api/chat_stream.py` 收口 /api/chat 的 SSE 线协议全权实现（preamble token/进度事件路由/THINKING 切片/句子节奏/断连采样心跳必检+每20chunk抽检/图表 diff 下发与正文嵌入/end_turn 持久化+取消路径三不做），依赖（agent/memory_service/is_disconnected/charts_dir）显式参数注入；route 薄化为请求解析+auth+接缝+StreamingResponse 组装（192→57 行）；`deps.begin_memory_turn` 收口 chat/analysis 两路由的 PermissionError→404 括号。行为字节级不变（0.06s/0.03s 节奏、采样频率、TestClient 断连误报规避均保留）；新增 tests/test_chat_stream_pipeline.py 15 例直测（断连采样/取消路径等端点测试够不着的分支）
 - refactor(export): 报告 Markdown 方言解析收口——新增 `agents/markdown_blocks.py` 纯函数块解析器(标题/竖线表格/图片引用/列表/分隔线/空行 → Block, 零 FS 访问), `ExportAgent` Word/PDF/HTML 三份遍历器折叠为其上的薄渲染 adapter, 行内标记转换语义留各格式; 顺修三处副本漂移: Word 对 `---` 渲染分隔线(原字面横杠段落)、表格分隔行判定统一为逐格含 `--`(原 Word/PDF 整行子串匹配)、HTML 图片引用解析失败改输出占位文字(原输出破图 `<img>`); 无分隔行表格 HTML 表头/表体归位(原全渲染成 th)。MD 直通内联路径不变
 - refactor(cleanup): 删 fastapi_server 兼容再导出层——测试引用迁至属主模块(`api.sse._stream_with_heartbeat` / `api.deps._get_vector_store` / `database.user_settings_db`), `conftest._swap` 收敛为 deps 单属主(缺名即断言失败), auth 导入缩减为实际使用项; `.gitignore` 删已不存在的 plans/specs/superpowers 条目并忽略本机产物(`tmp-kaleido/` `.tmp/` `.zcode/` `*.db.bak`)
 - refactor(api): 拆分 fastapi_server 巨石——1252 行组装根收敛为 ~110 行 + `api/deps.py`(服务接缝) + `api/sse.py`(线程->异步流式桥) + `api/serialization.py` + `api/routes/` 八模块(chat/analysis/datasets/knowledge/sessions/settings/users/pages)；测试换桩目标从 `api.fastapi_server` 迁至属主模块(conftest `_swap` 优先 `api.deps`)
