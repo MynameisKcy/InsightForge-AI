@@ -320,9 +320,11 @@ function newSession() {
 }
 
 function logout() {
+  // 带上当前会话 id：后端登出时同步清理该会话的 token 统计（plan §4.2⑥）
   Auth.authedFetch('/api/logout', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken}
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken},
+    body: JSON.stringify({session_id: currentSessionId})
   });
   Auth.clearToken();
   sessionStorage.removeItem('account');

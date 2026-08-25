@@ -241,6 +241,54 @@ def test_app_no_redirect_loop_when_authenticated():
     assert app_page.status_code == 200, "仍存在 /app 重定向循环"
 
 
+def test_logout_clears_session_token_stats(monkeypatch):
+    """plan §4.2⑥ 收口：登出请求带 session_id 时，同步清理该会话的 token 统计。"""
+    from fastapi.testclient import TestClient
+
+    import api.routes.users as users_mod
+    from api.fastapi_server import app
+    cleared = []
+
+    class _FakeCounter:
+        def clear_session(self, sid):
+            cleared.append(sid)
+
+    # raising=False：接缝尚未实现时以行为断言失败（RED），而非 setup 报错
+    monkeypatch.setattr(users_mod, "get_token_counter", lambda: _FakeCounter(),
+                        raising=False)
+    client = TestClient(app)
+    acct = _uniq_account("logoutsid")
+    _register(acct)
+    tok = _login(acct)["token"]
+    r = client.post("/api/logout", json={"session_id": "s42"},
+                    headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    assert cleared == ["s42"]
+
+
+def test_logout_without_session_id_skips_counter_cleanup(monkeypatch):
+    """未带 session_id（旧客户端）时不得误清任何会话统计。"""
+    from fastapi.testclient import TestClient
+
+    import api.routes.users as users_mod
+    from api.fastapi_server import app
+    cleared = []
+
+    class _FakeCounter:
+        def clear_session(self, sid):
+            cleared.append(sid)
+
+    monkeypatch.setattr(users_mod, "get_token_counter", lambda: _FakeCounter(),
+                        raising=False)
+    client = TestClient(app)
+    acct = _uniq_account("logoutnosid")
+    _register(acct)
+    tok = _login(acct)["token"]
+    r = client.post("/api/logout", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    assert cleared == []
+
+
 def test_bearer_only_request_refreshes_cookie():
     """回归：仅带 Authorization: Bearer（前端 localStorage token）、无 cookie 的请求，
     中间件应自动补种 token cookie，使随后页面导航 /app 通过。
