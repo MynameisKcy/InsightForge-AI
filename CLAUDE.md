@@ -25,7 +25,7 @@ pip install -r requirements.txt
 conda activate AnalysisAgent && python -m api.fastapi_server
 
 # Run tests — targeted first (default): only the files related to the change.
-# The full suite is ~428 tests / ~50s; run it only when necessary
+# The full suite is ~432 tests / ~52s; run it only when necessary
 # (cross-module refactors, or one final green run before claiming completion).
 conda activate AnalysisAgent && python -m pytest tests/test_export_agent.py -q   # targeted
 conda activate AnalysisAgent && python -m pytest tests/ -q                       # full suite

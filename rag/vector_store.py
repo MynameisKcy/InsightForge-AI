@@ -41,7 +41,8 @@ def _load_file_documents(read_path: str) -> list[Document]:
 
 
 class VectorStoreService:
-    def __init__(self, config_path="config/rag.yml", collection_name: str | None = None):
+    def __init__(self, config_path="config/rag.yml", collection_name: str | None = None,
+                 persist_directory: str | None = None):
         self.config_path = config_path
         # collection_name=None 用默认知识库 collection；传 MEMORY_COLLECTION 走跨会话记忆召回
         self.collection_name = collection_name or chroma_conf["collection_name"]
@@ -52,7 +53,7 @@ class VectorStoreService:
             # 按用户隔离的是 chat 模型（factory.get_chat_model(user_id)），
             # 不是 embedding。
             embedding_function=get_embed_model(),
-            persist_directory=get_abs_path(chroma_conf["persist_directory"]),
+            persist_directory=persist_directory or get_abs_path(chroma_conf["persist_directory"]),
         )
         self.spliter = RecursiveCharacterTextSplitter(
             chunk_size=chroma_conf["chunk_size"],
