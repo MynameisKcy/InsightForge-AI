@@ -19,6 +19,7 @@ from utils.cancel_token import CancelToken
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 from utils.progress_emitter import ProgressEmitter
+from utils.tracing import attach_current_span, detach_current_span, record_exception, span_context
 
 router = APIRouter()
 
@@ -51,6 +52,12 @@ async def api_chat(request: Request, user=Depends(require_auth)):
 
     async def generate() -> AsyncGenerator[str, None]:
         full_response = ""
+        # ── 请求级根 Span：SSE 流式期间保持打开，子 Span 经 copy_context 关联 ──
+        root_span, _root_token = attach_current_span("http.request")
+        root_span.set_attribute("http.route", "/api/chat")
+        root_span.set_attribute("http.user_id", user_id)
+        root_span.set_attribute("http.session_id", session_id)
+        root_span.set_attribute("http.query_length", len(query))
         # ── 记录分析前已有的图表文件，用于后续检测新图表 ──
         charts_dir = get_abs_path("reports/charts")
         existing_charts = set()
@@ -59,8 +66,11 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                 if f.endswith(".html"):
                     existing_charts.add(os.path.join(charts_dir, f))
         try:
-            # 通知前端 session_id
+            # 通知前端 session_id + trace_id（可在 Jaeger 中直接检索本次请求链路）
             yield f"data: [SESSION]{session_id}\n\n"
+            trace_id = span_context()
+            if trace_id:
+                yield f"data: [TRACE]{trace_id}\n\n"
             if new_session:
                 yield "data: [SESSIONS_RELOAD]\n\n"
 
@@ -94,6 +104,14 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                     yield value
                     continue
                 if kind == "progress":
+                    # 进度事件按 type 路由：metrics→Token 看板；decision→决策卡片；其余→步骤清单
+                    etype = value.get("type", "")
+                    if etype == "metrics":
+                        yield f"data: [METRICS:{json.dumps(value, ensure_ascii=False)}]\n\n"
+                        continue
+                    if etype == "decision":
+                        yield f"data: [DECISION:{json.dumps(value, ensure_ascii=False)}]\n\n"
+                        continue
                     # 步骤进度事件：下发 [STEP:json]，前端渲染步骤清单
                     yield f"data: [STEP:{json.dumps(value, ensure_ascii=False)}]\n\n"
                     continue
@@ -156,8 +174,12 @@ async def api_chat(request: Request, user=Depends(require_auth)):
                 )
             yield "data: [DONE]\n\n"
         except Exception as e:
+            record_exception(root_span, e)
             logger.error(f"Chat streaming error: {e}")
             yield f"data: [ERROR] {str(e)}\n\n"
+        finally:
+            detach_current_span(_root_token)
+            root_span.end()
 
     return StreamingResponse(
         generate(),

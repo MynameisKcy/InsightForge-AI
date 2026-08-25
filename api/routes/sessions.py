@@ -1,4 +1,6 @@
 """会话管理路由：/api/sessions CRUD + 遗留 /api/conversation/history。"""
+import contextlib
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
@@ -48,6 +50,10 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
         deps._get_memory_service(user_id).delete_session(user_id, session_id)
     except PermissionError:
         return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+    # 同步清掉该会话的 Token 统计（看板数据不留死键）
+    with contextlib.suppress(Exception):
+        from utils.token_counter import get_token_counter
+        get_token_counter().clear_session(session_id)
     return JSONResponse(content={"ok": True, "session_id": session_id})
 
 

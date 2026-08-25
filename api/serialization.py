@@ -17,17 +17,21 @@ def _sanitize_result(result: dict) -> dict:
 
 
 def _json_safe(obj):
-    """递归把 NaN/Infinity 转成 None（JSON null）。
+    """递归把 NaN/Infinity 转成 None（JSON null），pd.Timestamp 转 ISO 字符串。
 
     DuckDB 数值列含空单元格时，pandas to_dict 会产出 float('nan')，
     FastAPI JSONResponse（allow_nan=False）序列化会抛
     "Out of range float values are not JSON compliant"。此处统一清洗。
+    日期列的 pd.Timestamp 同样无法被 JSONResponse 序列化（上传含日期列
+    数据集报 500 的根因），一并转 ISO 字符串。
     """
     import math
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
+    if type(obj).__name__ == "Timestamp":  # duck-typing，避免为单个类型引入 pandas
+        return obj.isoformat()
     if isinstance(obj, dict):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

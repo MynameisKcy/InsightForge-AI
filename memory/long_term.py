@@ -121,14 +121,21 @@ class LongTermMemory:
         logger.info(f"Saved summary for user {user_id} session {session_id} ({turn_count} turns)")
 
     def get_recent_summaries(self, user_id: str, limit: int = 5) -> list[dict]:
-        """获取用户最近的对话摘要（含 session_id，便于按会话归属）。"""
-        with self._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT session_id, summary, turn_count, created_at FROM memory_summaries "
-                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-                (user_id, limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
+        """获取用户最近的对话摘要（含 session_id，便于按会话归属；带 OTel Span：memory.recall）。"""
+        from utils.tracing import get_tracer
+
+        with get_tracer().start_as_current_span("memory.recall") as span:
+            span.set_attribute("memory.user_id", user_id)
+            span.set_attribute("memory.limit", limit)
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT session_id, summary, turn_count, created_at FROM memory_summaries "
+                    "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (user_id, limit),
+                ).fetchall()
+                results = [dict(r) for r in rows]
+            span.set_attribute("memory.results_count", len(results))
+            return results
 
     def get_user_history(self, user_id: str, limit: int = 50) -> list[dict]:
         """获取用户完整历史记录。"""

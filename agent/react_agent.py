@@ -16,7 +16,12 @@ from agent.tools.agent_tools import (
     rag_sumarize,
     run_full_analysis,
 )
-from agent.tools.middleware import log_before_model, monitor_tool, report_prompt_switch
+from agent.tools.middleware import (
+    log_before_model,
+    monitor_tool,
+    report_prompt_switch,
+    trace_model_call,
+)
 from model.factory import get_chat_model
 from utils.logger_handler import logger
 from utils.prompt_loader import load_system_prompts
@@ -32,7 +37,7 @@ class ReactAgent:
                    get_data_overview, quick_data_insight, get_chart_insights,
                    get_customer_overview_tool, get_customer_stats_tool,
                    list_user_files, document_report],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch],
+            middleware=[monitor_tool, log_before_model, report_prompt_switch, trace_model_call],
         )
 
     def execute_stream(self, query: str, history: list[dict] | None = None,
@@ -140,12 +145,23 @@ class ReactAgent:
                 if tool_name in local_tool_names:
                     displayed_tool_messages.discard(tool_name)
 
-            # 输出 AI 回复内容（过滤内部推理）
+            # 输出 AI 回复内容（过滤内部推理：转决策事件推送前端，不再静默丢弃）
             if isinstance(latest, AIMessage) and latest.content:
                 text = latest.content.strip()
                 # 记录最近一次有内容的 AIMessage（最终答案，含完整上下文的 token 用量）
                 final_ai_msg = latest
                 if _is_internal_monologue(text):
+                    if len(text) >= 10:   # 过短过渡句仍静默
+                        try:
+                            from utils.decision_log import (
+                                emit_decision,
+                                log_decision,
+                                make_decision,
+                            )
+                            log_decision(make_decision(source="react_agent", reasoning=text[:500]))
+                            emit_decision({"source": "react_agent", "reasoning": text[:500]})
+                        except Exception:
+                            pass
                     continue
                 yield text + "\n"
 

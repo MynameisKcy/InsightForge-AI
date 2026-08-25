@@ -6,7 +6,7 @@ import json
 
 import pandas as pd
 
-from agents.base import BaseAgent
+from agents.base import BaseAgent, parse_json_list
 from rag.chart_knowledge import chart_knowledge
 from utils.logger_handler import logger
 from visualization.charts import ChartGenerator, chart_png_path
@@ -212,6 +212,7 @@ class VisualizationAgent(BaseAgent):
                 )
 
         # 通用情况：清理并验证 spec 中的列名，语义化标签原样透传
+        # 列表列名（多序列 y_col 等）由 _resolve_column 的 list 分支统一解析
         validated = {}
         for k, v in spec.items():
             if k in ("chart_type", "title", "reason"):
@@ -220,8 +221,6 @@ class VisualizationAgent(BaseAgent):
                 validated[k] = self._resolve_column(df, v, prefer="object")
             elif k in ("y_col", "values_col"):
                 validated[k] = self._resolve_column(df, v, prefer="number")
-            elif k in ("x_label", "y_label"):
-                validated[k] = v
             else:
                 validated[k] = v
         return ChartGenerator.auto_chart(df, chart_type, title=title, **validated)
@@ -236,18 +235,15 @@ class VisualizationAgent(BaseAgent):
         messages = [{"role": "user", "content": prompt}]
         response = self._call_llm(messages)
 
-        # 解析 JSON 数组
-        try:
-            parsed = json.loads(response)
-            if isinstance(parsed, list):
-                return parsed
-            return []
-        except json.JSONDecodeError:
-            # 尝试提取
-            result = self._parse_json(response)
-            if isinstance(result, dict) and "raw" not in result:
-                return [result]
-            return []
+        # 解析 JSON 数组：qwen3.7 等模型会加 ```json 围栏，parse_json_list 统一容忍
+        specs = [s for s in parse_json_list(response) if isinstance(s, dict)]
+        if specs:
+            return specs
+        # 兼容对象型输出（单图规格）：包一层返回
+        result = self._parse_json(response)
+        if isinstance(result, dict) and "raw" not in result:
+            return [result]
+        return []
 
     def _data_summary(self, df: pd.DataFrame) -> dict:
         """构建喂给 LLM 的数据概况：列/dtype + 数值列统计 + 类别列高频值。"""
