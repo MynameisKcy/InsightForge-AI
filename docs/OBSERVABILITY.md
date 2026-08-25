@@ -8,7 +8,7 @@ InsightForge AI 的可观测性由三部分组成：**OpenTelemetry 链路追踪
 
 ### 1.1 开关
 
-OTel 采用 **endpoint 即开关** 的设计（`agent/utils/tracing.py`）：
+OTel 采用 **endpoint 即开关** 的设计（`utils/tracing.py`）：
 
 | 场景 | 行为 |
 |------|------|
@@ -23,7 +23,7 @@ Docker 部署（`docker-compose.yml`）自动注入 `http://jaeger:4318`，无�
 # 仓库根起 Jaeger（仅 OTLP + UI 端口）
 docker-compose up -d jaeger
 
-# agent/.env 取消注释
+# 仓库根 .env 取消注释
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 OTEL_SERVICE_NAME=insightforge
 
@@ -85,7 +85,7 @@ OTEL_SERVICE_NAME=insightforge
 
 ### 2.2 JSONL 格式
 
-文件：`agent/logs/decisions/{YYYY-MM-DD}_{user_id}.jsonl`（按日+用户分片，线程安全写入）
+文件：`logs/decisions/{YYYY-MM-DD}_{user_id}.jsonl`（按日+用户分片，线程安全写入）
 
 ```json
 {"timestamp": "2026-09-10T08:30:15+00:00", "user_id": "u_xxx", "session_id": "s_xxx",
@@ -94,7 +94,7 @@ OTEL_SERVICE_NAME=insightforge
  "execution_time_ms": 3210.5, "result_summary": "前 200 字符摘要..."}
 ```
 
-排查某用户某天的完整决策序列：`cat agent/logs/decisions/2026-09-10_u_xxx.jsonl | jq .`
+排查某用户某天的完整决策序列：`cat logs/decisions/2026-09-10_u_xxx.jsonl | jq .`
 
 ---
 
@@ -102,10 +102,10 @@ OTEL_SERVICE_NAME=insightforge
 
 - 挂点：`BaseAgent._call_llm`（全部子 Agent）+ `@wrap_model_call` 中间件（ReactAgent），
   读取 LangChain `usage_metadata`；缺失时按「字符数 ÷ 4」估算并标注 `estimated`。
-- 计价：`agent/utils/token_counter.py` 的 `PRICE_TABLE_CNY_PER_K`（qwen-turbo/plus/max，
+- 计价：`utils/token_counter.py` 的 `PRICE_TABLE_CNY_PER_K`（qwen-turbo/plus/max，
   元/千 token），可用环境变量 `TOKEN_PRICE_INPUT/OUTPUT` 覆盖；未知模型按 qwen-plus 计。
 - 展示：每次 LLM 调用累计后推送 SSE `[METRICS:{json}]`，前端侧边栏「会话统计」实时更新；
-  删除会话时统计同步清除。
+  删除会话/登出（请求带 session_id）时统计同步清除。
 - 局限：进程内存计数（单副本 uvicorn 够用），服务重启清零；RAG 生成链（chain 返回 str）一期未覆盖。
 
 ---
