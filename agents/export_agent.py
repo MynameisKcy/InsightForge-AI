@@ -17,11 +17,14 @@ from agents.markdown_blocks import (
     Blank,
     Heading,
     HorizontalRule,
-    Image as MdImage,
     ListItem,
-    Paragraph as MdParagraph,
-    Table as MdTable,
     parse_markdown_blocks,
+)
+from agents.markdown_blocks import (
+    Image as MdImage,
+)
+from agents.markdown_blocks import (
+    Table as MdTable,
 )
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path

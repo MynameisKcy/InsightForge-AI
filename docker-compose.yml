@@ -1,0 +1,35 @@
+# InsightForge AI — 应用 + 可观测性一键编排
+# 用法：
+#   cp .env.example .env   # 填入 DASHSCOPE_API_KEY
+#   docker-compose up -d
+# 访问：
+#   Demo:   http://localhost:8502
+#   Jaeger: http://localhost:16686   （链路追踪，建议生产环境仅内网开放）
+services:
+  insightforge:
+    build: .
+    container_name: insightforge-ai
+    ports:
+      - "8502:8502"
+    volumes:
+      # get_abs_path() 根 = agent/ 目录（容器内 /app），数据全部落在其下
+      - ./data:/app/data
+      - ./chroma_db:/app/chroma_db
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      # OTel 开关：设置 endpoint 即启用链路上报（不设则 NoOp）
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_SERVICE_NAME=insightforge
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: insightforge-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4318:4318"    # OTLP HTTP 接收
+    restart: unless-stopped

@@ -1,5 +1,6 @@
 """SSE 流式管道工具：句子拆分 + 同步生成器的线程/心跳桥。"""
 import asyncio
+import contextvars
 import re as re_module
 import threading
 import traceback
@@ -49,7 +50,10 @@ async def _stream_with_heartbeat(sync_gen_factory, heartbeat: str, interval: flo
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
 
-    t = threading.Thread(target=_producer, daemon=True)
+    # 把当前 contextvars（含 OTel trace 上下文）复制进后台线程：
+    # 裸 Thread 不继承 contextvar，不复制则线程内所有 Span 会与请求根 Span 断链
+    producer_ctx = contextvars.copy_context()
+    t = threading.Thread(target=lambda: producer_ctx.run(_producer), daemon=True)
     t.start()
     try:
         while True:

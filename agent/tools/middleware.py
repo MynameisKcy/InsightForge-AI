@@ -1,15 +1,49 @@
+import contextlib
+import time
 from collections.abc import Callable
 
 from langchain.agents import AgentState
-from langchain.agents.middleware import ModelRequest, before_model, dynamic_prompt, wrap_tool_call
+from langchain.agents.middleware import (
+    ModelRequest,
+    before_model,
+    dynamic_prompt,
+    wrap_model_call,
+    wrap_tool_call,
+)
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 
+from utils.decision_log import emit_decision, log_decision, make_decision
 from utils.logger_handler import logger
 from utils.prompt_loader import load_report_prompts, load_system_prompts
 from utils.request_context import get_session_id, get_user_id
+from utils.tracing import get_tracer, record_exception, record_usage
+
+
+def _log_tool_decision(tool_name: str, tool_args, duration_ms: float,
+                       result_summary: str, error: str = "") -> None:
+    """工具决策：JSONL 落盘 + SSE [DECISION] 推送（旁路能力，失败静默）。"""
+    try:
+        decision = make_decision(
+            source="tool_call",
+            tool_selected=tool_name,
+            tool_args=tool_args if isinstance(tool_args, dict) else {"raw": str(tool_args)[:200]},
+            execution_time_ms=round(duration_ms, 1),
+            result_summary=(error or result_summary)[:200],
+        )
+        log_decision(decision)
+        emit_decision({
+            "source": "tool_call",
+            "tool": tool_name,
+            "timing_ms": decision.execution_time_ms,
+            "args": decision.tool_args,
+            "result_summary": decision.result_summary,
+            "error": bool(error),
+        })
+    except Exception as e:
+        logger.debug(f"decision log failed: {e}")
 
 
 @wrap_tool_call
@@ -20,19 +54,70 @@ def monitor_tool(
         handler:Callable[[ToolCallRequest], ToolMessage | Command],
 
 ) -> ToolMessage | Command:
-    logger.info(f"monitor_tool called with {request.tool_call['name']}")
+    tool_name = request.tool_call['name']
+    logger.info(f"monitor_tool called with {tool_name}")
     logger.info(f"monitor_tool called with parameters :{request.tool_call['args']}")
 
-    try:
-        result = handler(request)
-        logger.info(f"monitor_tool called with result :{result}")
+    tracer = get_tracer()
+    with tracer.start_as_current_span(f"tool.{tool_name}") as span:
+        span.set_attribute("tool.name", tool_name)
+        span.set_attribute("tool.args", str(request.tool_call['args'])[:500])
+        start = time.perf_counter()
+        try:
+            result = handler(request)
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            span.set_attribute("duration_ms", duration_ms)
+            span.set_attribute("status", "success")
+            # 结果摘要截 200，便于 Jaeger 中直接判断调用是否符合预期
+            result_summary = str(getattr(result, "content", result))
+            span.set_attribute("tool.result_summary", result_summary[:200])
+            _log_tool_decision(tool_name, request.tool_call['args'], duration_ms, result_summary)
+            logger.info(f"monitor_tool called with result :{result}")
 
-        if request.tool_call['name'] == 'fill_report_context_for_report':
-            request.runtime.context["report"] = True
-        return result
-    except Exception as e:
-        logger.error(f"monitor_tool called with exception :{str(e)}")
-        raise e
+            if tool_name == 'fill_report_context_for_report':
+                request.runtime.context["report"] = True
+            return result
+        except Exception as e:
+            record_exception(span, e)
+            _log_tool_decision(tool_name, request.tool_call['args'],
+                               round((time.perf_counter() - start) * 1000, 1), "", error=str(e))
+            logger.error(f"monitor_tool called with exception :{str(e)}")
+            raise e
+
+
+@wrap_model_call
+def trace_model_call(
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], object],
+):
+    """ReactAgent 每次模型调用的追踪：Span agent.reason + token usage 统计。
+
+    handler 返回 ModelResponse（structured_response 为 AIMessage）或 AIMessage 本身，
+    两种形态都从其上读 usage_metadata。
+    """
+    tracer = get_tracer()
+    with tracer.start_as_current_span("agent.reason") as span:
+        start = time.perf_counter()
+        try:
+            response = handler(request)
+            span.set_attribute("duration_ms", round((time.perf_counter() - start) * 1000, 1))
+            span.set_attribute("status", "success")
+            msg = getattr(response, "structured_response", response)
+            usage = getattr(msg, "usage_metadata", None)
+            record_usage(span, usage)
+            # Token 统计（session 累计 + SSE [METRICS] 推送）
+            with contextlib.suppress(Exception):
+                from utils.token_counter import get_token_counter
+                model_name = (getattr(msg, "response_metadata", None) or {}).get("model_name", "")
+                if usage:
+                    get_token_counter().record_usage(usage, model_name)
+                else:
+                    content = str(getattr(msg, "content", ""))
+                    get_token_counter().record_estimated(str(getattr(request, "system_prompt", "") or ""), content, model_name)
+            return response
+        except Exception as e:
+            record_exception(span, e)
+            raise
 
 @before_model
 def log_before_model(

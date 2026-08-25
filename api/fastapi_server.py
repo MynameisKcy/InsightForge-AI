@@ -28,8 +28,12 @@ from fastapi.staticfiles import StaticFiles
 from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
 from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
 from utils.path_tool import get_abs_path
+from utils.tracing import init_tracing
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
+
+# ── 可观测性：OpenTelemetry 初始化（OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
+init_tracing()
 
 
 # ── 静态资源禁用浏览器强缓存 ──

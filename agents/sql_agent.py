@@ -3,12 +3,14 @@ SQL Agent: 自然语言 → SQL → DataFrame
 """
 
 import re
+import time
 
 import pandas as pd
 
 from agents.base import BaseAgent
 from database.duckdb_manager import init_duckdb
 from utils.logger_handler import logger
+from utils.tracing import get_tracer, record_exception
 
 SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用户的数据分析需求和数据库 Schema，生成可执行的 DuckDB SQL 语句。
 
@@ -73,7 +75,16 @@ class SQLAgent(BaseAgent):
             return {"error": "No task provided", "dataframe_json": "[]", "row_count": 0, "sql": ""}
 
         # 生成 SQL
-        sql = self._generate_sql(task, table_name)
+        tracer = get_tracer()
+        with tracer.start_as_current_span("sql.generate") as gen_span:
+            gen_span.set_attribute("sql.task_length", len(task))
+            try:
+                sql = self._generate_sql(task, table_name)
+            except Exception as e:
+                record_exception(gen_span, e)
+                raise
+            gen_span.set_attribute("sql.has_joins", "JOIN" in sql.upper())
+            gen_span.set_attribute("sql.length", len(sql))
         if not sql:
             return {"error": "Failed to generate SQL", "dataframe_json": "[]", "row_count": 0, "sql": ""}
 
@@ -82,8 +93,15 @@ class SQLAgent(BaseAgent):
         current_sql = sql
         last_error = None
         for attempt in range(max_retries + 1):
+            # start_span（非 current）：Span 内不产生子 Span，仅需挂到当前父 Span 之下
+            exec_span = tracer.start_span("sql.execute")
+            _exec_ts = time.perf_counter()
             try:
+                exec_span.set_attribute("sql.query", current_sql[:500])
+                exec_span.set_attribute("sql.attempt", attempt)
                 df = self.db.query_df(current_sql)
+                exec_span.set_attribute("sql.rows_returned", len(df))
+                exec_span.set_attribute("status", "success")
                 logger.info(f"SQLAgent executed query (attempt {attempt}), got {len(df)} rows")
                 return {
                     "sql": current_sql,
@@ -93,6 +111,7 @@ class SQLAgent(BaseAgent):
                 }
             except Exception as e:
                 last_error = e
+                record_exception(exec_span, e)
                 logger.error(f"SQL execution failed (attempt {attempt}): {e}")
                 if attempt >= max_retries:
                     break
@@ -103,6 +122,9 @@ class SQLAgent(BaseAgent):
                     break
                 current_sql = fixed_sql
                 logger.info(f"Retrying with LLM-regenerated SQL: {current_sql[:200]}")
+            finally:
+                exec_span.set_attribute("duration_ms", round((time.perf_counter() - _exec_ts) * 1000, 1))
+                exec_span.end()
 
         return {"error": str(last_error), "dataframe_json": "[]", "row_count": 0, "sql": current_sql}
 
