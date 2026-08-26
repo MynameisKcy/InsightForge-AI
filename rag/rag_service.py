@@ -10,7 +10,7 @@ from langchain_core.prompts import PromptTemplate
 
 from model.factory import get_chat_model
 from rag.retrieval_query_rewriter import RetrievalQueryRewriter
-from rag.vector_store import VectorStoreService
+from rag.vector_store import VectorStoreService, get_default_vector_store
 from utils.config_handler import rag_conf
 from utils.logger_handler import logger
 from utils.prompt_loader import load_rag_prompts
@@ -34,8 +34,8 @@ def format_context_block(docs: list[Document]) -> str:
 class RagSummarizerService:
     def __init__(self, vector_store: VectorStoreService | None = None):
         # 注入优先：评估/测试传隔离实例（独立 persist 目录 + 唯一 collection），
-        # 不传则构造生产向量库（默认知识库 collection）
-        self.vector_store = vector_store or VectorStoreService()
+        # 不传则取进程级共享单例（与 api.deps 同一实例，见 vector_store.get_default_vector_store）
+        self.vector_store = vector_store or get_default_vector_store()
         # 注意：不构造无 owner 过滤的 retriever——检索一律走
         # retriever_docs → _coarse_retrieve → similarity_search(user_id=...)，
         # 按 owner 隔离（自己 + 公共 system）；无过滤 retriever 属泄漏旁路，已删除。
@@ -191,6 +191,24 @@ class RagSummarizerService:
         )
         references = self.format_reference_sources(context_docs)
         return f"{answer.strip()}\n\n{references}"
+
+# 进程级摘要服务单例（先例：memory/recall.py:get_memory_recall）。
+# agent_tools 懒获取用——避免每次工具调用重建 service 连带重建 BM25 索引。
+_default_service = None
+
+
+def get_default_rag_summarizer():
+    global _default_service
+    if _default_service is None:
+        _default_service = RagSummarizerService()
+    return _default_service
+
+
+def reset_default_rag_summarizer() -> None:
+    """测试专用。"""
+    global _default_service
+    _default_service = None
+
 
 if __name__ == "__main__":
     rag = RagSummarizerService()

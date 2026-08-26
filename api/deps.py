@@ -82,13 +82,8 @@ def _invalidate_user_agents(user_id: str):
 
 
 # ── 知识库向量库服务（单例） ──
-_vector_store_service = None
-
-
 def _get_vector_store():
-    """延迟初始化向量库服务（方案C：运行时知识库管理）。"""
-    global _vector_store_service
-    if _vector_store_service is None:
-        from rag.vector_store import VectorStoreService
-        _vector_store_service = VectorStoreService()
-    return _vector_store_service
+    """延迟初始化向量库服务（方案C）；委托进程级单例，
+    与 RagSummarizerService 共享同一实例（Hybrid 索引一致性前提）。"""
+    from rag.vector_store import get_default_vector_store
+    return get_default_vector_store()
