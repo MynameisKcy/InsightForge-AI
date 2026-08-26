@@ -11,6 +11,7 @@ from api.auth import (
     require_auth,
     set_auth_cookie,
 )
+from api.errors import error_response
 from database.user_db import user_db
 from utils.logger_handler import logger
 from utils.token_counter import get_token_counter
@@ -124,7 +125,7 @@ async def api_update_profile(request: Request, user=Depends(require_auth)):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+        return error_response("请求体不是有效 JSON", 400)
     nickname = (body.get("nickname") or "").strip()
     if len(nickname) > 30:
         nickname = nickname[:30]
@@ -141,7 +142,7 @@ async def api_change_password(request: Request, user=Depends(require_auth)):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+        return error_response("请求体不是有效 JSON", 400)
     result = user_db.change_password(
         user_id, body.get("old_password", ""), body.get("new_password", "")
     )

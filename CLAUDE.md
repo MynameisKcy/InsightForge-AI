@@ -25,7 +25,7 @@ pip install -r requirements.txt
 conda activate AnalysisAgent && python -m api.fastapi_server
 
 # Run tests — targeted first (default): only the files related to the change.
-# The full suite is ~464 tests / ~54s; run it only when necessary
+# The full suite is ~470 tests / ~56s; run it only when necessary
 # (cross-module refactors, or one final green run before claiming completion).
 conda activate AnalysisAgent && python -m pytest tests/test_export_agent.py -q   # targeted
 conda activate AnalysisAgent && python -m pytest tests/ -q                       # full suite
@@ -77,6 +77,8 @@ All analysis agents extend `BaseAgent` (`agents/base.py`) which provides `_call_
 **Config truth source**: `.env` is authoritative for model names and API keys; YAML values are fallback only.
 
 ### FastAPI SSE Protocol
+
+**Error envelope**: all error responses use `{"success": false, "error": "..."}` via `error_response()` in `api/errors.py`; app-level exception handlers (registered in `fastapi_server`) normalize HTTPException/validation/unhandled exceptions to the same shape. Success bodies are not part of the envelope.
 
 The `/api/chat` endpoint streams events with special tokens: `[THINKING]`, `[SESSION]`, `[SESSIONS_RELOAD]`, `[CHART:url]`, `[STEP:{json}]` (pipeline step progress), `[KEEPALIVE]` (15s heartbeat), `[DONE]`, `[ERROR]`. (`[CONTEXT]` / `[AUDIT:text]` dormant branches removed — backend never emitted them.) Frontend is static files under `api/static/` (served with no-cache middleware + versioned query strings) — no separate frontend build.
 

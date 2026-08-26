@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from api.auth import require_auth
+from api.errors import error_response
 from database.dataset_service import DatasetServiceError, dataset_service
 from utils.logger_handler import logger
 
@@ -34,7 +35,7 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
     try:
         payload = dataset_service.upload(content, file.filename or "", user["user_id"])
     except DatasetServiceError as e:
-        return JSONResponse({"success": False, "error": e.message}, status_code=e.status_code)
+        return error_response(e.message, e.status_code)
     return JSONResponse(payload)
 
 
@@ -42,11 +43,11 @@ async def upload_dataset(request: Request, file: UploadFile = File(...), user=De
 async def delete_dataset(request: Request, name: str, user=Depends(require_auth)):
     """删除数据集（卸载 DuckDB 表 + 删除文件 + 删除元数据）。"""
     if "/" in name or "\\" in name or name in ("", ".", ".."):
-        return JSONResponse({"error": "非法数据集名"}, status_code=400)
+        return error_response("非法数据集名", 400)
     try:
         dataset_service.delete(name, user["user_id"])
     except DatasetServiceError as e:
-        return JSONResponse({"error": e.message}, status_code=e.status_code)
+        return error_response(e.message, e.status_code)
     return JSONResponse({"success": True})
 
 
@@ -56,7 +57,7 @@ async def get_dataset_schema(request: Request, name: str, user=Depends(require_a
     try:
         body = dataset_service.schema(name, user["user_id"])
     except DatasetServiceError as e:
-        return JSONResponse({"error": e.message}, status_code=e.status_code)
+        return error_response(e.message, e.status_code)
     return JSONResponse(body)
 
 
@@ -71,4 +72,4 @@ async def reload_datasources(request: Request, user=Depends(require_auth)):
         return JSONResponse({"success": True, **result})
     except Exception as e:
         logger.error(f"Datasource reload failed: {traceback.format_exc()}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return error_response(str(e), 500)

@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from api import deps
 from api.auth import require_auth
+from api.errors import error_response
 
 router = APIRouter()
 
@@ -33,7 +34,7 @@ async def api_get_session(request: Request, session_id: str, user=Depends(requir
     try:
         conversation = deps._get_memory_service(user_id).get_session(user_id, session_id)
     except PermissionError:
-        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+        return error_response("会话不存在或无权访问", 404)
     return JSONResponse(content={
         "session_id": session_id,
         "user_id": user_id,
@@ -49,7 +50,7 @@ async def api_delete_session(request: Request, session_id: str, user=Depends(req
     try:
         deps._get_memory_service(user_id).delete_session(user_id, session_id)
     except PermissionError:
-        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+        return error_response("会话不存在或无权访问", 404)
     # 同步清掉该会话的 Token 统计（看板数据不留死键）
     with contextlib.suppress(Exception):
         from utils.token_counter import get_token_counter
@@ -64,14 +65,14 @@ async def api_rename_session(request: Request, session_id: str, user=Depends(req
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+        return error_response("请求体不是有效 JSON", 400)
     title = (body.get("title") or "").strip()
     if not title:
-        return JSONResponse({"ok": False, "error": "标题不能为空"}, status_code=400)
+        return error_response("标题不能为空", 400)
     if len(title) > 60:
         title = title[:60]
     try:
         deps._get_memory_service(user_id).rename_session(user_id, session_id, title)
     except PermissionError:
-        return JSONResponse({"error": "会话不存在或无权访问"}, status_code=404)
+        return error_response("会话不存在或无权访问", 404)
     return JSONResponse(content={"ok": True, "session_id": session_id, "title": title})

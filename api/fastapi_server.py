@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
+from api.errors import register_exception_handlers
 from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
 from utils.decision_log import set_decision_publisher
 from utils.path_tool import get_abs_path
@@ -35,6 +36,9 @@ from utils.token_counter import set_metrics_publisher
 from utils.tracing import init_tracing
 
 app = FastAPI(title="AI Data Analyst", version="1.0.0")
+
+# ── 统一错误信封：HTTPException/校验失败/未捕获异常 → {"success":false,"error":…} ──
+register_exception_handlers(app)
 
 # ── 可观测性：OpenTelemetry 初始化（OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 NoOp）──
 init_tracing()

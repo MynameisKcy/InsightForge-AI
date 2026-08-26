@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 import database.user_settings_db as usd
 from api import deps
 from api.auth import require_auth
+from api.errors import error_response
 from model.factory import reload_model_config
 from utils.logger_handler import logger
 
@@ -40,7 +41,7 @@ async def save_settings(request: Request, user=Depends(require_auth)):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"ok": False, "error": "请求体不是有效 JSON"}, status_code=400)
+        return error_response("请求体不是有效 JSON", 400)
     allowed = {"llm_api_key", "llm_model_name", "embedding_model_name", "llm_base_url",
                "vector_db_host", "vector_db_port", "vector_db_collection",
                "vector_db_tenant", "local_db_conn"}
@@ -58,4 +59,4 @@ async def save_settings(request: Request, user=Depends(require_auth)):
         return {"ok": True}
     except Exception as e:
         logger.exception("保存配置失败")
-        return JSONResponse({"ok": False, "error": f"保存失败: {e}"}, status_code=500)
+        return error_response(f"保存失败: {e}", 500)
