@@ -9,6 +9,7 @@ from datetime import datetime
 from agents.base import BaseAgent
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
+from utils.report_paths import chart_web_url
 
 try:
     from jinja2 import Template
@@ -290,21 +291,13 @@ class ReportAgent(BaseAgent):
 
 
 def _chart_web_url(path: str | None) -> str | None:
-    """把图表文件路径转为 Web 可访问 URL（/reports/charts/<basename>）。
+    """把图表文件路径转为 Web 可访问 URL（约定属主 utils/report_paths.py）。
 
     报告 markdown 嵌入 Web URL 而非 FS 绝对路径：前端 renderMarkdown 的 safeUrl
     白名单放行 / 开头相对路径，FS 路径会被拒绝（报告 bubble 不显示图）。
     占位符文本（[Error: ...] / [PLACEHOLDER: ...] 等非图表路径）返回 None。
     """
-    if not path or not isinstance(path, str):
-        return None
-    normalized = path.replace("\\", "/")
-    if normalized.startswith("/reports/charts/"):
-        return normalized
-    idx = normalized.find("/reports/charts/")
-    if idx >= 0:
-        return normalized[idx:]
-    return None
+    return chart_web_url(path)
 
 
 def _basic_markdown_report(data: dict) -> str:

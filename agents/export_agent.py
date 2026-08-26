@@ -28,6 +28,7 @@ from agents.markdown_blocks import (
 )
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
+from utils.report_paths import png_sibling_path, web_url_to_fs
 
 # 延迟导入，优雅降级
 _docx_available = True
@@ -162,20 +163,19 @@ class ExportAgent(BaseAgent):
         """把 markdown 图片引用解析为本地 PNG 文件路径；无法解析返回 None。
 
         ref 可能是 Web URL（/reports/charts/foo.png|.html）、FS 绝对路径、或占位符文本。
+        位置约定（web→FS、html→同名 png）属主在 utils/report_paths.py。
         .html 引用会查找同名 .png（kaleido 在图表生成时产出的栅格图）。
         """
         if not ref:
             return None
-        local = ref
-        if ref.startswith("/reports/"):
-            local = get_abs_path(ref.lstrip("/"))
+        local = web_url_to_fs(ref)
         if not local or not os.path.exists(local):
             return None
         low = local.lower()
         if low.endswith(".png"):
             return local
         if low.endswith(".html"):
-            png = os.path.splitext(local)[0] + ".png"
+            png = png_sibling_path(local)
             return png if os.path.exists(png) else None
         return None
 

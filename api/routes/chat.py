@@ -12,6 +12,7 @@ from api import chat_stream, deps
 from api.auth import require_auth
 from utils.cancel_token import CancelToken
 from utils.path_tool import get_abs_path
+from utils.report_paths import CHARTS_DIR
 
 router = APIRouter()
 
@@ -49,7 +50,7 @@ async def api_chat(request: Request, user=Depends(require_auth)):
             new_session=turn.is_new_session,
             cancel=cancel,
             is_disconnected=request.is_disconnected,
-            charts_dir=get_abs_path("reports/charts"),
+            charts_dir=get_abs_path(CHARTS_DIR),
         ),
         media_type="text/event-stream",
         headers={
