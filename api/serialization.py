@@ -1,5 +1,7 @@
 """分析结果的 JSON 序列化清洗与路径→Web URL 转换。"""
 
+from utils.report_paths import fs_to_web_url
+
 
 def _sanitize_result(result: dict) -> dict:
     """确保结果可 JSON 序列化。"""
@@ -57,21 +59,8 @@ def _sanitize_dict(d: dict) -> dict:
 
 
 def _to_web_path(abs_path: str) -> str:
-    """将绝对路径转为 Web 可访问的相对路径。
-    D:\\...\\reports\\charts\\foo.html → /reports/charts/foo.html
-    """
-    import re
-    # 标准化路径分隔符
-    normalized = abs_path.replace("\\", "/")
-    # 提取 reports/ 之后的部分
-    match = re.search(r"/reports/(.+)", normalized)
-    if match:
-        return f"/reports/{match.group(1)}"
-    # 如果路径已经以 / 开头且存在，直接返回
-    if normalized.startswith("/reports/"):
-        return normalized
-    # 无法转换，返回原名
-    return normalized
+    """将绝对路径转为 Web 可访问的相对路径（约定属主 utils/report_paths.py）。"""
+    return fs_to_web_url(abs_path)
 
 
 def _normalize_paths(obj):

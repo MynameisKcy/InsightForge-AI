@@ -30,6 +30,7 @@ from api.routes import analysis, chat, datasets, knowledge, pages, sessions, set
 from utils.decision_log import set_decision_publisher
 from utils.path_tool import get_abs_path
 from utils.progress_emitter import emitter_bridge
+from utils.report_paths import REPORTS_DIR, WEB_REPORTS_PREFIX
 from utils.token_counter import set_metrics_publisher
 from utils.tracing import init_tracing
 
@@ -92,10 +93,10 @@ _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 if os.path.isdir(_STATIC_DIR):
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-# ── 静态文件（报告和图表） ──
-_reports_dir = get_abs_path("reports")
+# ── 静态文件（报告和图表；web 前缀 /reports 与 utils/report_paths.py 锁步） ──
+_reports_dir = get_abs_path(REPORTS_DIR)
 if os.path.exists(_reports_dir):
-    app.mount("/reports", StaticFiles(directory=_reports_dir), name="reports")
+    app.mount(WEB_REPORTS_PREFIX, StaticFiles(directory=_reports_dir), name="reports")
 
 
 def start_server(host: str = "0.0.0.0", port: int = 8502):

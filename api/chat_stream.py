@@ -13,11 +13,11 @@ import json
 import os
 from collections.abc import AsyncGenerator
 
-from api.serialization import _to_web_path
 from api.sse import _split_sentences, _stream_with_heartbeat
 from utils import sse_protocol as sp
 from utils.logger_handler import logger
 from utils.progress_emitter import ProgressEmitter
+from utils.report_paths import fs_to_web_url
 from utils.tracing import (
     attach_current_span,
     detach_current_span,
@@ -65,7 +65,7 @@ def diff_new_charts(charts_dir: str, existing: set[str]) -> list[str]:
             if f.endswith(".html"):
                 fpath = os.path.join(charts_dir, f)
                 if fpath not in existing:
-                    urls.append(_to_web_path(fpath))
+                    urls.append(fs_to_web_url(fpath))
     return urls
 
 

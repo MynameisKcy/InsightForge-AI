@@ -11,6 +11,7 @@ import pandas as pd
 
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
+from utils.report_paths import CHARTS_DIR, png_sibling_path
 
 # 延迟导入 Plotly，处理未安装情况
 _plotly_available = True
@@ -23,7 +24,8 @@ except ImportError:
     logger.warning("Plotly not installed. Charts will be generated as placeholder text.")
 
 
-CHART_OUTPUT_DIR = "reports/charts"
+# 图表输出目录（repo 相对；约定属主 utils/report_paths.py，此处别名保留）
+CHART_OUTPUT_DIR = CHARTS_DIR
 
 # 静态 PNG 导出参数（供报告 Word/PDF/MD/HTML 嵌入栅格图；kaleido 渲染）
 # 宽度略大于交互图高度配套，scale=2 提升导出清晰度
@@ -470,10 +472,8 @@ def _save_chart(fig, base_name: str) -> str:
 
 
 def _chart_png_path(html_path: str) -> str:
-    """由 HTML 图表路径推导同名 PNG 路径（仅推导字符串，不保证存在）。"""
-    if not html_path:
-        return ""
-    return os.path.splitext(html_path)[0] + ".png"
+    """由 HTML 图表路径推导同名 PNG 路径（属主 utils/report_paths.png_sibling_path）。"""
+    return png_sibling_path(html_path)
 
 
 def chart_png_path(html_path: str) -> str | None:
