@@ -88,7 +88,6 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
             ext = os.path.splitext(fname)[1].lower().lstrip(".")
             if ext not in allowed:
                 continue
-            get_file_md5_hex(fpath) or ""
             ingested = (fpath in chroma_sources) or (fname in chroma_basenames)
             status = "已完成" if ingested else "处理中"
             files.append({
@@ -121,8 +120,8 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...), user=
     os.makedirs(data_dir, exist_ok=True)
     vs = deps._get_vector_store()
 
-    # 大小上限与数据集上传共用（见 api/routes/datasets.py）
-    from api.routes.datasets import _MAX_DATASET_SIZE
+    # 大小上限与数据集上传共用（属主 dataset_service）
+    from database.dataset_service import MAX_UPLOAD_SIZE
 
     results = []
     for f in files:
@@ -134,7 +133,7 @@ async def kb_upload(request: Request, files: list[UploadFile] = File(...), user=
             continue
         # 大文件保护：超过 100MB 拒绝；PDF/Excel >50MB 给预估提示
         size = f.size if hasattr(f, "size") and f.size is not None else 0
-        if size > _MAX_DATASET_SIZE:
+        if size > MAX_UPLOAD_SIZE:
             results.append({"filename": fname, "success": False,
                             "error": "文件过大（超过 100MB 上限），请拆分或压缩后再上传"})
             continue

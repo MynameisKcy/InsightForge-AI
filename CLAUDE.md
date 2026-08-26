@@ -25,7 +25,7 @@ pip install -r requirements.txt
 conda activate AnalysisAgent && python -m api.fastapi_server
 
 # Run tests — targeted first (default): only the files related to the change.
-# The full suite is ~432 tests / ~52s; run it only when necessary
+# The full suite is ~464 tests / ~54s; run it only when necessary
 # (cross-module refactors, or one final green run before claiming completion).
 conda activate AnalysisAgent && python -m pytest tests/test_export_agent.py -q   # targeted
 conda activate AnalysisAgent && python -m pytest tests/ -q                       # full suite
@@ -53,7 +53,7 @@ All analysis agents extend `BaseAgent` (`agents/base.py`) which provides `_call_
 
 - **LLM**: `ChatTongyi` (Qwen/DashScope) + `DashScopeEmbeddings` — module-level singletons in `model/factory.py`. Model names from `.env` (`CHAT_MODEL_NAME`, `EMBEDDING_MODEL_NAME`) with `config/rag.yml` fallback.
 - **Database**: DuckDB (`:memory:` per user for OLAP), SQLite (5 files: users.db, customers.db, memory.db, chart_knowledge.db, datasources.db), ChromaDB (vector store in `chroma_db/`).
-- **Data Source Management**: Users upload CSV/Excel files via `/api/datasets/upload` or admins pre-configure MySQL/PostgreSQL connections in `config/datasources.yml`. All datasets are loaded into DuckDB for unified querying, including cross-dataset JOINs. Metadata tracked in `datasources.db` (SQLite) via `DatasourcesDB` class.
+- **Data Source Management**: Users upload CSV/Excel files via `/api/datasets/upload` or admins pre-configure MySQL/PostgreSQL connections in `config/datasources.yml`. All datasets are loaded into DuckDB for unified querying, including cross-dataset JOINs. Metadata tracked in `datasources.db` (SQLite) via `DatasourcesDB` class. Dataset lifecycle transactions (upload validation → file save → DuckDB load → schema/sample probe → metadata write → failure compensation, plus delete/schema) live in `database/dataset_service.py` (`DatasetService`, constructor-injectable seams); routes in `api/routes/datasets.py` are thin adapters. Sample serialization is unified: `to_json(date_format="iso")` (Timestamp→ISO, NaN→null) on both upload and schema paths.
 - **DuckDB Multi-Source**: `duckdb_manager.py` supports `load_csv_dataset()`, `load_excel_dataset()`, `drop_table()`, `get_enhanced_schema_text()` (multi-table schema), and `register_external_databases()` (MySQL/PostgreSQL via DuckDB extensions). `safe_ident()` prevents SQL injection in DuckDB identifiers. Dataset persistence: files on disk, DuckDB tables reloaded on instance creation via `_reload_datasets_into_instance()`.
 - **RAG**: Two-stage retrieval — ChromaDB coarse search (k=15) → DashScope `gte-rerank-v2` rerank (top_n=3, threshold=0.3). Chart knowledge via SQLite + jieba Chinese tokenization.
 - **Memory** (two-tier, [ADR-0003](docs/adr/0003-two-tier-memory-session-and-user-scoped.md)): **Session Memory** - per `session_id` isolated, LRU pool + DB hydration on miss, compression triggered at 90% context budget (not a fixed turn count) with a `summarized_up_to` watermark. **Long-Term Memory** - SQLite (`conversation_history`) + cross-session recall via a ChromaDB `memory` collection (shared-collection + `user_id` owner filter, `gte-rerank-v2` rerank). **`MemoryService`** facade (`memory/service.py`) orchestrates both tiers via `begin_turn()` / `end_turn()`; recall is injected in the `dynamic_prompt` middleware. `ConversationSummarizer` takes an injected `llm_callable` (breaks the memory↔agents cycle).
