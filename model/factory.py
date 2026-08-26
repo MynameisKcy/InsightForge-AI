@@ -141,6 +141,11 @@ def get_chat_model_name(user_id: str | None = None) -> str:
     return _resolve_chat_model_name(_load_user_override(user_id))
 
 
+def get_embed_model_name(user_id: str | None = None) -> str:
+    """当前 user 解析到的向量模型名（用户配置 > .env > YAML），与 get_embed_model 同解析。"""
+    return _resolve_embedding_model_name(_load_user_override(user_id))
+
+
 def get_embed_model(user_id: str | None = None):
     """getter：按 user_id 缓存向量模型实例；并发安全。"""
     key = user_id or "__default__"
