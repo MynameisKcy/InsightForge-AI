@@ -29,9 +29,10 @@ from utils.sse_protocol import inband_thinking
 
 
 class ReactAgent:
-    def __init__(self, user_id=None):
+    def __init__(self, user_id=None, model=None):
+        # model 注入优先（测试/上层共用同一实例）；未注入按 user_id 解析（factory 缓存）
         self.agent = create_agent(
-            model=get_chat_model(user_id),
+            model=model if model is not None else get_chat_model(user_id),
             system_prompt=load_system_prompts(),
             tools=[rag_sumarize, get_current_month, get_external_data,
                    fill_report_context_for_report, run_full_analysis,

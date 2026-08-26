@@ -34,9 +34,10 @@ class QueryRewriter:
     而本组件是 _create_plan 之前的预处理，返回 str。
     """
 
-    def __init__(self, user_id: str | None = None):
+    def __init__(self, user_id: str | None = None, model=None):
         self.user_id = user_id
-        self.model = get_chat_model(user_id)
+        # model 注入优先（测试/上层共用同一实例）；未注入按 user_id 解析（factory 缓存）
+        self.model = model if model is not None else get_chat_model(user_id)
 
     @staticmethod
     def _format_history(history: list[dict]) -> str:

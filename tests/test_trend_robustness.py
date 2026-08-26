@@ -39,7 +39,8 @@ def test_build_trend_summary_normal_numeric_unchanged():
     assert "overall_growth_pct" in result
 
 
-from agents.trend_agent import TrendAgent
+from agents.analysis_agent import AnalysisAgent
+from analysis.analysis_module import TrendAnalysisAdapter
 
 
 class _SentinelModel:
@@ -54,11 +55,15 @@ def _df_to_json(records):
     return json.dumps(records, ensure_ascii=False)
 
 
+def _trend_agent() -> AnalysisAgent:
+    return AnalysisAgent(TrendAnalysisAdapter(), model=_SentinelModel())
+
+
 def test_trend_agent_text_only_df_no_crash():
-    """纯文本列 df 喂 TrendAgent.run,不抛 str/str,返回入口层 error 提示。
+    """纯文本列 df 喂趋势分析(AnalysisAgent+适配器)，返回入口层 error 提示。
 
     断言 entry-layer 的 error 键存在(而非 OR 底层非数值回退):
-    修复后 TrendAgent.run 对全文本列直接返回 {"error": ...};
+    适配器对全文本列直接返回 {"error": ...};
     若回退到 df.columns[-1] 文本列,只会走到 Task 1 底层 coerce 返回
     非 error 的"非数值"trend_summary,本断言即失败。
     """
@@ -66,7 +71,7 @@ def test_trend_agent_text_only_df_no_crash():
         {"Country Name": "A", "Indicator Name": "foo"},
         {"Country Name": "B", "Indicator Name": "bar"},
     ])
-    result = TrendAgent(model=_SentinelModel()).run({"dataframe_json": df_json})
+    result = _trend_agent().run({"dataframe_json": df_json})
     assert "error" in result  # 入口层显式拦截,非底层非数值回退
     assert "str" not in str(result)  # 无原始 TypeError 痕迹
 
@@ -83,7 +88,7 @@ def test_trend_agent_picks_numeric_column():
         {"val": 120.0, "Country Name": "B"},
         {"val": 90.0, "Country Name": "C"},
     ])
-    result = TrendAgent(model=_SentinelModel()).run({"dataframe_json": df_json})
+    result = _trend_agent().run({"dataframe_json": df_json})
     # 不应崩溃,且应产生趋势摘要(选了 val 数值列)
     assert "trend_summary" in result
     assert "error" not in result or result.get("error") is None

@@ -144,13 +144,16 @@ def get_data_overview() -> str:
 @tool(description="针对特定分组或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个地区人口最多'、'最近几期数值是否下降'")
 def quick_data_insight(query: str) -> str:
     """快速数据分析，返回关键洞察。"""
+    from agents.analysis_agent import AnalysisAgent
     from agents.sql_agent import SQLAgent
-    from agents.trend_agent import TrendAgent
+    from analysis.analysis_module import TrendAnalysisAdapter
     from utils.request_context import get_user_id
 
     try:
         # user_id 必须传入构造器：Agent 的 LLM 按用户解析（网页设置 > .env），
         # 不传则钉死 .env 默认模型（免费额度耗尽时 403）。
+        # 趋势洞察走 AnalysisAgent + TrendAnalysisAdapter（与流水线趋势阶段
+        # 同一路径，TrendAgent fork 已退役）。
         uid = get_user_id()
         sql = SQLAgent(user_id=uid)
         sql_result = sql.run({"task": query, "user_id": uid})
@@ -164,7 +167,7 @@ def quick_data_insight(query: str) -> str:
             return "查询未返回任何数据，请确认问题是否合理。"
 
         if row_count > 1:
-            trend = TrendAgent(user_id=uid)
+            trend = AnalysisAgent(TrendAnalysisAdapter(), user_id=uid)
             trend_result = trend.run({"dataframe_json": df_json})
             insight = trend_result.get("insight", trend_result.get("trend_summary", ""))
             if insight:

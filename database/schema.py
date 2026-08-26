@@ -38,7 +38,11 @@ def compute_table_profile(conn, table_name: str) -> dict:
     col_profiles = []
     for col_name, col_type, *_ in cols:
         qcol = safe_ident(col_name)
-        is_numeric = col_type.upper() in ("DOUBLE", "FLOAT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "REAL", "HUGEINT")
+        is_numeric = col_type.upper() in (
+            "DOUBLE", "FLOAT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT",
+            "DECIMAL", "REAL", "HUGEINT", "UBIGINT", "UINTEGER", "USMALLINT",
+            "UTINYINT", "UHUGEINT", "INT128",
+        )
         # nunique + 非空数
         agg = conn.execute(
             f'SELECT COUNT(DISTINCT {qcol}), COUNT({qcol}) FROM {qname}'
