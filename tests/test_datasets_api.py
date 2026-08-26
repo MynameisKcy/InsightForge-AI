@@ -1,8 +1,8 @@
 """/api/datasets* 端点测试：上传 / 列表 / 删除 / schema。
 
-隔离方式（对齐既有测试习惯）：
-- _datasets_dir → tmp_path（上传与删除的文件落盘位置）
-- datasources_db 模块单例 → tmp SQLite（路由内函数级 import，打源模块即可）
+隔离方式（对齐既有测试习惯；事务属主已迁 DatasetService，见 test_dataset_service.py）：
+- dataset_service._default_datasets_dir → tmp_path（上传与删除的文件落盘位置）
+- datasources_db 模块单例 → tmp SQLite（懒 import，打源模块即可）
 - duckdb_manager.init_duckdb → fake（load/DESCRIBE/SUMMARIZE/query_df/drop_table 桩）
 """
 import glob
@@ -11,7 +11,7 @@ import os
 import pandas as pd
 import pytest
 
-import api.routes.datasets as ds_routes
+import database.dataset_service as dssvc_mod
 import database.datasources_db as ds_mod
 import database.duckdb_manager as duck_mod
 from database.datasources_db import DatasourcesDB
@@ -74,7 +74,8 @@ class _FakeDuckDB:
 @pytest.fixture
 def ds_env(tmp_path, monkeypatch):
     """数据集端点隔离环境：{'dir', 'meta', 'duck'}。"""
-    monkeypatch.setattr(ds_routes, "_datasets_dir", lambda: str(tmp_path))
+    # 事务属主在 DatasetService：目录接缝随迁（原 ds_routes._datasets_dir）
+    monkeypatch.setattr(dssvc_mod, "_default_datasets_dir", lambda: str(tmp_path))
     meta = DatasourcesDB(db_path=str(tmp_path / "ds_meta.db"))
     monkeypatch.setattr(ds_mod, "datasources_db", meta)
     duck = _FakeDuckDB()
