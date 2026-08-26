@@ -144,8 +144,8 @@ def test_quick_data_insight_passes_ctx_user_to_agents():
         def run(self, payload):
             return {"dataframe_json": '[{"m": 1}, {"m": 2}]', "row_count": 2}
 
-    class _FakeTrendAgent:
-        def __init__(self, user_id=None, **k):
+    class _FakeAnalysisAgent:
+        def __init__(self, analyzer, user_id=None, model=None):
             trend_seen["user_id"] = user_id
 
         def run(self, payload):
@@ -154,7 +154,7 @@ def test_quick_data_insight_passes_ctx_user_to_agents():
     token = set_request_context(user_id="u_qdi")
     try:
         with patch("agents.sql_agent.SQLAgent", _FakeSQLAgent), \
-                patch("agents.trend_agent.TrendAgent", _FakeTrendAgent):
+                patch("agents.analysis_agent.AnalysisAgent", _FakeAnalysisAgent):
             out = agent_tools.quick_data_insight.invoke({"query": "趋势如何"})
     finally:
         reset_request_context(token)

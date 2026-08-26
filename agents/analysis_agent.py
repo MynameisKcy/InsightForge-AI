@@ -24,8 +24,8 @@ class AnalysisAgent(BaseAgent):
 
     name = "analysis_agent"
 
-    def __init__(self, analyzer: AnalysisModule, model=None):
-        super().__init__(model=model)
+    def __init__(self, analyzer: AnalysisModule, user_id: str | None = None, model=None):
+        super().__init__(user_id=user_id, model=model)
         self.analyzer = analyzer
 
     def run(self, input_data: dict) -> dict:

@@ -1,4 +1,5 @@
 """统一鉴权：require_auth 依赖 + validate_token 进程内短缓存。"""
+import threading
 import time
 
 from fastapi import HTTPException, Request
@@ -8,6 +9,9 @@ from database.user_db import user_db
 # token -> (user_dict, expire_ts)；30s 短缓存，token 24h 有效，安全
 _CACHE_TTL = 30.0
 _token_cache: dict[str, tuple[dict, float]] = {}
+# 多线程写保护（uvicorn 单进程多线程 / TestClient 线程池并发请求）；
+# dict 原子性下竞态只是重复查库，但超限清理的遍历-删除与并发写可能 RuntimeError
+_token_cache_lock = threading.Lock()
 
 
 def extract_token(request: Request) -> str | None:
@@ -40,22 +44,26 @@ def validate_token_cached(token: str | None) -> dict | None:
     if not token:
         return None
     now = time.time()
-    cached = _token_cache.get(token)
-    if cached and cached[1] > now:
-        return cached[0]
+    with _token_cache_lock:
+        cached = _token_cache.get(token)
+        if cached and cached[1] > now:
+            return cached[0]
+    # 查库在锁外：慢操作不阻塞其他请求的缓存读
     user = user_db.validate_token(token)
-    _token_cache[token] = (user, now + _CACHE_TTL)
-    # 简易清理：缓存超 1000 项时丢掉过期项
-    if len(_token_cache) > 1000:
-        for k in [k for k, v in _token_cache.items() if v[1] <= now]:
-            _token_cache.pop(k, None)
+    with _token_cache_lock:
+        _token_cache[token] = (user, now + _CACHE_TTL)
+        # 简易清理：缓存超 1000 项时丢掉过期项
+        if len(_token_cache) > 1000:
+            for k in [k for k, v in _token_cache.items() if v[1] <= now]:
+                _token_cache.pop(k, None)
     return user
 
 
 def invalidate_token(token: str | None) -> None:
     """Evict a token from the LRU cache (call on logout / revocation)."""
     if token:
-        _token_cache.pop(token, None)
+        with _token_cache_lock:
+            _token_cache.pop(token, None)
 
 
 def require_auth(request: Request) -> dict:
