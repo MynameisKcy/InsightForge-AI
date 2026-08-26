@@ -53,3 +53,6 @@ opentelemetry-exporter-otlp==1.27.0
 
 # 用户配置加密（需求①）
 cryptography
+
+# RAG hybrid 检索：BM25 词法通道（方案一）
+rank-bm25==0.2.2
