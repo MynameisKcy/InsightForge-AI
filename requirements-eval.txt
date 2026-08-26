@@ -1,6 +1,8 @@
 # RAG 评估专用依赖（与主环境隔离，避免 ragas 依赖链污染运行时）
-# 安装：pip install -r agent/requirements-eval.txt
-# 说明：ragas 0.1.x 依赖老版 langchain API 与项目 langchain 1.x 冲突，
-#       使用 0.2.x（自带 LangchainLLMWrapper，对新版 langchain 友好）。
-ragas>=0.2.0,<0.3
+# 安装：pip install -r requirements-eval.txt
+# ragas 0.4.x：metrics 走 ragas.metrics.collections；langchain-community 0.4
+# 移除了 vertexai 遗留模块，ragas 导入期依赖由 tests/rag_eval/conftest.py
+# 的 sys.modules 占位 stub 解除（勿装 langchain-google-vertexai——其依赖链
+# 会把 protobuf 拉到 6.x，与 otel==1.27 的 protobuf<5 锁冲突）。
+ragas>=0.4.0,<0.5
 datasets>=2.14.0

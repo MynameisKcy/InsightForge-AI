@@ -47,7 +47,8 @@ def eval_rows(rag_service, retrieved_contexts):
 def test_rag_quality(eval_rows):
     from ragas import EvaluationDataset, evaluate
     from ragas.llms import LangchainLLMWrapper
-    from ragas.metrics import answer_relevancy, context_precision, faithfulness
+    # ragas 0.4：metrics 从 collections 子模块取（顶层导入已废弃、v1.0 移除）
+    from ragas.metrics.collections import answer_relevancy, context_precision, faithfulness
 
     dataset = EvaluationDataset.from_list(eval_rows)
     results = evaluate(

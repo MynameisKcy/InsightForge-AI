@@ -11,10 +11,29 @@ collection_name=唯一名) + RagSummarizerService(vector_store=注入) —— pr
     python -m pytest tests/rag_eval -m rag_eval -v
 """
 import os
+import sys
+import types
 import uuid
 from pathlib import Path
 
 import pytest
+
+# ── ragas 导入期兼容 stub（conftest 先于测试模块收集执行）──
+# ragas（0.2~0.4 全系）在 llms/base.py 顶层
+# `from langchain_community.chat_models.vertexai import ChatVertexAI`，
+# 而 langchain-community 0.4 已移除该遗留模块。正路是装
+# langchain-google-vertexai，但它的依赖链会把 protobuf 拉到 6.x，
+# 与项目 otel==1.27 的 protobuf<5 锁冲突（已实测）。评估 judge 只用
+# 项目的 ChatTongyi，ChatVertexAI 仅在 ragas 导入期被引用、从不实例化——
+# 注入占位模块解除导入期依赖，不污染 site-packages。
+if "langchain_community.chat_models.vertexai" not in sys.modules:
+    _stub = types.ModuleType("langchain_community.chat_models.vertexai")
+
+    class _ChatVertexAIStub:  # noqa: N801 —— 对齐 ragas 的引用名
+        """占位：仅满足 ragas 导入期引用，评估链路从不实例化。"""
+
+    _stub.ChatVertexAI = _ChatVertexAIStub
+    sys.modules["langchain_community.chat_models.vertexai"] = _stub
 
 from langchain_core.documents import Document
 
