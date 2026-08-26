@@ -192,6 +192,7 @@ class RagSummarizerService:
         references = self.format_reference_sources(context_docs)
         return f"{answer.strip()}\n\n{references}"
 
+
 # 进程级摘要服务单例（先例：memory/recall.py:get_memory_recall）。
 # agent_tools 懒获取用——避免每次工具调用重建 service 连带重建 BM25 索引。
 _default_service = None
