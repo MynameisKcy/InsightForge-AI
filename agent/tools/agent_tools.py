@@ -4,12 +4,10 @@ from datetime import date
 from langchain_core.tools import tool
 
 from agents.planner_agent import PlannerAgent
-from rag.rag_service import RagSummarizerService
+from rag.rag_service import get_default_rag_summarizer
 from utils.cancel_token import PipelineCancelledError
 from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
-
-rag = RagSummarizerService()
 
 
 def _external_data_path() -> str:
@@ -19,7 +17,7 @@ def _external_data_path() -> str:
 @tool(description="从向量库中检索参考资料，以纯字符形式返回")
 def rag_sumarize(query:str) -> str:
     # owner 隔离：从请求上下文取当前 user_id，仅检索该用户 + 公共 system 知识
-    return rag.rag_summarize(query, _current_user_id())
+    return get_default_rag_summarizer().rag_summarize(query, _current_user_id())
 
 
 @tool(description="获取当前月份，以纯字符形式返回")

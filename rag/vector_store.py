@@ -478,6 +478,28 @@ class VectorStoreService:
             logger.warning(f"delete_session_memory failed: {e}")
 
 
+# ── 进程级默认单例（方案一任务0）：deps 与 RagSummarizerService 共享同一实例，
+# 保证知识库管理写路径与检索读路径看到同一个对象（BM25 回调同步的前提）。──
+_default_vs = None
+_default_vs_lock = threading.Lock()
+
+
+def get_default_vector_store():
+    global _default_vs
+    if _default_vs is None:
+        with _default_vs_lock:
+            if _default_vs is None:
+                _default_vs = VectorStoreService()
+    return _default_vs
+
+
+def reset_default_vector_store() -> None:
+    """测试专用：丢弃默认实例，下次取用时重建。"""
+    global _default_vs
+    with _default_vs_lock:
+        _default_vs = None
+
+
 if __name__ == "__main__":
     vs = VectorStoreService()
     loaded_count, available_count = vs.load_document()
