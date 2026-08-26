@@ -6,10 +6,11 @@
 与 api/static/ JS 锁步。
 """
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from api import chat_stream, deps
 from api.auth import require_auth
+from api.errors import error_response
 from utils.cancel_token import CancelToken
 from utils.path_tool import get_abs_path
 from utils.report_paths import CHARTS_DIR
@@ -24,14 +25,14 @@ async def api_chat(request: Request, user=Depends(require_auth)):
     query = body.get("query", "").strip()
     session_id = body.get("session_id", "").strip()
     if not query:
-        return JSONResponse({"error": "query is required"}, status_code=400)
+        return error_response("query is required", 400)
 
     user_id = user["user_id"]
 
     # ── 会话管理 + Session Memory（由 MemoryService 外观统一编排）──
     turn, err = deps.begin_memory_turn(user_id, session_id, query)
     if turn is None:
-        return JSONResponse({"error": err}, status_code=404)
+        return error_response(err, 404)
 
     agent = deps._get_react_agent(user_id)
 

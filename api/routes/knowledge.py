@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from api import deps
 from api.auth import require_auth
+from api.errors import error_response
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
@@ -166,11 +167,11 @@ async def kb_delete_file(request: Request, filename: str, user=Depends(require_a
     user_id = user["user_id"]
     # 防路径穿越
     if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
-        return JSONResponse({"error": "非法文件名"}, status_code=400)
+        return error_response("非法文件名", 400)
     data_dir = _kb_data_dir(user_id)
     fpath = os.path.join(data_dir, filename)
     if not os.path.isfile(fpath):
-        return JSONResponse({"error": "文件不存在"}, status_code=404)
+        return error_response("文件不存在", 404)
     try:
         vs = deps._get_vector_store()
         removed = vs.delete_by_source(fpath, user_id)
@@ -178,7 +179,7 @@ async def kb_delete_file(request: Request, filename: str, user=Depends(require_a
         return JSONResponse({"success": True, "removed_chunks": removed})
     except Exception as e:
         logger.error(f"知识库删除失败 {filename}: {traceback.format_exc()}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return error_response(str(e), 500)
 
 
 @router.post("/api/knowledge/reindex")
@@ -187,14 +188,14 @@ async def kb_reindex(request: Request, user=Depends(require_auth)):
     user_id = user["user_id"]
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     if not body.get("confirm"):
-        return JSONResponse({"error": "需传 confirm=true 以确认全量重建"}, status_code=400)
+        return error_response("需传 confirm=true 以确认全量重建", 400)
     try:
         vs = deps._get_vector_store()
         result = vs.reindex_all(user_id)
         return JSONResponse({"success": True, **result})
     except Exception as e:
         logger.error(f"知识库重建失败: {traceback.format_exc()}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return error_response(str(e), 500)
 
 
 @router.get("/api/knowledge/stats")
@@ -205,4 +206,4 @@ async def kb_stats(request: Request, user=Depends(require_auth)):
         vs = deps._get_vector_store()
         return JSONResponse(vs.get_stats(user_id))
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return error_response(str(e), 500)

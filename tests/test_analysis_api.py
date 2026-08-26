@@ -50,7 +50,7 @@ def test_analysis_planner_failure_returns_500(client, auth_headers, swap_srv_sea
     r = client.post("/api/analysis", json={"query": "分析"}, headers=auth_headers)
 
     assert r.status_code == 500
-    assert r.json() == {"success": False, "errors": ["boom"]}
+    assert r.json() == {"success": False, "error": "boom"}
     # 失败路径不写记忆
     assert mem.end_calls == []
 

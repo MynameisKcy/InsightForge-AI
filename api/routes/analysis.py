@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from api import deps
 from api.auth import require_auth
+from api.errors import error_response
 from api.serialization import _normalize_paths, _sanitize_result
 from utils.logger_handler import logger
 
@@ -21,14 +22,14 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
     body = await request.json()
     query = body.get("query", "").strip()
     if not query:
-        return JSONResponse({"error": "query is required"}, status_code=400)
+        return error_response("query is required", 400)
 
     user_id = user["user_id"]
     session_id = body.get("session_id", "").strip()
     # ── 会话管理 + Session Memory（括号入口收口于 deps.begin_memory_turn）──
     turn, err = deps.begin_memory_turn(user_id, session_id, query)
     if turn is None:
-        return JSONResponse({"error": err}, status_code=404)
+        return error_response(err, 404)
     session_id = turn.session_id
 
     try:
@@ -49,10 +50,7 @@ async def api_analysis(request: Request, user=Depends(require_auth)):
         return JSONResponse(content=result)
     except Exception as e:
         logger.error(f"Analysis error: {traceback.format_exc()}")
-        return JSONResponse(
-            {"success": False, "errors": [str(e)]},
-            status_code=500,
-        )
+        return error_response(str(e), 500)
 
 
 @router.post("/api/report/export")
@@ -68,9 +66,9 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
     fmt = (body.get("format", "") or "").lower().strip()
 
     if not markdown.strip():
-        return JSONResponse({"error": "No markdown content"}, status_code=400)
+        return error_response("No markdown content", 400)
     if fmt not in _EXPORT_FORMATS:
-        return JSONResponse({"error": f"Unsupported format: {fmt}"}, status_code=400)
+        return error_response(f"Unsupported format: {fmt}", 400)
 
     try:
         from agents.export_agent import ExportAgent
@@ -85,10 +83,10 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
         if not files:
             errs = result.get("errors", [])
             msg = errs[0] if errs else f"{fmt} export produced no file"
-            return JSONResponse({"error": msg}, status_code=502)
+            return error_response(msg, 502)
         fpath = files[0]["path"]
         if not os.path.exists(fpath):
-            return JSONResponse({"error": "Export file missing"}, status_code=502)
+            return error_response("Export file missing", 502)
         # 浏览器下载文件名（FileResponse 的 filename 参数会自动生成
         # RFC 5987 filename*=UTF-8''... 头，正确处理中文等非 ASCII 文件名；
         # 不手写 Content-Disposition 以免 latin-1 编码失败）
@@ -96,4 +94,4 @@ async def api_export_report(request: Request, user=Depends(require_auth)):
         return FileResponse(fpath, filename=download_name)
     except Exception as e:
         logger.error(f"Export error: {traceback.format_exc()}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return error_response(str(e), 500)
