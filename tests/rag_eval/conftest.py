@@ -65,6 +65,8 @@ def rag_service(tmp_path_factory):
                      metadata={"source": str(corpus), "user_id": EVAL_USER})]
     store = svc.vector_store
     store.vector_store.add_documents(store.spliter.split_documents(docs))
+    if getattr(svc, "_bm25", None) is not None:
+        svc._bm25.rebuild_from_store()
     return svc
 
 
@@ -77,5 +79,14 @@ def retrieved_contexts(rag_service) -> dict[str, list[Document]]:
     """
     return {
         case["question"]: rag_service.retriever_docs(case["question"], user_id=EVAL_USER)
+        for case in TEST_CASES
+    }
+
+
+@pytest.fixture(scope="session")
+def coarse_contexts(rag_service) -> dict[str, list]:
+    """rerank 前的融合候选池（recall@k/MRR 度量用；与 retrieved_contexts 并存，后者仍为 top3 终态）。"""
+    return {
+        case["question"]: rag_service._coarse_pool(case["question"], user_id=EVAL_USER)
         for case in TEST_CASES
     }
