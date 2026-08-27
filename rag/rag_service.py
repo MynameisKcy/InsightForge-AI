@@ -151,7 +151,8 @@ class RagSummarizerService:
     def _aggregate_bm25(self, queries: list[str], user_id: str | None = None) -> list[Document]:
         """BM25 路：每个扩展 query 各查一次，同一 doc 取最好名次，重排后截断 top bm25_top_k。
         名次（而非原始分数）做跨 query 比较，规避分数不可加的问题。
-        最好名次并列时后取得该名次者优先——被更多扩展 query 共同命中的共识文档靠前；
+        最好名次并列时后取得该名次者优先——仅作确定性并列裁决（结果稳定可复现），
+        不承载"共识文档靠前"语义；下游 RRF 融合与 rerank 精排不依赖此并列微序。
         单 query 失败降级为空列表，不拖垮整条 BM25 路。"""
         best: dict[str, tuple[int, int]] = {}  # doc_id -> (best_rank, 取得该名次时的序号)
         docs: dict[str, Document] = {}

@@ -337,8 +337,9 @@ class VectorStoreService:
         if self._source_has_chunks(path, uid):
             try:
                 self.vector_store.delete(where=self._where_source_owner(path, uid))
-                # 通知与 delete_by_source 对齐：传 effective uid（非原始 user_id），
-                # 与本处 where 过滤同口径——传 None 会让 BM25 误清其他 owner 的同名 source。
+                # 传 effective uid（非原始 user_id），与本处 where 过滤同口径——
+                # 传 None 会让 BM25 的 remove_source(None) 匹配全部 owner，
+                # 过度清除其他 owner 同名 source 的索引条目。
                 self._notify(self._source_deleted_listeners, path, uid)
             except Exception as e:
                 logger.warning(f"清理旧分片失败 {path}: {e}")
