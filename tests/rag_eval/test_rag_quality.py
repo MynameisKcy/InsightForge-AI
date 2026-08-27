@@ -55,9 +55,9 @@ def test_rag_quality(eval_rows):
     from ragas.metrics import answer_relevancy, context_precision, faithfulness
 
     model = get_chat_model()
-    # kimi-k2.7-code 服务端强制 thinking：n>1 一律 400（enable_thinking/
-    # chat_template_kwargs 均无法关闭，已实测）。answer_relevancy 默认
-    # strictness=3 要 n=3——降为 1（单问题估计，方差升、期望不变）。
+    # judge 已切 qwen3.7-flash（deepseek 配额枯竭退役；kimi 服务端强制
+    # thinking 致 n>1 一律 400 的限制不再适用）。strictness=1 沿用——
+    # 比默认 n=3 省 2/3 judge 调用（单问题估计，方差升、期望不变），作为成本/稳定性取舍保留。
     answer_relevancy.strictness = 1
     # legacy metric 调 embed_query()（LangChain 接口）——须用 Langchain 包装；
     # ragas modern OpenAIEmbeddings 只有 embed_text，会被 AttributeError 杀掉
