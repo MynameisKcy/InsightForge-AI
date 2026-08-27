@@ -67,6 +67,28 @@ class VectorStoreService:
         # memory collection 并发访问锁：闲置 finalize（后台线程写）与 recall（请求线程读）
         # 同一 memory store 单例，串行化避免 chroma/sqlite 并发竞态（ADR-0003 Phase 4 修订）
         self._lock = threading.Lock()
+        # ── 写回调（方案一）：供 BM25 索引等下游订阅，store 不感知订阅者身份 ──
+        self._chunks_added_listeners: list = []   # fn(chunks: list[Document])
+        self._source_deleted_listeners: list = []  # fn(source: str, user_id: str | None)
+        self._reindexed_listeners: list = []       # fn()
+
+    def add_chunks_listener(self, fn) -> None:
+        self._chunks_added_listeners.append(fn)
+
+    def add_source_deleted_listener(self, fn) -> None:
+        self._source_deleted_listeners.append(fn)
+
+    def add_reindexed_listener(self, fn) -> None:
+        self._reindexed_listeners.append(fn)
+
+    @staticmethod
+    def _notify(listeners: list, *args) -> None:
+        for fn in list(listeners):
+            try:
+                fn(*args)
+            except Exception as e:
+                logger.warning("写回调 %s 执行失败(已忽略): %s",
+                               getattr(fn, "__name__", "?"), e)
 
     # ── owner 过滤器 ──
     @staticmethod
@@ -163,6 +185,18 @@ class VectorStoreService:
 
     # ── chroma 实际状态查询：md5 仅作去重提示，chroma 才是“可读”的真相 ──
     # 修复 md5 存储与 chroma 偏离（md5 在、chroma 空）导致“显示已入库但读不到”的 bug。
+    def get(self, ids=None, where=None, limit=None, offset=None,
+            where_document=None, include=None) -> dict:
+        """透传底层 Chroma.get（chroma/langchain VectorStore 接口）。
+
+        BM25Index.rebuild_from_store 经此读取全量分片原文+元数据——任务 3 定义的
+        store 鸭子类型契约：仅需 .get(include=["documents","metadatas"]) -> dict。
+        """
+        return self.vector_store.get(
+            ids=ids, where=where, limit=limit, offset=offset,
+            where_document=where_document, include=include,
+        )
+
     def chroma_sources(self, user_id: str | None = None) -> set:
         """返回 Chroma 中实际存在分片的 source 路径集合（一次 get 调用）。
         user_id 给定时仅返回该用户的来源；None 时全量（兼容）。"""
@@ -268,6 +302,7 @@ class VectorStoreService:
             self.vector_store.add_documents(split_document)
             self._add_md5(md5_hex)
             logger.info(f"{path}加载成功，{len(split_document)} 个分片 (owner={uid})")
+            self._notify(self._chunks_added_listeners, split_document)
             return len(split_document)
         except Exception as e:
             logger.error(f"{path}加载失败:{str(e)}", exc_info=True)
@@ -330,6 +365,7 @@ class VectorStoreService:
                 if md5_hex:
                     self._remove_md5(md5_hex)
             logger.info(f"已删除来源 {source} 的 {count} 个分片 (owner={uid})")
+            self._notify(self._source_deleted_listeners, source, user_id)
             return count
         except Exception as e:
             logger.error(f"删除来源 {source} 失败: {e}", exc_info=True)
@@ -383,6 +419,7 @@ class VectorStoreService:
         self._save_md5_store(set())
         # 全量重灌
         loaded, available = self.load_document(user_id=user_id)
+        self._notify(self._reindexed_listeners)
         return {"reloaded_files": loaded, "total_files": available,
                 "stats": self.get_stats(user_id=user_id)}
 
