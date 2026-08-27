@@ -448,6 +448,42 @@ async function streamChat(text, bubble) {
   let thinking = true; // 默认为思考状态
   let statusEl = null; // 思考状态 DOM 元素
 
+  // ── 执行用时计时器：首个 [STEP] 起表，[DONE]/[ERROR] 停表（Issue ⑤）──
+  let stepStartedAt = null;
+  let stepTimerId = null;
+
+  function fmtElapsed(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    var m = Math.floor(s / 60);
+    return m > 0 ? m + '分' + (s % 60) + '秒' : s + '秒';
+  }
+
+  function ensureStepTimer() {
+    if (stepTimerId || !statusEl) return;
+    stepStartedAt = Date.now();
+    var t = statusEl.querySelector('.status-timer');
+    if (!t) {
+      t = document.createElement('span');
+      t.className = 'status-timer';
+      statusEl.appendChild(t);
+    }
+    stepTimerId = setInterval(function () {
+      t.textContent = ' · ' + fmtElapsed(Date.now() - stepStartedAt);
+    }, 1000);
+  }
+
+  function stopStepTimer(finalText) {
+    if (!stepTimerId) return;
+    clearInterval(stepTimerId);
+    stepTimerId = null;
+    if (finalText && statusEl) {
+      var st = statusEl.querySelector('.status-text');
+      var t = statusEl.querySelector('.status-timer');
+      if (st) st.textContent = finalText;
+      if (t) t.textContent = ' · 用时 ' + fmtElapsed(Date.now() - (stepStartedAt || Date.now()));
+    }
+  }
+
   // 查找当前消息的 status 行
   const msgDiv = bubble.closest('.message');
   if (msgDiv) {
@@ -479,8 +515,10 @@ async function streamChat(text, bubble) {
       if (d.reasoning) body += '<div class="decision-reasoning">' + escapeHtml(d.reasoning) + '</div>';
       if (d.tool) body += '<div class="decision-tool">调用工具 <code>' + escapeHtml(String(d.tool)) + '</code></div>';
       if (d.args && Object.keys(d.args).length) {
-        body += '<div class="decision-args"><code>' +
-                escapeHtml(JSON.stringify(d.args).slice(0, 300)) + '</code></div>';
+        // 内部参数默认收起（Issue ②）：原始字段不再平铺在对话页，点开才可见
+        body += '<details class="decision-details"><summary>参数</summary>' +
+                '<div class="decision-args"><code>' +
+                escapeHtml(JSON.stringify(d.args)) + '</code></div></details>';
       }
       if (d.result_summary) body += '<div class="decision-result">' + escapeHtml(d.result_summary) + '</div>';
       if (!body) return;   // 空决策不渲染
@@ -512,6 +550,7 @@ async function streamChat(text, bubble) {
     if (tok === 'TRACE') return false;   // Jaeger 链路诊断用，前端不渲染
 
     if (tok === 'DONE') {
+      stopStepTimer('分析完成');
       // 报告类内容（含 markdown 标题或较长正文）流结束后追加导出按钮
       if (fullText && fullText.length > 50 && /^#{1,3}\s/m.test(fullText)) {
         appendExportBar(bubble, fullText);
@@ -522,6 +561,7 @@ async function streamChat(text, bubble) {
     if (tok === 'KEEPALIVE') return false;   // 心跳保活：仅 resetIdle，不渲染
 
     if (tok === 'STEP') {
+      ensureStepTimer();   // 执行链路开始即起表（Issue ⑤）
       // 分析步骤进度：在 bubble 内渲染/更新步骤清单，并同步状态行
       var stepData;
       try { stepData = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
@@ -571,6 +611,7 @@ async function streamChat(text, bubble) {
     }
 
     if (tok === 'ERROR') {
+      stopStepTimer(null);   // 仅停表：状态行随后被隐藏，无终态文案可挂
       bubble.innerHTML = `<span style="color:var(--color-error)">${escapeHtml(frame.payload)}</span>`;
       errorRendered = true;
       if (statusEl) statusEl.style.display = 'none';
