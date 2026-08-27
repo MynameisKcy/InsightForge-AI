@@ -41,6 +41,14 @@ def _load_file_documents(read_path: str) -> list[Document]:
 
 
 class VectorStoreService:
+    # 写回调表类级兜底（不可变空元组）：__new__ 绕过 __init__ 的构造方式
+    # （本仓既有测试接缝惯例，如 test_knowledge_selfheal 的 FakeChroma 注入）
+    # 不炸 _ingest_file/_notify 路径；真实 __init__ 会以同名全新实例列表覆盖。
+    # 类属性刻意不可变——杜绝未初始化实例误 append 污染全类共享状态。
+    _chunks_added_listeners: tuple = ()
+    _source_deleted_listeners: tuple = ()
+    _reindexed_listeners: tuple = ()
+
     def __init__(self, config_path="config/rag.yml", collection_name: str | None = None,
                  persist_directory: str | None = None):
         self.config_path = config_path
