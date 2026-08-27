@@ -63,7 +63,8 @@ def test_rag_quality(eval_rows):
     # ragas modern OpenAIEmbeddings 只有 embed_text，会被 AttributeError 杀掉
     answer_relevancy.embeddings = LangchainEmbeddingsWrapper(get_embed_model())
     dataset = EvaluationDataset.from_list(eval_rows)
-    # 单 judge 调用 ~70s（kimi 长提示词）；4 并发实测触发连接被掐
+    # 单 judge 调用 ~70s 是 kimi judge 时期的实测口径（已切 qwen3.7-flash，
+    # 未重测，仅作量级参考）；4 并发实测触发连接被掐
     # （APIConnectionError 连环、有效样本 2/20）——2 并发 + 600s 超时稳定
     from ragas.run_config import RunConfig
     results = evaluate(
