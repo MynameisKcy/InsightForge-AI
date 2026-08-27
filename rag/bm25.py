@@ -38,6 +38,8 @@ _MIN_IDF = 0.05
 
 
 class _FlooredBM25Okapi(BM25Okapi):
+    # 与 rank-bm25 0.2.2 内部实现耦合（覆写 _calc_idf / 直改 self.idf）——
+    # 升级该依赖前须以 tests/test_bm25_index.py 单测复验本子类行为再发版。
     def _calc_idf(self, nd):
         super()._calc_idf(nd)
         for word, value in self.idf.items():
