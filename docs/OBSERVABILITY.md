@@ -44,7 +44,7 @@ OTEL_SERVICE_NAME=insightforge
 | `planner.step` | 每个步骤 | `planner.step_index/agent_name/duration_ms`、`status` |
 | `sql.generate` | SQL 生成 | `sql.task_length/has_joins/length` |
 | `sql.execute` | SQL 执行（含重试） | `sql.query(截500)/rows_returned/attempt/duration_ms` |
-| `rag.retrieve` | 检索入口 | `rag.query/k/expanded_query_count/coarse_count/results_count` |
+| `rag.retrieve` | 检索入口 | `rag.query/k/bm25_enabled/coarse_count/results_count` |
 | `rag.rerank` | 精排 | `rag.coarse_count/top_n/score_threshold/kept_count`、`rag.fallback`（降级标记） |
 | `memory.recall` | 跨会话记忆 | `memory.user_id/limit/results_count` |
 

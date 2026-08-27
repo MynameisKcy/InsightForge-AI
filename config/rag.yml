@@ -12,3 +12,9 @@ retrieve_k: 15
 rerank_top_n: 3
 # rerank 分数阈值，低于此分数的文档丢弃
 rerank_score_threshold: 0.3
+
+# Hybrid 双路检索（方案一）：BM25 词法通道与向量粗召回 RRF 融合后统一精排。
+# false 时代码跳过 BM25 构建与融合，检索行为与纯稠密现状逐字节等价。
+hybrid_enabled: true
+rrf_k: 60          # RRF 平滑常数（TREC 标准值）
+bm25_top_k: 15     # BM25 路聚合后的截断数（与 retrieve_k 对称）

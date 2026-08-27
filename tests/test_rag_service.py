@@ -25,6 +25,10 @@ class DummyVectorStore:
     def __init__(self, retriever):
         self._retriever = retriever
 
+    def get(self, include=None):
+        # Hybrid 装配（hybrid_enabled 默认开）：__init__ 会 BM25Index(stub).rebuild_from_store()
+        return {"ids": [], "documents": [], "metadatas": []}
+
     def get_retriver(self, user_id=None, k=None):
         return self._retriever
 
@@ -47,6 +51,8 @@ def _make_service(retriever):
     # _rerank 当 docs 数 <= rerank_top_n 时直接截断返回，不调 DashScope
     service.rerank_top_n = 3
     service.rerank_score_threshold = 0.3
+    # Hybrid 关（__new__ 绕过 __init__）：_coarse_pool 走纯 dense 等价路径
+    service._bm25 = None
     return service
 
 
@@ -218,6 +224,8 @@ class RetrieverMultiQueryTests(unittest.TestCase):
         service.retrieve_k = 15
         service.rerank_top_n = 3
         service.rerank_score_threshold = 0.3
+        # Hybrid 关（__new__ 绕过 __init__）：_coarse_pool 走纯 dense 等价路径
+        service._bm25 = None
         if rewriter is not None:
             service._query_rewriter = rewriter
         return service
