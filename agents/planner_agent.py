@@ -131,6 +131,66 @@ class PlannerAgent(BaseAgent):
 
     name = "planner_agent"
 
+    @staticmethod
+    def _sanitize_plan(plan: list[dict]) -> list[dict]:
+        """LLM 计划的后校验闸：去重/上限/重编号 + depends_on 重映射。
+
+        弱模型会吐出 product_analysis×4、visualization×3 式重复计划（live 实锤），
+        原样执行既拖长链路又让前端步骤清单重复。规则：
+        - 非可视化 agent 全局唯一（保留首个），visualization 上限 3；
+        - report 步强制保留（分析链的终点不能被截断丢掉）；
+        - 总步数上限 10，超出时丢弃最早的非 report 步骤；
+        - step 重编号为 1..N 连续；depends_on 经旧→新映射重建，
+          被删步骤的依赖回指其保留首例，悬空依赖剔除。
+        """
+        viz_cap, max_steps = 3, 10
+        first_by_agent: dict[str, int] = {}   # agent → 其保留首例(旧 step 号)
+        alias: dict[int, int] = {}            # 被删旧号 → 保留代表旧号
+        selected: list[dict] = []
+        viz_count, last_viz_old = 0, None
+        for s in plan:
+            old = s.get("step")
+            agent = s.get("agent", "")
+            if agent == "visualization":
+                if viz_count >= viz_cap:
+                    alias[old] = last_viz_old
+                    continue
+                viz_count += 1
+                last_viz_old = old
+            elif agent in first_by_agent:
+                alias[old] = first_by_agent[agent]
+                continue
+            else:
+                first_by_agent[agent] = old
+            selected.append(s)
+        # 强制保留 report（取最后一个被截掉的 report 一并入选）
+        reports_kept = [s for s in selected if s.get("agent") == "report"]
+        reports_dropped = [s for s in plan[len(selected):]
+                           if s.get("agent") == "report" and s.get("step") not in alias]
+        if not reports_kept and reports_dropped:
+            dropped_last = reports_dropped[-1]
+            selected.append(dropped_last)
+        elif len(reports_kept) > 1:
+            for extra in reports_kept[1:]:
+                alias[extra["step"]] = reports_kept[0]["step"]
+                selected.remove(extra)
+        while len(selected) > max_steps:
+            for i, s in enumerate(selected):
+                if s.get("agent") != "report":
+                    del selected[i]
+                    break
+        resolve = {s["step"]: i + 1 for i, s in enumerate(selected)}
+        out = []
+        for i, s in enumerate(selected):
+            new_deps = set()
+            for d in s.get("depends_on", []):
+                target = resolve.get(d, resolve.get(alias.get(d)))
+                if target is not None:
+                    new_deps.add(target)
+            out.append(dict(s, step=i + 1,
+                            depends_on=sorted(new_deps - {i + 1})))
+        return out
+
     def __init__(self, user_id=None):
         super().__init__(user_id)   # self.model = 该用户的 LLM（按 user_id 缓存）
         _model = self.model  # 本用户的 LLM；构造期注入每个子 Agent，实现整条流水线 user_id 隔离
@@ -234,6 +294,9 @@ class PlannerAgent(BaseAgent):
             # 如果 LLM 规划失败，使用默认计划
             plan = self._default_plan(query)
             title = "数据分析报告"
+
+        # 计划后校验闸：去重/上限/重编号（弱模型重复步骤免疫，见 _sanitize_plan）
+        plan = self._sanitize_plan(plan)
 
         logger.info(f"Planner created plan with {len(plan)} steps: {[s['agent'] for s in plan]}")
 

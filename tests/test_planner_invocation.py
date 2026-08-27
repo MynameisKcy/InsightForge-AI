@@ -140,5 +140,122 @@ class DefaultPlanTests(unittest.TestCase):
         self.assertEqual(nums, list(range(1, len(plan) + 1)))
 
 
+class PlanSanitizerTests(unittest.TestCase):
+    """_sanitize_plan：LLM 计划的后校验闸（去重/上限/重编号+依赖重映射）。
+
+    背景：弱模型会吐出 product_analysis×4 / visualization×3 的重复计划
+    （live 日志 16:26 实锤），原样执行既浪费时长又让前端步骤清单出现
+    多个"分组对比分析"。规则：非可视化 agent 全局唯一（保留首个）、
+    visualization 上限 3、总步数上限 10；重编号 step 并把 depends_on
+    经旧→新映射重建（被删步骤的依赖回指其保留首例）。
+    """
+
+    def setUp(self):
+        self.planner = _bare_planner()
+
+    @staticmethod
+    def _plan(*specs):
+        """specs: (agent, deps) 序列 → 标准计划结构。"""
+        return [
+            {"step": i, "agent": a, "task": f"{a} 任务", "depends_on": list(deps)}
+            for i, (a, deps) in enumerate(specs, start=1)
+        ]
+
+    def test_log_garbage_plan_collapses(self):
+        # live 16:26 的真实垃圾计划：pa×4 + viz×3（viz 未超上限 3，全部保留）
+        plan = self._plan(
+            ("sql_query", []),
+            ("product_analysis", [1]),
+            ("product_analysis", [1]),
+            ("product_analysis", [1]),
+            ("product_analysis", [1]),
+            ("visualization", [2]),
+            ("visualization", [3]),
+            ("visualization", [4]),
+            ("report", [2, 3, 4, 5, 6, 7, 8]),
+        )
+        out = PlannerAgent._sanitize_plan(plan)
+        self.assertEqual(
+            [(s["agent"], s["depends_on"]) for s in out],
+            [
+                ("sql_query", []),
+                ("product_analysis", [1]),      # pa 去重保首个
+                ("visualization", [2]),          # 被删的旧3/旧4 → 回指新2
+                ("visualization", [2]),
+                ("visualization", [2]),
+                ("report", [2, 3, 4, 5]),        # 旧2..8 → 新 {2,3,4,5}
+            ],
+        )
+
+    def test_dependency_remap_after_dedup(self):
+        plan = self._plan(
+            ("sql_query", []),
+            ("product_analysis", [1]),
+            ("product_analysis", [1]),      # 删，依赖回指新 2
+            ("visualization", [2]),
+            ("visualization", [3]),          # viz 保留，依赖旧3(删)→重映射到新2
+            ("report", [4, 5]),              # 重映射为新 [3, 4]
+        )
+        out = PlannerAgent._sanitize_plan(plan)
+        self.assertEqual([s["agent"] for s in out],
+                         ["sql_query", "product_analysis", "visualization", "visualization", "report"])
+        by_agent = {s["agent"]: s for s in out}
+        self.assertEqual(by_agent["product_analysis"]["depends_on"], [1])
+        vizzes = [s for s in out if s["agent"] == "visualization"]
+        self.assertTrue(all(s["depends_on"] == [2] for s in vizzes))
+        self.assertEqual([s for s in out if s["agent"] == "report"][0]["depends_on"], [3, 4])
+
+    def test_non_consecutive_duplicate_removed_keep_first(self):
+        plan = self._plan(
+            ("sql_query", []),
+            ("trend_analysis", [1]),
+            ("visualization", [2]),
+            ("trend_analysis", [1]),   # 非连续重复，删
+            ("report", [3, 4]),
+        )
+        out = PlannerAgent._sanitize_plan(plan)
+        self.assertEqual(
+            [s["agent"] for s in out],
+            ["sql_query", "trend_analysis", "visualization", "report"],
+        )
+        report = out[-1]
+        # 旧4(被删的第二条 trend) 的依赖回指其保留首例 → 新2；旧3(viz) → 新3
+        self.assertEqual(report["depends_on"], [2, 3])
+
+    def test_visualization_cap_three(self):
+        plan = self._plan(
+            ("sql_query", []),
+            ("visualization", [1]),
+            ("visualization", [1]),
+            ("visualization", [1]),
+            ("visualization", [1]),   # 第4张图超限，删
+            ("report", [2, 3, 4, 5]),
+        )
+        out = PlannerAgent._sanitize_plan(plan)
+        self.assertEqual(sum(1 for s in out if s["agent"] == "visualization"), 3)
+
+    def test_total_step_cap_ten(self):
+        # 14 步唯一名计划（不受去重影响）→ 截断到前 10 步，重编号连续
+        unique_agents = ["sql_query"] + [f"custom_stage_{i}" for i in range(1, 13)] + ["report"]
+        plan = [{"step": i, "agent": a, "task": "", "depends_on": [i - 1] if i > 1 else []}
+                for i, a in enumerate(unique_agents, start=1)]
+        out = PlannerAgent._sanitize_plan(plan)
+        self.assertEqual(len(out), 10)
+        self.assertEqual([s["step"] for s in out], list(range(1, 11)))
+        for prev, cur in zip(out, out[1:]):
+            self.assertIn(prev["step"], cur["depends_on"])
+
+    def test_healthy_plan_passes_through_renumbered_identity(self):
+        healthy = self._plan(
+            ("sql_query", []),
+            ("product_analysis", [1]),
+            ("visualization", [2]),
+            ("visualization", [2]),
+            ("report", [2, 3, 4]),
+        )
+        out = PlannerAgent._sanitize_plan(healthy)
+        self.assertEqual(out, healthy)
+
+
 if __name__ == "__main__":
     unittest.main()

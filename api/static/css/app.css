@@ -531,6 +531,17 @@ body {
   border-color: var(--color-accent);
 }
 .edit-send:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+/* 用户气泡底色 = accent，accent 同色发送键在气泡内不可见（Issue ③）：
+   气泡内反转为纸面底 + accent 字，hover 提亮字色描边 */
+.message.user .bubble .edit-send {
+  background: var(--color-paper);
+  color: var(--color-accent);
+  border-color: var(--color-paper);
+}
+.message.user .bubble .edit-send:hover {
+  color: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
 .edit-cancel {
   background: transparent;
   color: var(--color-ink-2);
@@ -637,6 +648,29 @@ body {
   flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* 执行用时显示（Issue ⑤）：状态行内联计时，等宽数字防跳动 */
+.chat-status .status-timer {
+  color: var(--color-accent);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+/* 决策卡内部参数：默认折叠（Issue ②） */
+.decision-details summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--color-ink-3);
+  user-select: none;
+  margin: var(--space-2xs) 0 0;
+}
+.decision-details[open] summary { color: var(--color-ink-2); }
+.decision-details .decision-args code {
+  display: block;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 
 /* ── Step checklist (analysis progress, [STEP] SSE target) ── */
 .step-progress {
