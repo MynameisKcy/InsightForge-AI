@@ -286,6 +286,16 @@ class VectorStoreService:
                     available_count += 1
         return loaded_count, available_count
 
+    # DashScope embedding 单批输入上限（batch>20 直接 400 InvalidParameter）。
+    # chroma 的 add_documents 会把整段列表一次性喂给 embedding，>20 分片的
+    # 文档必须客户端分批；20 为服务端约束，非可调参数。
+    _EMBED_BATCH_LIMIT = 20
+
+    def add_documents_batched(self, documents: list) -> None:
+        """按 embedding 批量上限分批写入（≤20 分片时与单次 add_documents 行为一致）。"""
+        for i in range(0, len(documents), self._EMBED_BATCH_LIMIT):
+            self.vector_store.add_documents(documents[i:i + self._EMBED_BATCH_LIMIT])
+
     def _ingest_file(self, path: str, md5_hex: str | None = None, user_id: str | None = None) -> int:
         """加载单个文件入库，返回分片数。失败返回 0。分片写入 user_id owner 元数据。"""
         if md5_hex is None:
@@ -307,7 +317,7 @@ class VectorStoreService:
                 doc.metadata.setdefault("source", path)
                 doc.metadata.setdefault("file_md5", md5_hex)
                 doc.metadata["user_id"] = uid   # owner 隔离关键字段
-            self.vector_store.add_documents(split_document)
+            self.add_documents_batched(split_document)
             self._add_md5(md5_hex)
             logger.info(f"{path}加载成功，{len(split_document)} 个分片 (owner={uid})")
             self._notify(self._chunks_added_listeners, split_document)

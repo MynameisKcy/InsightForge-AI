@@ -64,7 +64,9 @@ def rag_service(tmp_path_factory):
     docs = [Document(page_content=corpus.read_text(encoding="utf-8"),
                      metadata={"source": str(corpus), "user_id": EVAL_USER})]
     store = svc.vector_store
-    store.vector_store.add_documents(store.spliter.split_documents(docs))
+    # 走生产同款分批写入：DashScope embedding 单批上限 20，评估语料 24 分片
+    # 直灌单次 add_documents 会 400（rag_eval 语料去饱和后首次触发此约束）。
+    store.add_documents_batched(store.spliter.split_documents(docs))
     if getattr(svc, "_bm25", None) is not None:
         svc._bm25.rebuild_from_store()
     return svc
