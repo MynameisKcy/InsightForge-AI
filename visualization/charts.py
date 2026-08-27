@@ -13,6 +13,9 @@ from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 from utils.report_paths import CHARTS_DIR, png_sibling_path
 
+# 数值口径矫正：从带单位字符串中提取首个数字 token（容忍任意前后缀）
+_NUMERIC_TOKEN_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
 # 延迟导入 Plotly，处理未安装情况
 _plotly_available = True
 try:
@@ -206,6 +209,9 @@ class ChartGenerator:
 
         # 处理月份类型 x 轴：转为字符串避免科学计数法显示
         work_df = df.copy()
+        # 数值口径矫正（同 bar/pie）：单位字符串也能连成趋势线
+        if y_col in work_df.columns:
+            work_df[y_col], _ = ChartGenerator._coerce_numeric_series(work_df[y_col])
         # 剔除 y_col 缺失行，避免空点/断线
         work_df = work_df.dropna(subset=[y_col])
         if work_df.empty:
@@ -234,6 +240,9 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("bar_chart", title)
 
+        # 数值口径矫正：'16.44元'/'1,234' 类字符串列可参与排名聚合
+        df = df.copy()
+        df[y_col], _ = ChartGenerator._coerce_numeric_series(df[y_col])
         # 剔除 y_col 缺失行，避免画出高度为 0 的空柱
         df = df.dropna(subset=[y_col])
         if df.empty:
@@ -276,20 +285,53 @@ class ChartGenerator:
         return _save_chart(fig, f"bar_{_safe_name(title)}")
 
     @staticmethod
+    @staticmethod
+    def _strip_cat_noise(v) -> str:
+        """类别名去噪：编码残片(?/U+FFFD)、空白、装饰符剔除后再做语义判定。
+
+        live 现场（2026-08-27）：CSV 混合编码让"全省"落库成"全??省"，
+        直接 contains 关键词会漏判，导致汇总行混入分布图。
+        """
+        s = str(v).replace("�", "?")
+        return re.sub(r"[\s?？*_~·•・]+", "", s)
+
+    @staticmethod
+    def _coerce_numeric_series(series, min_clean_ratio: float = 0.6):
+        """口径矫正：'5.43%'/'16.44元'/'1,234' 等带单位字符串 → 数值。
+
+        策略：提取首个数字 token（容忍任意前后缀单位），千分位逗号去除；
+        可解析比例 ≥ min_clean_ratio 才采用清洗结果 (numeric, True)，
+        否则视为非数值列原样返回——调用方据此走占位/维持原语义。
+        """
+        if pd.api.types.is_numeric_dtype(series):
+            return series, False
+
+        def _to_token(v) -> str:
+            m = _NUMERIC_TOKEN_RE.search(str(v))
+            return m.group(0).replace(",", "") if m else ""
+
+        cleaned = series.map(_to_token)
+        nums = pd.to_numeric(cleaned, errors="coerce")
+        orig_valid = int(series.notna().sum())
+        usable = nums.notna().sum() >= max(1, int(orig_valid * min_clean_ratio))
+        return (nums, True) if (usable and orig_valid > 0) else (series, False)
+
+    @staticmethod
     def _drop_summary_rows(df: pd.DataFrame, cat_col: str, values_col: str) -> pd.DataFrame:
         """剔除汇总行，避免对比图把汇总当一个类别（如全省/总计混入各市饼图）。
 
         两条判据（命中任一即剔）：
-        1. 类别名命中汇总关键词：全省/总计/合计/汇总/全部/小计/共计/总和
+        1. 类别名去噪后命中汇总关键词：全省/全国/总计/合计/汇总/全部/小计/共计/总和
+           （live 现场：混合编码使"全省"存为"全??省"，先剥离 ?/空白等残片再匹配）
         2. 某行数值 ≈ 其余正数值之和（误差 2%，且该行是最大值）——「全省=各市之和」模式。
 
         仅在类别列存在时生效；无类别列或全无匹配则原样返回（不误伤正常数据）。
         """
         if df is None or df.empty or cat_col not in df.columns:
             return df if df is not None else pd.DataFrame()
-        SUMMARY_KEYWORDS = re.compile(r"(?:全省|总计|合计|汇总|全部|小计|共计|总和)")
-        # 判据1：关键词命中
-        cat_str = df[cat_col].astype(str)
+        SUMMARY_KEYWORDS = re.compile(r"(?:全省|全国|总计|合计|汇总|全部|小计|共计|总和)")
+        # 判据1：关键词命中（对类别名先做噪声剥离）
+        cat_str = df[cat_col].map(ChartGenerator._strip_cat_noise)
         kw_mask = cat_str.str.contains(SUMMARY_KEYWORDS, na=False)
         if kw_mask.any():
             return df[~kw_mask].reset_index(drop=True)
@@ -315,6 +357,9 @@ class ChartGenerator:
         if not _plotly_available:
             return _placeholder("pie_chart", title)
 
+        # 数值口径矫正：占比/带单位字符串（'9.90%'）转数值，否则 px.pie 无法聚合
+        df = df.copy()
+        df[values_col], _ = ChartGenerator._coerce_numeric_series(df[values_col])
         # 剔除 values_col 缺失行，避免占比失真
         df = df.dropna(subset=[values_col])
         if df.empty:

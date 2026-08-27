@@ -168,3 +168,60 @@ def test_chart_generates_png_sibling():
                 os.remove(f)
             except OSError:
                 pass
+
+
+# ── 汇总行剔除的噪声免疫 + 数值口径矫正（live 2026-08-27 图表问题回归）──
+
+
+def _shandong_style_df() -> pd.DataFrame:
+    """复刻 live 现场：首行为混合编码残片"全??省"（ASCII 问号），数值列干净。"""
+    return pd.DataFrame([
+        {"地 区": "全??省", "人口数（人）": 101527453, "占全省比重": "100.00%"},
+        {"地 区": "济南市", "人口数（人）": 11018365, "占全省比重": "10.82%"},
+        {"地 区": "青岛市", "人口数（人）": 10071722, "占全省比重": "9.90%"},
+        {"地 区": "潍坊市", "人口数（人）": 9386705, "占全省比重": "9.23%"},
+        {"地 区": "淄博市", "人口数（人）": 4704000, "占全省比重": "4.63%"},
+    ])
+
+
+def test_bar_chart_excludes_corrupted_total_row():
+    """汇总行含编码残片（全??省）时仍应被剔除，不得混入各市对比。"""
+    df = _shandong_style_df()
+    path = ChartGenerator.bar_chart(df, x_col="地 区", y_col="人口数（人）",
+                                    title="残片汇总行剔除")
+    assert _is_real_path(path)
+    html = open(path, encoding="utf-8").read()
+    assert "全??省" not in html, "带 ? 残片的汇总行被画进了柱状图"
+    assert "济南市" in html
+    os.remove(path)
+
+
+def test_pie_chart_percent_string_values_and_no_total():
+    """values 为百分号字符串时按口径矫正绘图；汇总行不进饼图。"""
+    df = _shandong_style_df()
+    path = ChartGenerator.pie_chart(df, names_col="地 区", values_col="占全省比重",
+                                    title="口径矫正饼图")
+    assert _is_real_path(path), f"百分比字符串 values 应可矫正绘图: {path}"
+    html = open(path, encoding="utf-8").read()
+    assert "全??省" not in html, "汇总行混入饼图"
+    assert "9.9" in html or "9.23" in html, "矫正后的数值未出现在饼图数据中"
+    os.remove(path)
+
+
+def test_coerce_numeric_series_units_and_commas():
+    """单位后缀/千分位/空白字符串 → 数值；纯垃圾列保持原样返回 (coerced=False)。"""
+    from visualization.charts import ChartGenerator as CG
+
+    s = pd.Series(["5.43%", "4.96%", "16.44元", "1,234", None])
+    nums, coerced = CG._coerce_numeric_series(s)
+    assert coerced and nums.notna().sum() == 4
+    assert abs(nums.iloc[0] - 5.43) < 1e-9
+    assert nums.iloc[3] == 1234
+
+    junk = pd.Series(["高", "低", "中"])
+    _, coerced2 = CG._coerce_numeric_series(junk)
+    assert not coerced2
+
+    already = pd.Series([1.0, 2.0])
+    out, coerced3 = CG._coerce_numeric_series(already)
+    assert not coerced3 and out is already
