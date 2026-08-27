@@ -65,6 +65,32 @@ def test_listener_exception_does_not_break_ingest(vs, tmp_path):
     assert chunks > 0
 
 
+def test_selfheal_notify_passes_effective_uid_not_raw(vs, tmp_path):
+    """自愈清残通知传 effective uid（"default"）判别单测（T5 评审遗留）。
+
+    既有测试两次都传 user_id="alice"（uid == 原始 user_id），无法区分通知里
+    传的是 effective uid 还是裸 user_id。本测试两次都传 None：正确实现必须
+    收到 (path, "default")；若误传原始 user_id 则收到 (path, None)。
+    """
+    received: list[tuple[str, str | None]] = []
+    vs.add_source_deleted_listener(lambda source, uid: received.append((source, uid)))
+
+    # 内容各次运行唯一（uuid 内嵌）：防全局 md5 存储跨运行残留命中
+    f = tmp_path / "kb_uid.txt"
+    f.write_text(f"云帆CRM{uuid.uuid4().hex[:8]}标准版价格是每席每月299元。\n", encoding="utf-8")
+    path = str(f)
+
+    n1, _skipped1 = vs.load_single_document(path, None)
+    assert n1 > 0
+    assert received == []  # 首次入库不走清残分支，不发通知
+
+    # 改内容（md5 变）再 load：触发自愈清残 → 清残分支补发 source_deleted
+    f.write_text(f"旗舰版{uuid.uuid4().hex[:8]}支持私有化部署，SLA达到99.99%。\n", encoding="utf-8")
+    n2, _skipped2 = vs.load_single_document(path, None)
+    assert n2 > 0
+    assert received == [(path, "default")]  # 判别点：不是 (path, None)
+
+
 def test_selfheal_reingest_notifies_bm25_with_effective_uid(vs, tmp_path):
     """自愈清残（内容变更重灌）必须补发 source_deleted 通知，且传 effective uid。
 
