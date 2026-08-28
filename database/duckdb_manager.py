@@ -422,15 +422,41 @@ class DuckDBManager:
             logger.error(f"drop_table failed for '{table_name}': {e}")
             return False
 
-    def get_enhanced_schema_text(self) -> str:
+    def get_enhanced_schema_text(self, tables: list[str] | None = None,
+                                  compact: bool = False,
+                                  compact_sample_rows: int = 5) -> str:
         """增强版 schema 文本,含列语义统计(分类列取值/数值 min-max/宽表标记)。
 
         画像经实例级 _profile_cache 缓存,缓存缺失懒计算兜底。
+
+        Args:
+            tables: 可选表名白名单。None（默认）= 返回该连接内所有表（向后兼容，
+                用于 test_schema_semantics.py 的旧调用与外部诊断工具）。传入
+                list[str] 时只渲染这些表，其他表直接 skip——用于 SQL agent
+                在 DataResolver 选出主数据集后只暴露目标表，避免 LLM 拿到
+                同一用户的其它数据集（如「山东省人口」+ World Bank WDI 同时
+                加载到同一连接时）被意外 JOIN 污染输出。
+            compact: True 时输出精简版：仅列名 + 5 行 sample（替代全列统计
+                /min-max/nunique 详尽输出），单表 schema 文本体量可降 50-70%。
+                适用于 SQL agent 单表查询场景——LLM 拿到列名 + 真实 sample
+                即可写出 SQL,详尽统计信息对单表查询是冗余（阶段 1.4 / 4.1
+                优化目标,大表 5000-20000 字符 → ~1000-3000 字符）。
+            compact_sample_rows: compact 模式下的 sample 行数（默认 5）。
         """
         from database import schema
 
-        tables = self.get_table_names()
-        if not tables:
+        all_tables = self.get_table_names()
+        if tables is not None:
+            # 入参校验：复用 safe_ident/validate_table_name 防注入；只保留
+            # 该连接中真实存在且在白名单的表（避免空过滤结果）。
+            for t in tables:
+                validate_table_name(t)
+            allowed = {t for t in tables if t in all_tables}
+            target_tables = [t for t in all_tables if t in allowed]
+        else:
+            target_tables = all_tables
+
+        if not target_tables:
             return "No tables found."
 
         # 从 datasources_db 获取元数据映射 table_name -> {source_type, row_count}（仅本用户）
@@ -446,7 +472,7 @@ class DuckDBManager:
             logger.debug("get_enhanced_schema_text: datasources_db unavailable, using defaults")
 
         parts = []
-        for table_name in tables:
+        for table_name in target_tables:
             validate_table_name(table_name)
             # 懒计算（缓存已在 __init__ 初始化）
             if table_name not in self._profile_cache:
@@ -467,19 +493,41 @@ class DuckDBManager:
             parts.append(header)
 
             if profile:
-                for c in profile["columns"]:
-                    line = f"  - {c['name']} ({c['dtype']})"
-                    if c.get("values") is not None:
-                        vals = c["values"]
-                        suffix = f"共{c['nunique']}个" if c["nunique"] > 8 else f"{c['nunique']}个"
-                        line += f" — {suffix}唯一值: {vals}"
-                        if c["nunique"] > 8:
-                            line += " …"
-                    elif c["nunique"] > 0:
-                        line += f" — {c['nunique']}个唯一值"
-                    if c.get("min") is not None:
-                        line += f" (min={c['min']}, max={c['max']}, {c['non_null']}/{c['total']}非空)"
-                    parts.append(line)
+                if compact:
+                    # 精简模式:仅列名(类型)+ 5 行 sample,省去 nunique/min-max
+                    # 冗余输出(阶段 1.4 / 4.1:大表 schema 5000-20000 字符 → ~1000-3000)
+                    cols_with_type = [
+                        f"  - {c['name']} ({c['dtype']})"
+                        for c in profile["columns"]
+                    ]
+                    parts.extend(cols_with_type)
+                    if row_count and row_count > 0:
+                        try:
+                            sample = self.conn.execute(
+                                f"SELECT * FROM {safe_ident(table_name)} LIMIT {int(compact_sample_rows)}"
+                            ).fetchall()
+                            col_names_list = [c["name"] for c in profile["columns"]]
+                            parts.append(f"  示例前{min(len(sample), compact_sample_rows)}行:")
+                            parts.append("    " + ", ".join(col_names_list))
+                            for row in sample:
+                                parts.append("    " + ", ".join(str(v) for v in row))
+                        except Exception:
+                            # sample 失败不影响主输出
+                            pass
+                else:
+                    for c in profile["columns"]:
+                        line = f"  - {c['name']} ({c['dtype']})"
+                        if c.get("values") is not None:
+                            vals = c["values"]
+                            suffix = f"共{c['nunique']}个" if c["nunique"] > 8 else f"{c['nunique']}个"
+                            line += f" — {suffix}唯一值: {vals}"
+                            if c["nunique"] > 8:
+                                line += " …"
+                        elif c["nunique"] > 0:
+                            line += f" — {c['nunique']}个唯一值"
+                        if c.get("min") is not None:
+                            line += f" (min={c['min']}, max={c['max']}, {c['non_null']}/{c['total']}非空)"
+                        parts.append(line)
             else:
                 # 画像失败兜底:回退到纯 DESCRIBE
                 qname = safe_ident(table_name)

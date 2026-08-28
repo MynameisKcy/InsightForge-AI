@@ -22,6 +22,29 @@ except ImportError:
 REPORT_TEMPLATE_PATH = get_abs_path("templates/report_template.md")
 
 
+def _extract_insight(result: dict, primary_key: str, max_chars: int = 1500) -> str:
+    """从分析结果 dict 中抽取 insight 文本(阶段 1.4 / 4.2)。
+
+    原方案把整个 dict JSON 化截 2000 字符——含 score/highlights 等结构化字段,
+    对执行摘要这种"自然语言总结"任务冗余(LLM prefill 多 5-8s)。
+
+    抽取策略:优先 primary_key(如 trend_summary / insight),为空则降级到
+    已知备选键;再为空才回退到原 JSON 化路径(保持向后兼容)。
+    """
+    if not result:
+        return "(无)"
+    text = result.get(primary_key)
+    if text:
+        return str(text)[:max_chars]
+    # 备选键
+    for fallback in ("insight", "trend_summary", "risk_summary", "summary"):
+        text = result.get(fallback)
+        if text:
+            return str(text)[:max_chars]
+    # 全空 → 退回原 JSON 路径(防退化,但标记退化原因)
+    return json.dumps(result, ensure_ascii=False, indent=2)[:max_chars]
+
+
 EXECUTIVE_SUMMARY_PROMPT = """你是一个高级数据分析师。请根据以下所有分析结果生成一段 3-5 句的执行摘要。
 
 ## 趋势分析
@@ -231,9 +254,9 @@ class ReportAgent(BaseAgent):
         """使用 LLM 生成执行摘要。"""
         try:
             prompt = EXECUTIVE_SUMMARY_PROMPT.format(
-                trend_summary=json.dumps(trend, ensure_ascii=False, indent=2)[:2000],
-                product_summary=json.dumps(product, ensure_ascii=False, indent=2)[:2000],
-                risk_summary=json.dumps(risk, ensure_ascii=False, indent=2)[:2000],
+                trend_summary=_extract_insight(trend, "trend_summary"),
+                product_summary=_extract_insight(product, "insight"),
+                risk_summary=_extract_insight(risk, "risk_summary"),
             )
             messages = [{"role": "user", "content": prompt}]
             return self._call_llm(messages)

@@ -23,7 +23,8 @@ SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用�
 6. 如果用户没有指定 LIMIT，默认添加 LIMIT 100。
 7. 使用 DuckDB 兼容的 SQL 语法。
 8. **只生成 SELECT 查询** —— 禁止生成 DROP/CREATE/INSERT/UPDATE/DELETE/ATTACH/ALTER/TRUNCATE 等任何写操作或 DDL 语句。
-9. **跨表查询时请使用标准 SQL JOIN** —— 系统支持跨数据集关联分析。
+
+{primary_table_directive}
 
 10. **列名已自动清洗**（HTML 实体/不可见字符/全角已归一），可直接使用 Schema 中的列名。若列名语义不明确，依据 Schema 提供的列统计（取值 values / nunique / min-max）推断该列含义（维度列还是度量列），**不要要求用户清洗或重传数据**。
 
@@ -35,10 +36,19 @@ SQL_AGENT_SYSTEM_PROMPT = """你是一个专业的 SQL 生成助手。根据用�
 - 只能使用 Schema 中实际存在的表名和列名来编写 SQL。
 - 如果 Schema 中有 "Product Name" 列，请用双引号引用为 "Product Name"。
 - 不要假设存在 Schema 中未出现的列名。
-- 如果用户的问题涉及多个表，请使用 JOIN 关联查询。
 - 列名含义不清时，结合列取值与统计推断（取值为月份/年龄段/类别则是维度列，含 min-max 数值则是度量列）。
 
 请根据用户需求生成 SQL："""
+
+
+# 当 DataResolver 为主数据集限定了表名时，注入的硬指令（替换原"鼓励跨表 JOIN"规则 9）。
+# Schema 文本经 get_enhanced_schema_text(tables=[primary]) 已只含该表，但仍用硬指令
+# 防御 LLM 忽略 schema 自行脑补出其它表名。
+_SCOPED_PRIMARY_TABLE_DIRECTIVE = """9. **目标数据集已限定为 `{primary_table}`**。所有 SQL 必须只查询该表（FROM/JOIN 中的表名只允许出现 `{primary_table}`）。禁止 JOIN 该用户账号下其它已注册的数据集表，即使它们在 Schema 之外存在——这会污染下游图表。"""
+
+# 未限定主表时（backward compat：SQLAgent 单独使用，未经过 PlannerAgent 链），
+# 保留旧的"支持跨表 JOIN"指令以不破坏既有行为。
+_UNSCOPED_PRIMARY_TABLE_DIRECTIVE = """9. **跨表查询时请使用标准 SQL JOIN** —— 系统支持跨数据集关联分析。"""
 
 
 class SQLAgent(BaseAgent):
@@ -67,6 +77,10 @@ class SQLAgent(BaseAgent):
         """
         task = input_data.get("task", "")
         table_name = input_data.get("table_name", "transactions")
+        # 主数据集表名（DataResolver 选出，PlannerAgent 下传）：用于 scoped schema
+        # 暴露与 prompt 硬指令，防止 LLM 看到/写到同 user 其它数据集表。
+        # 为空时退化为旧行为（暴露连接里所有表），保留 backward compat。
+        primary_table = input_data.get("primary_table", "") or ""
         # 按 user_id 切换到该用户的独立 DuckDB 实例（多用户隔离）
         user_id = input_data.get("user_id") or self._default_user_id or "default"
         self.db = init_duckdb(user_id=user_id)
@@ -77,9 +91,10 @@ class SQLAgent(BaseAgent):
         # 生成 SQL
         tracer = get_tracer()
         with traced("sql.generate", attrs={"sql.task_length": len(task)}) as gen_span:
-            sql = self._generate_sql(task, table_name)
+            sql = self._generate_sql(task, table_name, primary_table=primary_table)
             gen_span.set_attribute("sql.has_joins", "JOIN" in sql.upper())
             gen_span.set_attribute("sql.length", len(sql))
+            gen_span.set_attribute("sql.primary_table", primary_table)
         if not sql:
             return {"error": "Failed to generate SQL", "dataframe_json": "[]", "row_count": 0, "sql": ""}
 
@@ -111,7 +126,8 @@ class SQLAgent(BaseAgent):
                 if attempt >= max_retries:
                     break
                 # 把错误信息回灌 LLM 重新生成 SQL
-                fixed_sql = self._fix_sql(current_sql, str(e), task, table_name)
+                fixed_sql = self._fix_sql(current_sql, str(e), task, table_name,
+                                          primary_table=primary_table)
                 if not fixed_sql or fixed_sql == current_sql:
                     # LLM 未产出新 SQL，放弃
                     break
@@ -123,10 +139,28 @@ class SQLAgent(BaseAgent):
 
         return {"error": str(last_error), "dataframe_json": "[]", "row_count": 0, "sql": current_sql}
 
-    def _generate_sql(self, task: str, table_name: str = "", fix_hint: dict | None = None) -> str:
-        """使用 LLM 生成 SQL。若提供 fix_hint（上一轮错误信息），则要求 LLM 据此修正。"""
-        schema_text = self.db.get_enhanced_schema_text()
-        prompt = SQL_AGENT_SYSTEM_PROMPT.format(schema=schema_text)
+    def _generate_sql(self, task: str, table_name: str = "", fix_hint: dict | None = None,
+                      primary_table: str = "") -> str:
+        """使用 LLM 生成 SQL。若提供 fix_hint（上一轮错误信息），则要求 LLM 据此修正。
+
+        primary_table：DataResolver 选出的主数据集表名。为空时退化为旧行为
+        （暴露该连接所有表 + 旧的"支持跨表 JOIN"指令）。非空时只暴露该表
+        到 schema 文本 + 注入"禁止跨表"硬指令，防 LLM 写出污染 SQL。
+        """
+        if primary_table:
+            # 阶段 1.4 / 4.1:精简 schema 文本(列名 + 5 行 sample),替代全列统计
+            # 大表 schema 从 5000-20000 字符降到 ~1000-3000 字符,prefill 省 5-10s
+            schema_text = self.db.get_enhanced_schema_text(tables=[primary_table], compact=True)
+            primary_table_directive = _SCOPED_PRIMARY_TABLE_DIRECTIVE.format(
+                primary_table=primary_table
+            )
+        else:
+            schema_text = self.db.get_enhanced_schema_text(compact=True)
+            primary_table_directive = _UNSCOPED_PRIMARY_TABLE_DIRECTIVE
+        prompt = SQL_AGENT_SYSTEM_PROMPT.format(
+            schema=schema_text,
+            primary_table_directive=primary_table_directive,
+        )
         if fix_hint:
             user_content = (
                 f"之前生成的 SQL 执行失败，请根据错误信息修正后重新生成 SQL。\n"
@@ -163,10 +197,12 @@ class SQLAgent(BaseAgent):
             return sql
         return text.strip()
 
-    def _fix_sql(self, sql: str, error_msg: str, task: str, table_name: str) -> str:
+    def _fix_sql(self, sql: str, error_msg: str, task: str, table_name: str,
+                primary_table: str = "") -> str:
         """把错误信息 + 原 SQL + 原 task 回灌 LLM，重新生成修正后的 SQL。
 
         若 LLM 未产出新 SQL 或返回与原 SQL 相同，则返回空串表示放弃。
+        primary_table 透传到 _generate_sql，确保重试用同一份 scoped schema/指令。
         """
         if not error_msg:
             return ""
@@ -174,6 +210,7 @@ class SQLAgent(BaseAgent):
             fixed = self._generate_sql(
                 task, table_name,
                 fix_hint={"sql": sql, "error": error_msg},
+                primary_table=primary_table,
             )
         except Exception as e:
             logger.error(f"_fix_sql LLM regeneration failed: {e}")
