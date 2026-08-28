@@ -124,3 +124,103 @@ def test_stage_timing_includes_real_elapsed_time():
     timing = [d for t, d in captured if t == "step_timing"][0]
     # 容忍 perf_counter 精度 + Windows 调度抖动(>=40ms 即可)
     assert timing["duration_ms"] >= 40, f"expected >=40ms, got {timing['duration_ms']}"
+
+
+# ── 阶段 1.2:async 版 _execute_step_async(为 2.1 三并发做基础设施) ──
+# 项目约定用 asyncio.run(...) 包裹 async def(避免依赖 pytest-asyncio)
+
+import asyncio
+
+
+def test_async_step_success_emits_timing():
+    """_execute_step_async 成功路径 emit step_timing,duration_ms 反映 wall-clock。"""
+    from agents.planner_agent import PlannerAgent, RequestContext
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    def ok_handler(task, pctx, ctx):
+        return None
+    planner._agent_map = {"sql_query": ok_handler}
+    ctx = RequestContext(user_id="u", session_id="s", dataset_name="d", csv_path="x",
+                         primary_table="t", query="q")
+    pctx = PipelineContext()
+
+    captured = []
+    async def scenario():
+        with patch("agents.planner_agent.get_progress_emitter") as get_em:
+            emitter = MagicMock()
+            emitter.emit = lambda t, d: captured.append((t, d))
+            get_em.return_value = emitter
+            return await planner._execute_step_async(_step(), pctx, ctx)
+
+    result = asyncio.run(scenario())
+
+    assert result == "ok"
+    timing_events = [(t, d) for t, d in captured if t == "step_timing"]
+    assert len(timing_events) == 1
+    assert timing_events[0][1]["status"] == "ok"
+    assert timing_events[0][1]["duration_ms"] >= 0
+
+
+def test_async_step_gather_truly_runs_concurrently():
+    """关键测试:3 个 async step 用 asyncio.gather 时,wallclock 应 < 串行 sum。
+    这是 2.1 三并发的本质证明(commit 2 仅做基础设施,真并发留 commit 5)。
+    """
+    from agents.planner_agent import PlannerAgent, RequestContext
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+
+    def slow_handler_factory(ms):
+        def h(task, pctx, ctx):
+            time.sleep(ms / 1000.0)
+        return h
+
+    planner._agent_map = {
+        "trend_analysis": slow_handler_factory(50),
+        "product_analysis": slow_handler_factory(50),
+        "risk_analysis": slow_handler_factory(50),
+    }
+    ctx = RequestContext(user_id="u", session_id="s", dataset_name="d", csv_path="x",
+                         primary_table="t", query="q")
+    pctx = PipelineContext()
+
+    async def scenario():
+        with patch("agents.planner_agent.get_progress_emitter", return_value=None):
+            steps = [
+                {"step": 1, "agent": "trend_analysis", "task": "t", "depends_on": []},
+                {"step": 2, "agent": "product_analysis", "task": "p", "depends_on": []},
+                {"step": 3, "agent": "risk_analysis", "task": "r", "depends_on": []},
+            ]
+            t0 = time.perf_counter()
+            results = await asyncio.gather(*[planner._execute_step_async(s, pctx, ctx) for s in steps])
+            return results, (time.perf_counter() - t0) * 1000
+
+    results, wallclock_ms = asyncio.run(scenario())
+    assert results == ["ok", "ok", "ok"]
+    # 3×50ms 串行 = 150ms,并发应 < 100ms(预留调度开销)
+    assert wallclock_ms < 100, f"3×50ms steps in gather should be <100ms, got {wallclock_ms:.0f}ms"
+
+
+def test_async_step_handler_exception_still_records_timing():
+    """失败也 emit step_timing(finally 块),与同步版一致。"""
+    from agents.planner_agent import PlannerAgent, RequestContext
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    def fail_handler(task, pctx, ctx):
+        raise RuntimeError("simulated")
+    planner._agent_map = {"sql_query": fail_handler}
+    ctx = RequestContext(user_id="u", session_id="s", dataset_name="d", csv_path="x",
+                         primary_table="t", query="q")
+    pctx = PipelineContext()
+
+    captured = []
+    async def scenario():
+        with patch("agents.planner_agent.get_progress_emitter") as get_em:
+            emitter = MagicMock()
+            emitter.emit = lambda t, d: captured.append((t, d))
+            get_em.return_value = emitter
+            return await planner._execute_step_async(_step(), pctx, ctx)
+
+    result = asyncio.run(scenario())
+    assert result == "failed"
+    timing = [d for t, d in captured if t == "step_timing"][0]
+    assert timing["status"] == "failed"

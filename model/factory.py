@@ -104,9 +104,10 @@ def _build_chat_model(user_id: str | None = None):
         return ChatOpenAI(model=model_name, api_key=api_key or None,
                           base_url=base_url, streaming=True)
     # 未设 base_url -> ChatTongyi（DashScope）：传入用户 key，空则回退到 DASHSCOPE_API_KEY 环境变量
+    # 显式 streaming=True 与 ChatOpenAI 路径(104 行)对齐;阶段 1.1 改造。
     if api_key:
-        return ChatTongyi(model=model_name, dashscope_api_key=api_key)
-    return ChatTongyi(model=model_name)
+        return ChatTongyi(model=model_name, dashscope_api_key=api_key, streaming=True)
+    return ChatTongyi(model=model_name, streaming=True)
 
 
 def reload_model_config(user_id: str) -> None:

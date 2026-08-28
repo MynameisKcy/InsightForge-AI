@@ -2,6 +2,7 @@
 Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，调度 Agent 执行。
 """
 
+import asyncio
 import os
 import time
 import traceback
@@ -579,6 +580,68 @@ class PlannerAgent(BaseAgent):
             return "failed"
         finally:
             # 无论成功失败都报告时长(失败也占用 wall-clock,优化 ROI 需看见)
+            stage_duration_ms = round((time.perf_counter() - stage_start) * 1000, 1)
+            self._emit_progress("step_timing", {
+                "step": step_num,
+                "agent": agent_name,
+                "duration_ms": stage_duration_ms,
+                "status": stage_status,
+            })
+
+    async def _execute_step_async(self, step: dict, pctx: PipelineContext,
+                                  ctx: "RequestContext") -> str:
+        """异步版 _execute_step:用 asyncio.to_thread 把同步 handler 跑在 default
+        executor,await 释放 event loop。是 2.1(Trend/Product/Risk 三并发)的硬前置。
+
+        与 _execute_step 的区别:handler 在子线程跑,await 让出 event loop,
+        上层 (run_async) 可在此期间调度其他 step 的 gather,实现真并发。
+        业务逻辑、emit、timing、错误处理均沿用 _execute_step 不变(委派)。
+
+        不动 BaseAgent(仍走 _call_llm 同步路径);本方法只是把"调用方"
+        从同步 thread 切换到 default executor。LangChain 内部 ainvoke 也是
+        走 to_thread(self.invoke),效果等价。
+        """
+        agent_name = step.get("agent", "")
+        task = step.get("task", "")
+        step_num = step.get("step", 0)
+        handler = self._agent_map.get(agent_name)
+        if handler is None:
+            pctx.errors.append(f"Unknown agent: {agent_name}")
+            self._write_degradation(pctx, agent_name, f"未知 agent: {agent_name}")
+            return "failed"
+
+        # 阶段级 timing:与同步版同口径(perf_counter 起点),失败 finally 也报。
+        stage_start = time.perf_counter()
+        stage_status = "ok"
+        timeout = _stage_timeout_seconds()
+        try:
+            if timeout and timeout > 0:
+                # asyncio.wait_for 包装 to_thread,与原 ThreadPoolExecutor 语义对齐:
+                # 超时取消 task(handler 仍在子线程跑至完成),不抢占 LLM。
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(handler, task, pctx, ctx),
+                        timeout=timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Step {step_num} ({agent_name}) timed out after {timeout}s")
+                    pctx.errors.append(f"Step {step_num} ({agent_name}) timeout after {timeout}s")
+                    self._write_degradation(pctx, agent_name, f"超时（{timeout}s）")
+                    stage_status = "failed"
+                    return "failed"
+            else:
+                await asyncio.to_thread(handler, task, pctx, ctx)
+            pctx.completed_steps.add(step_num)
+            return "ok"
+        except Exception as e:
+            logger.error(f"Step {step_num} ({agent_name}) failed: {e}")
+            logger.error(traceback.format_exc())
+            pctx.errors.append(f"Step {step_num} ({agent_name}) failed: {e}")
+            self._write_degradation(pctx, agent_name, str(e))
+            stage_status = "failed"
+            return "failed"
+        finally:
+            # 与同步版完全一致的 step_timing 事件,前端契约不破。
             stage_duration_ms = round((time.perf_counter() - stage_start) * 1000, 1)
             self._emit_progress("step_timing", {
                 "step": step_num,
