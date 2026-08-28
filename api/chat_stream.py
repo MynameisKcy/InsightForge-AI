@@ -29,12 +29,14 @@ _KEEPALIVE_FRAME = sp.frame(sp.KEEPALIVE)
 
 
 def progress_event_token(event: dict) -> str:
-    """进度事件按 type 路由为 SSE 帧：metrics→看板 / decision→决策卡 / 其余→步骤清单。"""
+    """进度事件按 type 路由为 SSE 帧：metrics→看板 / decision→决策卡 / step_timing→阶段耗时 / 其余→步骤清单。"""
     etype = event.get("type", "")
     if etype == "metrics":
         return sp.frame(sp.METRICS, json.dumps(event, ensure_ascii=False))
     if etype == "decision":
         return sp.frame(sp.DECISION, json.dumps(event, ensure_ascii=False))
+    if etype == "step_timing":
+        return sp.frame(sp.STEP_TIMING, json.dumps(event, ensure_ascii=False))
     return sp.frame(sp.STEP, json.dumps(event, ensure_ascii=False))
 
 

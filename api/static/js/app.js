@@ -14,6 +14,7 @@ var SSE_PROTOCOL = {
   SESSIONS_RELOAD: '[SESSIONS_RELOAD]',
   TRACE:           '[TRACE]',
   STEP:            '[STEP]',
+  STEP_TIMING:     '[STEP_TIMING]',
   KEEPALIVE:       '[KEEPALIVE]',
   DONE:            '[DONE]',
   ERROR:           '[ERROR]',
@@ -607,6 +608,36 @@ async function streamChat(text, bubble) {
         }
       }
       scrollToBottom();
+      return false;
+    }
+
+    if (tok === 'STEP_TIMING') {
+      // 单阶段耗时:在对应 step row 旁追加 "X秒",前端可见的 per-step timing
+      // (阶段 1 优化 ROI 测量点 + 用户感知改进)
+      var timingData;
+      try { timingData = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
+      var step = timingData.step, ms = timingData.duration_ms;
+      if (step == null || ms == null) return false;
+      var prog = bubble.querySelector('.step-progress');
+      if (!prog) return false;
+      var srow = prog.querySelector('.step[data-step="' + step + '"]');
+      if (!srow) return false;
+      var dur = ms < 1000
+        ? Math.round(ms) + 'ms'
+        : (ms < 60000 ? (ms / 1000).toFixed(1) + '秒' : Math.floor(ms / 60000) + '分' + Math.round((ms % 60000) / 1000) + '秒');
+      var labelEl = srow.querySelector('.step-label');
+      if (labelEl) {
+        // 避免重复追加(后端会同时发 step_done + step_timing 两次)
+        var existing = labelEl.querySelector('.step-duration');
+        if (existing) existing.textContent = ' · ' + dur;
+        else {
+          var span = document.createElement('span');
+          span.className = 'step-duration';
+          span.style.cssText = 'color:#888;font-size:0.85em;margin-left:4px;';
+          span.textContent = ' · ' + dur;
+          labelEl.appendChild(span);
+        }
+      }
       return false;
     }
 

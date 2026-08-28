@@ -3,6 +3,7 @@ Planner Agent: 任务规划与编排 —— 理解用户需求，拆解任务，
 """
 
 import os
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FuturesTimeout
@@ -59,17 +60,22 @@ class RequestContext:
     多用户并发会互相覆盖；改为每次请求构造局部 ctx 下传，天然隔离。
     """
 
-    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc", "query")
+    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc", "query", "primary_table")
 
     def __init__(self, user_id: str = "default", session_id: str = "",
                  csv_path: str = "", dataset_name: str = "",
-                 dataset_desc: str = "", query: str = ""):
+                 dataset_desc: str = "", query: str = "", primary_table: str = ""):
         self.user_id = user_id or "default"
         self.session_id = session_id
         self.csv_path = csv_path
         self.dataset_name = dataset_name
         self.dataset_desc = dataset_desc
         self.query = query
+        # DataResolver 选出的主数据集表名（与 dataset_name 同源：datasources_db
+        # 中该数据集的 name 字段，等同 DuckDB 里的表名）。下传给 SQLAgent 让
+        # get_enhanced_schema_text 只暴露该表，避免同 user 其它注册数据集
+        # 出现在 LLM prompt 中导致意外 JOIN 污染输出。
+        self.primary_table = primary_table
 
 
 PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题与数据特点，制定分析计划。
@@ -228,15 +234,22 @@ class PlannerAgent(BaseAgent):
             csv_path = resolved.get("csv_path", "")
             dataset_name = resolved.get("name", "Unknown Dataset")
             dataset_desc = resolved.get("description", "")
+            # DataResolver 选出的主数据集表名（dataset_name 同源：datasources_db
+            # 注册时的 name 字段；DataResolver 内部直接把该字段映射为 DuckDB
+            # 表名，见 database/data_resolver.py:131）。下传给 SQLAgent 用于
+            # scoped schema，避免同 user 其它数据集被意外注入 LLM prompt。
+            primary_table = dataset_name
         except Exception as e:
             logger.warning(f"DataResolver failed: {e}, using default dataset")
             csv_path = ""
             dataset_name = "Online Shopping Dataset"
             dataset_desc = ""
+            primary_table = ""
 
         ctx = RequestContext(user_id=user_id, session_id=session_id,
                              csv_path=csv_path, dataset_name=dataset_name,
-                             dataset_desc=dataset_desc, query=input_data.get("query", ""))
+                             dataset_desc=dataset_desc, query=input_data.get("query", ""),
+                             primary_table=primary_table)
 
         # 确保该 user 的 DuckDB 实例加载了本次所需 CSV（实例内部按 last_loaded_csv 判重）
         if csv_path and os.path.exists(csv_path):
@@ -519,6 +532,10 @@ class PlannerAgent(BaseAgent):
         返回 "ok" | "failed"。进度发射（step_done/step_error）由调用方按路径
         各自处理，本方法只返回状态。沿用 #4 SSE 取消的"不抢占 LLM"约束：
         超时仅放弃线程（残留完成、结果丢弃），不中断进行中的 LLM 调用。
+
+        阶段级 timing：入口/出口 perf_counter，无论成功失败都 emit step_timing
+        + 落 OTel span.stage.duration_ms 属性。前端 STEP_TIMING 帧按 step
+        追加"X秒"，用于 per-step 计时展示 + 阶段 1 优化 ROI 测量。
         """
         agent_name = step.get("agent", "")
         task = step.get("task", "")
@@ -529,6 +546,9 @@ class PlannerAgent(BaseAgent):
             self._write_degradation(pctx, agent_name, f"未知 agent: {agent_name}")
             return "failed"
 
+        # 阶段级 timing：起点 perf_counter
+        stage_start = time.perf_counter()
+        stage_status = "ok"
         timeout = _stage_timeout_seconds()
         try:
             if timeout and timeout > 0:
@@ -543,6 +563,7 @@ class PlannerAgent(BaseAgent):
                     logger.warning(f"Step {step_num} ({agent_name}) timed out after {timeout}s")
                     pctx.errors.append(f"Step {step_num} ({agent_name}) timeout after {timeout}s")
                     self._write_degradation(pctx, agent_name, f"超时（{timeout}s）")
+                    stage_status = "failed"
                     return "failed"
                 ex.shutdown(wait=False)
             else:
@@ -554,7 +575,17 @@ class PlannerAgent(BaseAgent):
             logger.error(traceback.format_exc())
             pctx.errors.append(f"Step {step_num} ({agent_name}) failed: {e}")
             self._write_degradation(pctx, agent_name, str(e))
+            stage_status = "failed"
             return "failed"
+        finally:
+            # 无论成功失败都报告时长(失败也占用 wall-clock,优化 ROI 需看见)
+            stage_duration_ms = round((time.perf_counter() - stage_start) * 1000, 1)
+            self._emit_progress("step_timing", {
+                "step": step_num,
+                "agent": agent_name,
+                "duration_ms": stage_duration_ms,
+                "status": stage_status,
+            })
 
     @staticmethod
     def _write_degradation(pctx: PipelineContext, agent_name: str, reason: str) -> None:
@@ -574,7 +605,13 @@ class PlannerAgent(BaseAgent):
 
     def _run_sql(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行 SQL 查询（按 ctx.user_id 隔离数据层）。"""
-        result = self.sql_agent.run({"task": task, "user_id": ctx.user_id})
+        result = self.sql_agent.run({
+            "task": task,
+            "user_id": ctx.user_id,
+            # 主表名（DataResolver 选出）下传到 SQLAgent，让 get_enhanced_schema_text
+            # 只暴露该表到 LLM prompt，避免同 user 其它数据集被意外 JOIN 污染。
+            "primary_table": ctx.primary_table,
+        })
         pctx.sql_result = result
         # SQLAgent 成功时返回 {"error": None, ...}，失败时 {"error": "msg", ...}。
         # 必须用 not result.get("error") 判断（key 恒存在，None 表示成功），

@@ -17,6 +17,7 @@ from utils.sse_protocol import (
     SESSION,
     SESSIONS_RELOAD,
     STEP,
+    STEP_TIMING,
     THINKING,
     TOKENS,
     TRACE,
@@ -34,7 +35,7 @@ _APP_JS = Path(__file__).resolve().parent.parent / "api" / "static" / "js" / "ap
 def test_token_inventory_complete():
     assert TOKENS == {
         THINKING, SESSION, SESSIONS_RELOAD, CHART, STEP, KEEPALIVE,
-        DONE, ERROR, TRACE, METRICS, DECISION,
+        DONE, ERROR, TRACE, METRICS, DECISION, STEP_TIMING,
     }
 
 

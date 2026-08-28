@@ -30,15 +30,16 @@ ERROR = "ERROR"                  # [ERROR] {msg}：流异常结束（历史格�
 CHART = "CHART"                  # [CHART:url]：新图表 web URL（包裹式）
 METRICS = "METRICS"              # [METRICS:{json}]：Token/成本看板累计值（包裹式）
 DECISION = "DECISION"            # [DECISION:{json}]：决策卡片（工具调用/LLM 推理）
+STEP_TIMING = "STEP_TIMING"      # [STEP_TIMING:{json}]：单阶段耗时(包装式),前端展示 per-step timing
 
 #: 全部合法 token（消费方据此白名单放行；不在表内的 [xxx] 文本回落正文）
 TOKENS = frozenset({
     THINKING, SESSION, SESSIONS_RELOAD, TRACE, STEP, KEEPALIVE,
-    DONE, ERROR, CHART, METRICS, DECISION,
+    DONE, ERROR, CHART, METRICS, DECISION, STEP_TIMING,
 })
 
 #: 包裹式 token：帧形为 [TOKEN:payload]，尾 ']' 是终结符而非 payload 的一部分
-WRAPPED_TOKENS = frozenset({STEP, CHART, METRICS, DECISION})
+WRAPPED_TOKENS = frozenset({STEP, CHART, METRICS, DECISION, STEP_TIMING})
 
 _TOKEN_NAME = re.compile(r"[A-Z_]+")
 
