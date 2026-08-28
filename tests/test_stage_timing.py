@@ -224,3 +224,83 @@ def test_async_step_handler_exception_still_records_timing():
     assert result == "failed"
     timing = [d for t, d in captured if t == "step_timing"][0]
     assert timing["status"] == "failed"
+
+
+# ── 阶段 1.5 / 2.1:Trend/Product/Risk 三并发识别 + 执行 ──
+
+def test_detect_concurrency_group_when_three_analyses_present():
+    """plan 含 trend+product+risk 且 depends_on 相同 → 识别为并发组。"""
+    from agents.planner_agent import PlannerAgent
+    plan = [
+        {"step": 1, "agent": "sql_query", "task": "t", "depends_on": []},
+        {"step": 2, "agent": "trend_analysis", "task": "t", "depends_on": [1]},
+        {"step": 3, "agent": "product_analysis", "task": "p", "depends_on": [1]},
+        {"step": 4, "agent": "risk_analysis", "task": "r", "depends_on": [1]},
+    ]
+    g = PlannerAgent._detect_analysis_concurrency_group(plan)
+    assert g is not None
+    assert g["head_step_num"] == 2
+    assert set(g["member_step_nums"]) == {3, 4}
+
+
+def test_detect_concurrency_group_returns_none_when_dependencies_differ():
+    """依赖不一致 → 不并发(避免破坏依赖语义)。"""
+    from agents.planner_agent import PlannerAgent
+    plan = [
+        {"step": 1, "agent": "sql_query", "task": "t", "depends_on": []},
+        {"step": 2, "agent": "trend_analysis", "task": "t", "depends_on": [1]},
+        {"step": 3, "agent": "product_analysis", "task": "p", "depends_on": [1, 2]},  # 依赖 trend
+        {"step": 4, "agent": "risk_analysis", "task": "r", "depends_on": [1]},
+    ]
+    g = PlannerAgent._detect_analysis_concurrency_group(plan)
+    assert g is None
+
+
+def test_detect_concurrency_group_returns_none_when_analyses_absent():
+    """无三件套 → 不并发(行为不变,串行兜底)。"""
+    from agents.planner_agent import PlannerAgent
+    plan = [
+        {"step": 1, "agent": "sql_query", "task": "t", "depends_on": []},
+        {"step": 2, "agent": "visualization", "task": "v", "depends_on": [1]},
+    ]
+    g = PlannerAgent._detect_analysis_concurrency_group(plan)
+    assert g is None
+
+
+def test_concurrent_analysis_group_actually_runs_in_parallel():
+    """端到端等价性:3×50ms handler 用并发组跑,wallclock 应 < 100ms(理论 max≈50ms)。"""
+    from agents.planner_agent import PlannerAgent, RequestContext
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    def slow_handler(task, pctx, ctx):
+        import time as _t
+        _t.sleep(0.05)
+    planner._agent_map = {
+        "trend_analysis": slow_handler,
+        "product_analysis": slow_handler,
+        "risk_analysis": slow_handler,
+    }
+    pctx = PipelineContext()
+    pctx.completed_steps.add(1)  # 模拟 sql 已完成
+    ctx = RequestContext(user_id="u", session_id="s", dataset_name="d", csv_path="x",
+                         primary_table="t", query="q")
+
+    group = {
+        "head_step_num": 2,
+        "member_step_nums": [3, 4],
+        "steps": [
+            {"step": 2, "agent": "trend_analysis", "task": "t", "depends_on": [1]},
+            {"step": 3, "agent": "product_analysis", "task": "p", "depends_on": [1]},
+            {"step": 4, "agent": "risk_analysis", "task": "r", "depends_on": [1]},
+        ],
+    }
+
+    with patch("agents.planner_agent.get_progress_emitter", return_value=None):
+        t0 = time.perf_counter()
+        planner._execute_analysis_group_concurrent(group, pctx, ctx, "q")
+        wallclock_ms = (time.perf_counter() - t0) * 1000
+
+    # 三步并发:理论 wallclock ≈ 50ms;允许 30ms 调度开销,阈值 100ms
+    assert wallclock_ms < 100, f"concurrent group should be <100ms, got {wallclock_ms:.0f}ms"
+    # 三步都应进 completed_steps
+    assert pctx.completed_steps == {1, 2, 3, 4}

@@ -342,6 +342,10 @@ class PlannerAgent(BaseAgent):
         # 2. 按计划执行
         pctx = PipelineContext(title=title)
 
+        # 阶段 1.5 / 2.1:识别 trend+product+risk 三并发组(depends_on 完全相同的
+        # 三个 AnalysisAgent)。预扫描一次性识别,for 循环里遇组头时改 gather。
+        parallel_group = self._detect_analysis_concurrency_group(plan)
+
         for step in plan:
             # 客户端断连取消：步骤边界检查（长流水线尽早止损；单步内不抢占）
             try:
@@ -359,6 +363,17 @@ class PlannerAgent(BaseAgent):
             if not self._deps_ready(step, pctx):
                 logger.warning(f"Step {step_num} depends on {step.get('depends_on', [])} "
                                f"which is not ready, skipping")
+                continue
+
+            # 阶段 1.5 / 2.1:并发组处理。组头触发 gather(把 trend/product/risk
+            # 三个 step 用 asyncio.gather 跑在 _execute_step_async),其余两个
+            # 成员 step 跳过(已包含在 gather 中)。无并发组时 fall through 到
+            # 串行路径,行为完全不变。
+            if parallel_group and step_num == parallel_group["head_step_num"]:
+                self._execute_analysis_group_concurrent(parallel_group, pctx, ctx, query)
+                continue
+            if parallel_group and step_num in parallel_group["member_step_nums"]:
+                # 成员 step 已被并发组处理,跳过(避免重复执行)
                 continue
 
             logger.info(f"Executing step {step_num}: {agent_name} - {step.get('task', query)}")
@@ -649,6 +664,90 @@ class PlannerAgent(BaseAgent):
                 "duration_ms": stage_duration_ms,
                 "status": stage_status,
             })
+
+    @staticmethod
+    def _detect_analysis_concurrency_group(plan: list[dict]) -> dict | None:
+        """阶段 1.5 / 2.1:识别 trend+product+risk 三并发组(返回 None = 串行)。
+
+        判定条件:plan 中同时存在 trend_analysis / product_analysis / risk_analysis
+        三个 step,且三者的 depends_on 完全相同(通常都是 [sql_step_num])。返回
+        dict 含 head_step_num(组头 step_num,for 循环中先遇到的那个)和
+        member_step_nums(被 gather 跳过的另两个)。
+
+        不改 plan 本身:组内 step 仍在 plan 列表里原序,for 循环按 step_num
+        顺序处理(用户视角流水线不变),只是组内 step 共享一个 gather 任务。
+        """
+        if not plan or len(plan) < 3:
+            return None
+        by_agent: dict[str, dict] = {s.get("agent", ""): s for s in plan}
+        if not {"trend_analysis", "product_analysis", "risk_analysis"}.issubset(by_agent):
+            return None
+        t, p, r = by_agent["trend_analysis"], by_agent["product_analysis"], by_agent["risk_analysis"]
+        t_deps = sorted(t.get("depends_on", []))
+        p_deps = sorted(p.get("depends_on", []))
+        r_deps = sorted(r.get("depends_on", []))
+        if t_deps != p_deps or t_deps != r_deps:
+            # 依赖不一致 → 暂不并发(避免破坏依赖语义)
+            return None
+        members = [t["step"], p["step"], r["step"]]
+        head = min(members)
+        return {
+            "head_step_num": head,
+            "member_step_nums": [m for m in members if m != head],
+            "steps": [t, p, r],
+        }
+
+    def _execute_analysis_group_concurrent(self, group: dict, pctx: "PipelineContext",
+                                           ctx: "RequestContext", query: str) -> None:
+        """阶段 1.5 / 2.1:用 asyncio.run 同步启动一个临时 loop,gather 跑三个
+        _execute_step_async。组头先 emit step_start,三个 step 各自 emit 自己的
+        step_done/step_error + step_timing(沿用 _execute_step_async 契约)。
+
+        等价性:三个 _execute_step_async 在 default executor 跑各自的同步 handler,
+        与原串行三次 _execute_step 行为完全一致(同 handler + 同 pctx 写),
+        输出槽位 pctx.trend_result / product_result / risk_result 各一。
+        任何 step 失败被 gather 转成 Exception,降级走 _write_degradation。
+        """
+        head = group["head_step_num"]
+        members = group["member_step_nums"]
+        all_steps = group["steps"]
+        all_step_nums = [s["step"] for s in all_steps]
+
+        # emit 三个 step_start(同原串行语义,前端步骤清单先全部置 active)
+        for s in all_steps:
+            self._emit_progress("step_start", {"step": s["step"]})
+            logger.info(f"Executing step {s['step']} (concurrent): {s['agent']} - {s.get('task', query)}")
+
+        # 父 span:planner.step.group_concurrent 标记本次为并发
+        with traced("planner.step.group_concurrent",
+                    attrs={"planner.agent_names": [s["agent"] for s in all_steps],
+                           "planner.step_indexes": all_step_nums,
+                           "planner.concurrent": True},
+                    mark_success=False) as group_span:
+            try:
+                asyncio.run(self._gather_analysis_steps(all_steps, pctx, ctx))
+                # 任意失败由 _execute_step_async 内部 _write_degradation 处理
+                group_span.set_attribute(ATTR_STATUS, "success")
+            except Exception as e:
+                # gather 整体异常(理论上不会,各 step 内部已 try/except)兜底
+                logger.error(f"Concurrent analysis group failed: {e}")
+                logger.error(traceback.format_exc())
+                group_span.set_attribute(ATTR_STATUS, "error")
+
+        # emit 三个 step_done / step_error(根据 pctx.completed_steps 判定)
+        for s in all_steps:
+            if s["step"] in pctx.completed_steps:
+                self._emit_progress("step_done", {"step": s["step"]})
+            else:
+                self._emit_progress("step_error", {"step": s["step"]})
+
+    async def _gather_analysis_steps(self, steps: list[dict], pctx: "PipelineContext",
+                                     ctx: "RequestContext") -> None:
+        """asyncio.gather wrapper,return_exceptions=True 让单步失败不影响其他。"""
+        await asyncio.gather(
+            *[self._execute_step_async(s, pctx, ctx) for s in steps],
+            return_exceptions=True,
+        )
 
     @staticmethod
     def _write_degradation(pctx: PipelineContext, agent_name: str, reason: str) -> None:
