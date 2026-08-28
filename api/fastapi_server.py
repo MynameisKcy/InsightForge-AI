@@ -9,6 +9,7 @@ api/serialization.py。
 
 import os
 import sys
+from contextlib import asynccontextmanager
 
 # ── 方案C：加载 .env（DASHSCOPE_API_KEY），须早于任何会实例化模型的导入 ──
 try:
@@ -35,7 +36,23 @@ from utils.report_paths import REPORTS_DIR, WEB_REPORTS_PREFIX
 from utils.token_counter import set_metrics_publisher
 from utils.tracing import init_tracing
 
-app = FastAPI(title="AI Data Analyst", version="1.0.0")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """应用生命周期:启动期预热 kaleido PNG server,避免首个 viz 请求承担
+    3s 冷启(阶段 1.3 优化,优化矩阵 3.1)。stop_png_batch() 故意 no-op,server
+    随进程常驻(详见 visualization/charts.py 注释)。
+    """
+    try:
+        from visualization.charts import start_png_batch
+        start_png_batch()
+    except Exception:
+        # 启动期不阻塞:若 kaleido 异常,后续 viz 走 lazy 兜底
+        pass
+    yield
+
+
+app = FastAPI(title="AI Data Analyst", version="1.0.0", lifespan=_lifespan)
 
 # ── 统一错误信封：HTTPException/校验失败/未捕获异常 → {"success":false,"error":…} ──
 register_exception_handlers(app)
