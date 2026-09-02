@@ -70,6 +70,19 @@ _cjk_font_name = None  # 注册成功后的字体名，None 表示未注册
 EXPORT_DIR = "reports"
 
 
+def _assert_export_path(filepath: str) -> None:
+    """导出路径集中式权限校验（#4 file.write hook；白名单 reports/ 之下）。
+
+    调用点覆盖 md/docx/pdf/html 四类导出；路径在 reports/ 内时 hook 放行，
+    行为恒等，仅补齐「新增导出格式自动获得拦截」的缺口。
+    """
+    from utils.permission_hooks import POINT_FILE_WRITE, trigger_hooks
+
+    reason = trigger_hooks(POINT_FILE_WRITE, path=filepath, purpose="export")
+    if reason:
+        raise PermissionError(reason)
+
+
 def _ensure_export_dir(subdir: str = "") -> str:
     path = get_abs_path(os.path.join(EXPORT_DIR, subdir))
     os.makedirs(path, exist_ok=True)
@@ -200,6 +213,7 @@ class ExportAgent(BaseAgent):
         output_dir = _ensure_export_dir("markdown")
         filename = _make_filename(title, "md")
         filepath = os.path.join(output_dir, filename)
+        _assert_export_path(filepath)
         content = self._inline_images_as_data_uri(markdown)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
@@ -237,6 +251,7 @@ class ExportAgent(BaseAgent):
         output_dir = _ensure_export_dir("word")
         filename = _make_filename(title, "docx")
         filepath = os.path.join(output_dir, filename)
+        _assert_export_path(filepath)
         doc.save(filepath)
         logger.info(f"Word exported to {filepath}")
         return filepath
@@ -313,6 +328,7 @@ class ExportAgent(BaseAgent):
         output_dir = _ensure_export_dir("pdf")
         filename = _make_filename(title, "pdf")
         filepath = os.path.join(output_dir, filename)
+        _assert_export_path(filepath)
 
         cjk = self._register_cjk_font()
         font_for_pdf = cjk or "Helvetica"
@@ -414,6 +430,7 @@ class ExportAgent(BaseAgent):
         output_dir = _ensure_export_dir("html")
         filename = _make_filename(title, "html")
         filepath = os.path.join(output_dir, filename)
+        _assert_export_path(filepath)
 
         html = self._md_to_html(markdown, title)
         with open(filepath, "w", encoding="utf-8") as f:
