@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.auth import AUTH_COOKIE_NAME, set_auth_cookie, validate_token_cached
 from api.errors import register_exception_handlers
-from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, users
+from api.routes import analysis, chat, datasets, knowledge, pages, sessions, settings, tasks, users
 from utils.decision_log import set_decision_publisher
 from utils.path_tool import get_abs_path
 from utils.progress_emitter import emitter_bridge
@@ -103,6 +103,7 @@ app.include_router(pages.router)
 app.include_router(users.router)
 app.include_router(chat.router)
 app.include_router(analysis.router)
+app.include_router(tasks.router)
 app.include_router(sessions.router)
 app.include_router(datasets.router)
 app.include_router(knowledge.router)
