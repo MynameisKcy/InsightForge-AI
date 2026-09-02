@@ -14,8 +14,10 @@ from agents.base import BaseAgent
 from agents.export_agent import ExportAgent
 from agents.pipeline_context import PipelineContext
 from agents.report_agent import ReportAgent
+from agents.schemas import PLAN_SCHEMA
 from agents.sql_agent import SQLAgent
 from agents.visualization_agent import VisualizationAgent
+from agents.workflow import WorkflowRunner
 from analysis.analysis_module import (
     ProductAnalysisAdapter,
     RiskAnalysisAdapter,
@@ -61,7 +63,8 @@ class RequestContext:
     多用户并发会互相覆盖；改为每次请求构造局部 ctx 下传，天然隔离。
     """
 
-    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name", "dataset_desc", "query", "primary_table")
+    __slots__ = ("user_id", "session_id", "csv_path", "dataset_name",
+                 "dataset_desc", "query", "primary_table", "workflow")
 
     def __init__(self, user_id: str = "default", session_id: str = "",
                  csv_path: str = "", dataset_name: str = "",
@@ -77,6 +80,9 @@ class RequestContext:
         # get_enhanced_schema_text 只暴露该表，避免同 user 其它注册数据集
         # 出现在 LLM prompt 中导致意外 JOIN 污染输出。
         self.primary_table = primary_table
+        # 请求级 WorkflowRunner（#3）：由 run()/run_stream() 在 pctx 创建后注入，
+        # 三个 AnalysisAgent 共享同一 journal/stage_cache 引用；None = 未创建。
+        self.workflow: WorkflowRunner | None = None
 
 
 PLANNER_SYSTEM_PROMPT = """你是一个 AI 数据分析系统的任务规划器。根据用户的问题与数据特点，制定分析计划。
@@ -309,6 +315,13 @@ class PlannerAgent(BaseAgent):
             plan = self._default_plan(query)
             title = "数据分析报告"
 
+        # step 缺省守卫：弱模型可能漏掉 step 字段（schema 允许缺省），
+        # _sanitize_plan 依赖 step 做去重/重映射，缺失会导致 KeyError；
+        # 这里按顺序补号，再交给 sanitize 语义后校验。
+        for i, s in enumerate(plan):
+            if not isinstance(s.get("step"), int):
+                s["step"] = i + 1
+
         # 计划后校验闸：去重/上限/重编号（弱模型重复步骤免疫，见 _sanitize_plan）
         plan = self._sanitize_plan(plan)
 
@@ -341,6 +354,8 @@ class PlannerAgent(BaseAgent):
 
         # 2. 按计划执行
         pctx = PipelineContext(title=title)
+        # 请求级 WorkflowRunner：三个 AnalysisAgent 共享 journal/stage_cache（#3）
+        ctx.workflow = WorkflowRunner(pctx.journal, pctx.stage_cache)
 
         # 阶段 1.5 / 2.1:识别 trend+product+risk 三并发组(depends_on 完全相同的
         # 三个 AnalysisAgent)。预扫描一次性识别,for 循环里遇组头时改 gather。
@@ -474,10 +489,17 @@ class PlannerAgent(BaseAgent):
             plan = self._default_plan(query)
             title = "数据分析报告"
 
+        # step 缺省守卫（与 run() 同）：补号后再 sanitize
+        for i, s in enumerate(plan):
+            if not isinstance(s.get("step"), int):
+                s["step"] = i + 1
+        plan = self._sanitize_plan(plan)
+
         logger.info(f"Planner created plan with {len(plan)} steps: {[s['agent'] for s in plan]}")
 
         # 2. 按计划逐步执行
         pctx = PipelineContext(title=title)
+        ctx.workflow = WorkflowRunner(pctx.journal, pctx.stage_cache)
 
         for step in plan:
             # 客户端断连取消：步骤边界检查（与 run() 一致）
@@ -789,6 +811,7 @@ class PlannerAgent(BaseAgent):
         pctx.trend_result = self.trend_agent.run({
             "dataframe_json": pctx.dataframe_json,
             "task": task,
+            "workflow": ctx.workflow,
         })
 
     def _run_product(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
@@ -799,6 +822,7 @@ class PlannerAgent(BaseAgent):
         pctx.product_result = self.product_agent.run({
             "dataframe_json": pctx.dataframe_json,
             "task": task,
+            "workflow": ctx.workflow,
         })
 
     def _run_risk(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
@@ -809,6 +833,7 @@ class PlannerAgent(BaseAgent):
         pctx.risk_result = self.risk_agent.run({
             "dataframe_json": pctx.dataframe_json,
             "task": task,
+            "workflow": ctx.workflow,
         })
 
     def _run_visualization(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
@@ -871,6 +896,7 @@ class PlannerAgent(BaseAgent):
                 found.append(fmt)
         return found or ["md", "html"]
 
+
     # ── 计划生成 ──
 
     def _create_plan(self, query: str, history: list[dict] | None = None) -> dict:
@@ -886,8 +912,10 @@ class PlannerAgent(BaseAgent):
                 })
         messages.append({"role": "user", "content": f"请为以下用户问题制定分析计划：\n{query}"})
         try:
-            response = self._call_llm(messages)
-            return self._parse_json(response)
+            # #5 结构校验：plan/agent/depends_on 不符合契约时携带错误重试 1 次；
+            # 仍失败返回 None → {} → 调用方走 _default_plan 兜底（行为不变）。
+            plan_data = self._call_llm_with_schema(messages, PLAN_SCHEMA)
+            return plan_data or {}
         except Exception as e:
             logger.warning(f"Plan generation failed: {e}")
             return {}

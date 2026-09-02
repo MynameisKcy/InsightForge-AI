@@ -4,6 +4,7 @@ Agent base class: provides common utilities for all agents.
 
 import json
 
+from agents.schemas import validate
 from model.factory import get_chat_model
 from utils.token_counter import account_response
 from utils.tracing import record_usage, traced
@@ -64,6 +65,34 @@ class BaseAgent:
             except json.JSONDecodeError:
                 pass
         return {"raw": text, "error": "Failed to parse JSON"}
+
+    def _call_llm_with_schema(self, messages: list[dict], schema: dict,
+                              retries: int = 1) -> dict | None:
+        """调用 LLM 并按 schema 做结构校验，不过则携带具体校验错误重试。
+
+        重试提示词带上前次的具体错误（如「depends_on 应为整数列表」），
+        比裸说「请严格按 JSON」修得准。重试耗尽返回 None，降级策略由
+        调用方决定（planner → _default_plan；analysis → apply_insight_fallback）。
+        空 schema（{}）= 任意 dict 通过（未声明契约的适配器宽进）。
+        """
+        text = self._call_llm(messages)
+        parsed = self._parse_json(text)
+        errs = validate(parsed, schema)
+        if not errs:
+            return parsed
+        for _ in range(max(0, retries)):
+            messages = messages + [{
+                "role": "user",
+                "content": ("上次输出未通过结构校验："
+                            + "；".join(errs[:3])
+                            + "。请修正后严格按 JSON 格式重新输出完整结果，不要包含任何其他文本。"),
+            }]
+            text = self._call_llm(messages)
+            parsed = self._parse_json(text)
+            errs = validate(parsed, schema)
+            if not errs:
+                return parsed
+        return None
 
     def run(self, input_data: dict) -> dict:
         """子类实现具体任务逻辑。"""

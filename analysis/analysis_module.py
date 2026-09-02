@@ -23,6 +23,11 @@ class AnalysisModule(Protocol):
     insight_prompt: str
     """LLM 洞察生成的提示词模板，包含 {data_json} 占位符。"""
 
+    insight_schema: dict
+    """洞察输出的最小结构契约（agents/schemas.validate 用的声明式 schema）。
+    契约归适配器：与 apply_insight_fallback 同哲学，各适配器声明自己的必填键
+    ——风险分析用 risk_assessment 而非 insight（见 RISK_INSIGHT_PROMPT）。"""
+
     def analyze(self, df: pd.DataFrame) -> dict:
         """分析 DataFrame，返回结构化结果字典。"""
         ...
@@ -51,6 +56,7 @@ class TrendAnalysisAdapter:
     """趋势分析适配器 —— 封装列选择与 TrendAnalysis 调用。"""
 
     insight_prompt = TREND_INSIGHT_PROMPT
+    insight_schema = {"type": "object", "required": ["insight"]}
 
     def analyze(self, df: pd.DataFrame) -> dict:
         if df.empty:
@@ -110,6 +116,7 @@ class ProductAnalysisAdapter:
     """产品分析适配器。"""
 
     insight_prompt = PRODUCT_INSIGHT_PROMPT
+    insight_schema = {"type": "object", "required": ["insight"]}
 
     def analyze(self, df: pd.DataFrame) -> dict:
         if df.empty:
@@ -142,6 +149,8 @@ class RiskAnalysisAdapter:
     """风险分析适配器。"""
 
     insight_prompt = RISK_INSIGHT_PROMPT
+    # 风险洞察契约是 risk_assessment（无 insight 键），单一 schema 会误判合法输出
+    insight_schema = {"type": "object", "required": ["risk_assessment"]}
 
     def analyze(self, df: pd.DataFrame) -> dict:
         if df.empty:
