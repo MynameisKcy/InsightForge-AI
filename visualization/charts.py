@@ -493,6 +493,11 @@ def _save_chart(fig, base_name: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{base_name}_{timestamp}.html"
     filepath = os.path.join(output_dir, filename)
+    # 集中式权限 hook（#4）：file.write 白名单（reports/ 之下），行为恒等
+    from utils.permission_hooks import POINT_FILE_WRITE, trigger_hooks
+    reason = trigger_hooks(POINT_FILE_WRITE, path=filepath, purpose="chart")
+    if reason:
+        return f"[Chart save blocked: {reason}]"
     try:
         fig.write_html(filepath)
         logger.info(f"Chart saved: {filepath}")
