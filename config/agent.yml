@@ -6,6 +6,13 @@ external_data_path: data/external/records.csv
 # 的 LLM 调用。<=0 禁用（直接同步执行，仅受客户端断连取消约束）。
 stage_timeout_seconds: 120
 
+# Goal 独立判断器（#2）：plan 执行完毕 ≠ 用户目标达成。run() 末尾对
+# 「原始 query + 结果摘要」做一次独立 LLM 评估，产出 goal_check（goal_met/gap/
+# suggested_followup）。enabled=false 省 1 次 LLM 调用；评估器失败 fail-open
+# （不吞分析结果）。自动重规划未实现（YAGNI，见规格第 7 节）。
+goal_evaluator:
+  enabled: true
+
 # DuckDB 查询通道资源上限（只读沙箱的 DoS 防护补全；对每用户 :memory: 连接生效。
 # memory_limit/threads 经连接配置应用——SET/PRAGMA 被沙箱双拒不能走 SQL）
 duckdb:

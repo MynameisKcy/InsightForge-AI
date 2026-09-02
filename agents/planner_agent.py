@@ -57,6 +57,16 @@ def _stage_timeout_seconds() -> float:
         return float(_DEFAULT_STAGE_TIMEOUT)
 
 
+def _goal_evaluator_enabled() -> bool:
+    """Goal 判断器开关（config/agent.yml goal_evaluator.enabled，缺省开）。
+    关掉可省每次分析末尾的 1 次 LLM 调用。"""
+    try:
+        from utils.config_handler import agent_conf
+        return bool((agent_conf or {}).get("goal_evaluator", {}).get("enabled", True))
+    except Exception:
+        return True
+
+
 class RequestContext:
     """单次分析请求的上下文，按 user_id 隔离数据层，替代旧的实例属性。
 
@@ -451,6 +461,36 @@ class PlannerAgent(BaseAgent):
             except Exception as e:
                 logger.warning(f"Task final persist failed: {e}")
 
+        # ── Goal 判断（#2）：plan 完成 ≠ 目标达成。失败路径直接按 errors 出
+        #    确定性结论（不烧 LLM）；成功路径做独立 LLM 评估；评估器故障 fail-open ──
+        goal_check = None
+        if _goal_evaluator_enabled():
+            if not pctx.success:
+                goal_check = {
+                    "goal_met": False,
+                    "gap": "分析过程中存在阶段错误，目标未完整达成",
+                    "suggested_followup": "请修正上述问题后重新发起分析",
+                    "errors": list(pctx.errors)[:5],
+                }
+            else:
+                try:
+                    from agents.goal_evaluator import GoalEvaluator
+                    digest = {
+                        "title": pctx.title,
+                        "errors": list(pctx.errors)[:10],
+                        "stage_statuses": [
+                            {"label": e.get("label"), "status": e.get("status")}
+                            for e in (pctx.journal or [])][-20:],
+                        "report_head": (pctx.report_markdown or "")[:1200],
+                    }
+                    goal_check = GoalEvaluator(user_id=ctx.user_id).evaluate(query, digest)
+                except Exception as e:
+                    logger.warning(f"Goal evaluation failed: {e}")
+                    goal_check = {
+                        "goal_met": True, "gap": "", "suggested_followup": "",
+                        "note": "goal evaluator unavailable",
+                    }
+
         return {
             "query": query,
             "title": pctx.title,
@@ -466,6 +506,7 @@ class PlannerAgent(BaseAgent):
             },
             "success": pctx.success,
             "task_id": rec.id if rec is not None else None,
+            "goal_check": goal_check,
         }
 
     def _format_history(self, history: list[dict]) -> str:
@@ -771,8 +812,6 @@ class PlannerAgent(BaseAgent):
         输出槽位 pctx.trend_result / product_result / risk_result 各一。
         任何 step 失败被 gather 转成 Exception,降级走 _write_degradation。
         """
-        head = group["head_step_num"]
-        members = group["member_step_nums"]
         all_steps = group["steps"]
         all_step_nums = [s["step"] for s in all_steps]
 

@@ -116,6 +116,14 @@ def save_task(record: TaskRecord) -> TaskRecord:
     record.updated_at = _now()
     if not record.created_at:
         record.created_at = record.updated_at
+    # 集中式权限 hook（#4）：file.write 白名单（data/ 之下）。
+    # 仅生产根目录（data/tasks）执行——测试经 set_tasks_root 指向 tmp 目录，
+    # 不在白名单内，若也过 hook 会误拒绝（测试接缝即为此设计）。
+    if _tasks_root is None:
+        from utils.permission_hooks import POINT_FILE_WRITE, trigger_hooks
+        reason = trigger_hooks(POINT_FILE_WRITE, path=path, purpose="task")
+        if reason:
+            raise TaskPathError(reason)
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(record.to_dict(), f, ensure_ascii=False, indent=2)
