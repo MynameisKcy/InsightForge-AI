@@ -32,6 +32,14 @@ class PipelineContext:
     errors: list[str] = field(default_factory=list)
     completed_steps: set[int] = field(default_factory=set)
 
+    # ── WorkflowRunner 执行边界（#3）：请求级 journal 与结果缓存 ──
+    # journal: 每次 LLM 执行边界调用的记录 [{label, phase, status, duration_ms, error, at}]，
+    #          P1 TaskRecord 持久化的数据源；stage_cache: 请求内结果缓存
+    #          （key = label + prompt 哈希，同输入不重跑 LLM）。均为请求作用域，
+    #          禁止提升为模块/实例全局（多用户隔离红线）。
+    journal: list[dict] = field(default_factory=list)
+    stage_cache: dict = field(default_factory=dict)
+
     # ── 共享方法 ──
 
     @property
