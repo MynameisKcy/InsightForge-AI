@@ -25,6 +25,7 @@ from analysis.analysis_module import (
 )
 from database.data_resolver import DataResolver
 from memory.short_term import get_session
+from memory.task_store import TaskRecord, get_task, new_task_id, save_task, update_progress
 from utils.cancel_token import PipelineCancelledError, raise_if_cancelled
 from utils.logger_handler import logger
 from utils.progress_emitter import get_progress_emitter
@@ -357,60 +358,99 @@ class PlannerAgent(BaseAgent):
         # 请求级 WorkflowRunner：三个 AnalysisAgent 共享 journal/stage_cache（#3）
         ctx.workflow = WorkflowRunner(pctx.journal, pctx.stage_cache)
 
+        # ── Task System（#1）：计划持久化。失败仅告警不阻断流水线（best-effort）──
+        rec = None
+        try:
+            rec = save_task(TaskRecord(
+                id=new_task_id(), owner=ctx.user_id, session_id=ctx.session_id,
+                query=query, title=title, plan=plan,
+                dataset_name=ctx.dataset_name, primary_table=ctx.primary_table,
+                status="running",
+            ))
+        except Exception as e:
+            logger.warning(f"Task record create failed (user={ctx.user_id}): {e}")
+
         # 阶段 1.5 / 2.1:识别 trend+product+risk 三并发组(depends_on 完全相同的
         # 三个 AnalysisAgent)。预扫描一次性识别,for 循环里遇组头时改 gather。
         parallel_group = self._detect_analysis_concurrency_group(plan)
 
-        for step in plan:
-            # 客户端断连取消：步骤边界检查（长流水线尽早止损；单步内不抢占）
+        try:
+            for step in plan:
+                # 客户端断连取消：步骤边界检查（长流水线尽早止损；单步内不抢占）
+                try:
+                    raise_if_cancelled()
+                except PipelineCancelledError:
+                    self._emit_progress("cancelled", {"step": step.get("step", 0)})
+                    logger.info(f"Pipeline cancelled by client disconnect at step "
+                                f"{step.get('step', 0)} ({step.get('agent', '')})")
+                    raise
+
+                agent_name = step.get("agent", "")
+                step_num = step.get("step", 0)
+
+                # 检查依赖是否完成（失败步骤不进 completed_steps，其依赖者自动跳过）
+                if not self._deps_ready(step, pctx):
+                    logger.warning(f"Step {step_num} depends on {step.get('depends_on', [])} "
+                                   f"which is not ready, skipping")
+                    continue
+
+                # 阶段 1.5 / 2.1:并发组处理。组头触发 gather(把 trend/product/risk
+                # 三个 step 用 asyncio.gather 跑在 _execute_step_async),其余两个
+                # 成员 step 跳过(已包含在 gather 中)。无并发组时 fall through 到
+                # 串行路径,行为完全不变。
+                if parallel_group and step_num == parallel_group["head_step_num"]:
+                    self._execute_analysis_group_concurrent(parallel_group, pctx, ctx, query)
+                    if rec is not None:
+                        self._persist_task_step(
+                            ctx.user_id, rec.id, pctx,
+                            [s.get("agent", "") for s in parallel_group["steps"]])
+                    continue
+                if parallel_group and step_num in parallel_group["member_step_nums"]:
+                    # 成员 step 已被并发组处理,跳过(避免重复执行)
+                    continue
+
+                logger.info(f"Executing step {step_num}: {agent_name} - {step.get('task', query)}")
+                self._emit_progress("step_start", {"step": step_num})
+
+                # 每步一个 planner.step span（观测）包住 _execute_step（阶段级容错）；
+                # _execute_step 吞异常降级、只回状态，故 mark_success=False、span 状态由返回值呈现
+                status = "failed"
+                with traced("planner.step",
+                            attrs={"planner.step_index": step_num,
+                                   "planner.agent_name": agent_name},
+                            mark_success=False) as step_span:
+                    status = self._execute_step(step, pctx, ctx)
+                    step_span.set_attribute(ATTR_STATUS, "success" if status == "ok" else "error")
+                # 仅成功才标记完成（_execute_step 内部已 add completed_steps）；
+                # 失败标记 error，避免 UI 把失败步骤误显示为 ✓
+                if status == "ok":
+                    self._emit_progress("step_done", {"step": step_num})
+                    # Task System：逐步持久化进度（sql 步顺带存 dataframe_json 快照）
+                    if rec is not None:
+                        self._persist_task_step(
+                            ctx.user_id, rec.id, pctx, [agent_name],
+                            dataframe_json=pctx.dataframe_json if agent_name == "sql_query" else None)
+                else:
+                    self._emit_progress("step_error", {"step": step_num})
+        except PipelineCancelledError:
+            if rec is not None:
+                try:
+                    update_progress(ctx.user_id, rec.id,
+                                    completed_steps=sorted(pctx.completed_steps),
+                                    status="cancelled")
+                except Exception as e:
+                    logger.warning(f"Task cancel persist failed: {e}")
+            raise
+
+        # 3. 汇总结果（终态持久化：completed / failed）
+        if rec is not None:
             try:
-                raise_if_cancelled()
-            except PipelineCancelledError:
-                self._emit_progress("cancelled", {"step": step.get("step", 0)})
-                logger.info(f"Pipeline cancelled by client disconnect at step "
-                            f"{step.get('step', 0)} ({step.get('agent', '')})")
-                raise
+                update_progress(ctx.user_id, rec.id,
+                                completed_steps=sorted(pctx.completed_steps),
+                                status="completed" if pctx.success else "failed")
+            except Exception as e:
+                logger.warning(f"Task final persist failed: {e}")
 
-            agent_name = step.get("agent", "")
-            step_num = step.get("step", 0)
-
-            # 检查依赖是否完成（失败步骤不进 completed_steps，其依赖者自动跳过）
-            if not self._deps_ready(step, pctx):
-                logger.warning(f"Step {step_num} depends on {step.get('depends_on', [])} "
-                               f"which is not ready, skipping")
-                continue
-
-            # 阶段 1.5 / 2.1:并发组处理。组头触发 gather(把 trend/product/risk
-            # 三个 step 用 asyncio.gather 跑在 _execute_step_async),其余两个
-            # 成员 step 跳过(已包含在 gather 中)。无并发组时 fall through 到
-            # 串行路径,行为完全不变。
-            if parallel_group and step_num == parallel_group["head_step_num"]:
-                self._execute_analysis_group_concurrent(parallel_group, pctx, ctx, query)
-                continue
-            if parallel_group and step_num in parallel_group["member_step_nums"]:
-                # 成员 step 已被并发组处理,跳过(避免重复执行)
-                continue
-
-            logger.info(f"Executing step {step_num}: {agent_name} - {step.get('task', query)}")
-            self._emit_progress("step_start", {"step": step_num})
-
-            # 每步一个 planner.step span（观测）包住 _execute_step（阶段级容错）；
-            # _execute_step 吞异常降级、只回状态，故 mark_success=False、span 状态由返回值呈现
-            status = "failed"
-            with traced("planner.step",
-                        attrs={"planner.step_index": step_num,
-                               "planner.agent_name": agent_name},
-                        mark_success=False) as step_span:
-                status = self._execute_step(step, pctx, ctx)
-                step_span.set_attribute(ATTR_STATUS, "success" if status == "ok" else "error")
-            # 仅成功才标记完成（_execute_step 内部已 add completed_steps）；
-            # 失败标记 error，避免 UI 把失败步骤误显示为 ✓
-            if status == "ok":
-                self._emit_progress("step_done", {"step": step_num})
-            else:
-                self._emit_progress("step_error", {"step": step_num})
-
-        # 3. 汇总结果
         return {
             "query": query,
             "title": pctx.title,
@@ -425,6 +465,7 @@ class PlannerAgent(BaseAgent):
                 "csv_path": ctx.csv_path,
             },
             "success": pctx.success,
+            "task_id": rec.id if rec is not None else None,
         }
 
     def _format_history(self, history: list[dict]) -> str:
@@ -896,6 +937,138 @@ class PlannerAgent(BaseAgent):
                 found.append(fmt)
         return found or ["md", "html"]
 
+    # ── Task System（#1）：进度持久化助手 + 续跑 ──
+
+    @staticmethod
+    def _capture_stage_result(pctx: PipelineContext, agent_name: str) -> dict | None:
+        """取某 agent 在 pctx 的输出槽位结果（非 dict 槽位/未知 agent 返回 None）。"""
+        field = _STAGE_RESULT_FIELD.get(agent_name)
+        if not field:
+            return None
+        val = getattr(pctx, field, None)
+        return val if isinstance(val, dict) else None
+
+    def _persist_task_step(self, user_id: str, task_id: str, pctx: PipelineContext,
+                           agent_names: list[str], *, dataframe_json: str | None = None) -> None:
+        """逐步持久化：completed_steps + 指定 agent 的阶段结果（best-effort）。"""
+        try:
+            results = {}
+            for a in agent_names:
+                r = self._capture_stage_result(pctx, a)
+                if r is not None:
+                    results[a] = r
+            update_progress(user_id, task_id,
+                            completed_steps=sorted(pctx.completed_steps),
+                            stage_results=results,
+                            dataframe_json=dataframe_json)
+        except Exception as e:
+            logger.warning(f"Task step persist failed ({user_id}/{task_id}): {e}")
+
+    def resume(self, task_id: str, user_id: str, session_id: str = "") -> dict:
+        """从持久化任务续跑（#1）：回灌已完成步骤，只执行剩余步骤。
+
+        与 run() 同一执行循环语义（_execute_step 阶段级容错/超时/降级全复用；
+        并发组优化不启用——resume 走串行，正确性优先）。返回结构与 run() 一致。
+        """
+        rec = get_task(user_id, task_id)
+        if rec is None:
+            # 不存在或越权统一按「无权访问」处理，不泄露存在性
+            return {"error": f"任务不存在或无权访问: {task_id}", "success": False}
+        if rec.status == "cancelled":
+            return {"error": "任务已取消，请重新发起分析", "success": False}
+        if not rec.plan:
+            return {"error": "任务无有效计划，请重新发起分析", "success": False}
+
+        # 1. 数据集一致性：DataResolver 重解析并与记录比对。
+        #    数据集被删/换后仍拿旧计划续跑会静默产出错误结论，故必须显式拒绝。
+        try:
+            resolved = DataResolver.resolve(rec.query, user_id=user_id)
+            resolved_name = resolved.get("name", "")
+            csv_path = resolved.get("csv_path", "")
+        except Exception as e:
+            return {"error": f"数据集重新解析失败: {e}", "success": False}
+        if resolved_name and rec.primary_table and resolved_name != rec.primary_table:
+            return {
+                "error": f"数据集已变化（原: {rec.primary_table}，现: {resolved_name}），请重新发起分析",
+                "success": False,
+            }
+        if csv_path and os.path.exists(csv_path):
+            from database.duckdb_manager import init_duckdb
+            init_duckdb(csv_path=csv_path, user_id=user_id)
+
+        ctx = RequestContext(user_id=user_id, session_id=session_id,
+                             csv_path=csv_path,
+                             dataset_name=rec.dataset_name or resolved_name,
+                             dataset_desc=resolved.get("description", ""),
+                             query=rec.query,
+                             primary_table=rec.primary_table or resolved_name)
+        pctx = PipelineContext(title=rec.title)
+        ctx.workflow = WorkflowRunner(pctx.journal, pctx.stage_cache)
+
+        # 2. 回灌已完成步骤：dataframe_json 快照 + 各阶段结果 + completed_steps
+        pctx.dataframe_json = rec.dataframe_json or ""
+        for agent_name, result in (rec.stage_results or {}).items():
+            field = _STAGE_RESULT_FIELD.get(agent_name)
+            if field and isinstance(result, dict):
+                setattr(pctx, field, result)
+        pctx.completed_steps = set(rec.completed_steps or [])
+
+        # 3. 只执行剩余步骤（失败步骤不进 completed_steps，依赖者自动跳过）
+        try:
+            for step in rec.plan:
+                try:
+                    raise_if_cancelled()
+                except PipelineCancelledError:
+                    logger.info(f"Resume cancelled at step {step.get('step', 0)}")
+                    raise
+                agent_name = step.get("agent", "")
+                step_num = step.get("step", 0)
+                if step_num in pctx.completed_steps:
+                    continue
+                if not self._deps_ready(step, pctx):
+                    logger.warning(f"Resume: step {step_num} deps not ready, skipping")
+                    continue
+                logger.info(f"Resume executing step {step_num}: {agent_name} - "
+                            f"{step.get('task', rec.query)}")
+                status = self._execute_step(step, pctx, ctx)
+                if status == "ok":
+                    self._persist_task_step(
+                        user_id, task_id, pctx, [agent_name],
+                        dataframe_json=pctx.dataframe_json if agent_name == "sql_query" else None)
+        except PipelineCancelledError:
+            try:
+                update_progress(user_id, task_id,
+                                completed_steps=sorted(pctx.completed_steps),
+                                status="cancelled")
+            except Exception as e:
+                logger.warning(f"Resume cancel persist failed: {e}")
+            raise
+
+        # 4. 终态
+        try:
+            update_progress(user_id, task_id,
+                            completed_steps=sorted(pctx.completed_steps),
+                            status="completed" if pctx.success else "failed")
+        except Exception as e:
+            logger.warning(f"Resume final persist failed: {e}")
+
+        return {
+            "query": rec.query,
+            "title": pctx.title,
+            "reasoning": "",
+            "plan": rec.plan,
+            "results": pctx,
+            "errors": pctx.errors,
+            "report": pctx.report_result or {},
+            "exports": pctx.export_result or {},
+            "dataset": {
+                "name": ctx.dataset_name,
+                "csv_path": ctx.csv_path,
+            },
+            "success": pctx.success,
+            "task_id": task_id,
+            "resumed": True,
+        }
 
     # ── 计划生成 ──
 
