@@ -26,6 +26,23 @@ from utils.path_tool import get_abs_path
 ALLOWED_DATASET_TYPES = {"csv", "xlsx", "xls"}
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB（知识库上传共用，见 api/routes/knowledge.py）
 
+# 规则简述：字段列上限（超出截断为 "…等 N 个字段"），避免超长脏数据刷屏
+_DESC_MAX_FIELDS = 8
+
+
+def _build_description(display_name: str, row_count: int, columns: list) -> str:
+    """规则生成数据集内容简述（无 LLM 依赖）。
+
+    供 DataResolver 的 n-gram 匹配（description 是匹配源之一）与歧义候选列表
+    展示（帮用户分辨查哪个数据集）。字段名列在 display_name 之后，让
+    「用户输入内容相关词」也能命中——如列名 city/人口 出现在 query 时。
+    """
+    names = [c[0] for c in columns] if columns else []
+    fields = "、".join(names[:_DESC_MAX_FIELDS])
+    if len(names) > _DESC_MAX_FIELDS:
+        fields += f"…等{len(names)}个字段"
+    return f"{display_name} 数据，共{row_count}行，含字段：{fields}"
+
 
 class DatasetServiceError(Exception):
     """数据集操作失败；status_code 由路由映射为 HTTP 状态。"""
@@ -110,6 +127,9 @@ class DatasetService:
             source_type = "csv" if ext == "csv" else "excel"
             schema_json = json.dumps(
                 [{"name": c[0], "type": c[1]} for c in columns], ensure_ascii=False)
+            # 规则简述：入库即存（C3，供 DataResolver 匹配与候选展示）
+            description = _build_description(
+                display_name, load_result["row_count"], columns)
 
             meta_result = self._meta().add_dataset(
                 name=table_name,
@@ -118,6 +138,7 @@ class DatasetService:
                 table_name=table_name,
                 schema_json=schema_json,
                 row_count=load_result["row_count"],
+                description=description,
                 owner_user_id=user_id,
                 display_name=display_name,
             )
