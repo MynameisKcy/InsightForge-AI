@@ -2,21 +2,10 @@
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage
 
-from agent.tools.agent_tools import (
-    document_report,
-    fill_report_context_for_report,
-    get_chart_insights,
-    get_current_month,
-    get_customer_overview_tool,
-    get_customer_stats_tool,
-    get_data_overview,
-    get_external_data,
-    list_user_files,
-    quick_data_insight,
-    rag_sumarize,
-    run_full_analysis,
-)
+from agent.tools.agent_tools import REPORT_MODE, for_intent
+from agent.tools.intent_router import Intent
 from agent.tools.middleware import (
+    dynamic_toolset,
     log_before_model,
     monitor_tool,
     report_prompt_switch,
@@ -31,15 +20,20 @@ from utils.sse_protocol import inband_thinking
 class ReactAgent:
     def __init__(self, user_id=None, model=None):
         # model 注入优先（测试/上层共用同一实例）；未注入按 user_id 解析（factory 缓存）
+        # tools：绑定 analysis 档 = 工具目录全集（ADR-0004，见 agent_tools.for_intent）；
+        # dynamic_toolset middleware 在每次模型调用前按 query 意图裁剪可见工具集
+        # （query 档不暴露 run_full_analysis，chat 档只留 RAG + 报告态切换）。
+        # 这样 ReAct 在 chat 意图下根本看不到 run_full_analysis，不会倾向选它；
+        # analysis 意图下工具全集可见。
         self.agent = create_agent(
             model=model if model is not None else get_chat_model(user_id),
             system_prompt=load_system_prompts(),
-            tools=[rag_sumarize, get_current_month, get_external_data,
-                   fill_report_context_for_report, run_full_analysis,
-                   get_data_overview, quick_data_insight, get_chart_insights,
-                   get_customer_overview_tool, get_customer_stats_tool,
-                   list_user_files, document_report],
-            middleware=[monitor_tool, log_before_model, report_prompt_switch, trace_model_call],
+            tools=for_intent(Intent.ANALYSIS),
+            # 顺序：dynamic_toolset 在最前先裁 tools，再走 log_before_model / trace / report_prompt_switch
+            # 报告态切换依赖 runtime.context[REPORT_MODE] 仍由 monitor_tool 写，
+            # dynamic_toolset 不读/不改 report 标志。
+            middleware=[dynamic_toolset, monitor_tool, log_before_model,
+                        report_prompt_switch, trace_model_call],
         )
 
     def execute_stream(self, query: str, history: list[dict] | None = None,
@@ -122,7 +116,8 @@ class ReactAgent:
         # 追踪最后一次模型调用的 AIMessage，用于抽取实测 input_tokens（ADR-0003 Phase 2）
         final_ai_msg = None
 
-        for chunk in self.agent.stream(input_dict, stream_mode="values", context={"report": False}):
+        for chunk in self.agent.stream(input_dict, stream_mode="values",
+                                       context={REPORT_MODE: False}):
             if cancel_token is not None and cancel_token.cancelled:
                 logger.info("Stream cancelled by client disconnect; stopping agent loop")
                 break

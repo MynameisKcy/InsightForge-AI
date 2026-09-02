@@ -74,7 +74,7 @@ def invalidate_analyst(user_id: str | None = None) -> None:
         _analyst_cache.pop(user_id or "default", None)
 
 
-@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比分析→可视化图表→报告）。系统会自动生成图表并嵌入对话，无需你自行绘图。参数 query 为自然语言分析需求，例如'分析各月销售趋势'、'各区人口分布对比'、'可视化路口流量变化'、'画一幅趋势图'")
+@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比→可视化图表→报告）。**仅用于生成完整分析报告/对比/趋势分析/出图/可视化**——单点数据查询请用 `quick_data_insight` 而非本工具。参数 query 为完整分析需求，如'生成3月销售分析报告'、'对比各区人口分布'、'画出趋势图'")
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     try:
@@ -85,15 +85,14 @@ def run_full_analysis(query: str) -> str:
             "user_id": get_user_id(),
             "session_id": get_session_id(),
         })
-        if not result.get("success", False):
-            errors = result.get("errors", [])
-            return f"分析过程出现错误: {'; '.join(errors)}"
-
         report = result.get("report", {})
         markdown = report.get("markdown", "")
         if markdown:
-            # 截取前 3000 字符避免 token 超限
+            # 失败也优先回报告（报告如实渲染"本阶段不可用"），不吞已产出内容
             return markdown[:3000] + ("..." if len(markdown) > 3000 else "")
+        if not result.get("success", False):
+            errors = result.get("errors", [])
+            return f"分析过程出现错误: {'; '.join(errors)}"
         return "分析已完成，但未生成报告内容。"
     except PipelineCancelledError:
         # 客户端断连取消不吞：向上传播结束生产者线程，避免 Agent 循环重试
@@ -139,9 +138,15 @@ def get_data_overview() -> str:
         return f"数据查询失败: {str(e)}"
 
 
-@tool(description="针对特定分组或趋势问题进行快速分析，返回分析结论。参数 query 为具体问题，如'哪个地区人口最多'、'最近几期数值是否下降'")
+@tool(description="针对单点数据查询快速返回结论。**单点查询首选**——X 是多少/谁最多/统计一下/最近 N 期。参数 query 为具体问题，如'3月销售多少'、'哪个地区人口最多'、'最近几期数值是否下降'、'TOP 5 客户'")
 def quick_data_insight(query: str) -> str:
-    """快速数据分析，返回关键洞察。"""
+    """快速数据分析，返回关键洞察。
+
+    数据集消歧（C3 / ADR-0004 语境）：单点查询先经 DataResolver 选定数据集，
+    与流水线 SQL 阶段同一姿势——多数据集且 query 无关键词命中时不猜，文本列出
+    候选让模型追问用户；命中则把 primary_table 传入 SQLAgent（scoped schema，
+    不暴露同 user 其它表，修复跨数据集污染）。静态内置数据集无此风险，保持原样。
+    """
     from agents.analysis_agent import AnalysisAgent
     from agents.sql_agent import SQLAgent
     from analysis.analysis_module import TrendAnalysisAdapter
@@ -154,7 +159,35 @@ def quick_data_insight(query: str) -> str:
         # 同一路径，TrendAgent fork 已退役）。
         uid = get_user_id()
         sql = SQLAgent(user_id=uid)
-        sql_result = sql.run({"task": query, "user_id": uid})
+
+        # ── 数据集消歧（仅动态数据集路径；静态内置数据集直接走原样）──
+        import os
+
+        from database.data_resolver import DataResolver
+
+        resolved = DataResolver.resolve(query, user_id=uid)
+        primary_table = ""
+        if resolved.get("datasets"):
+            matched_by = resolved.get("matched_by", "")
+            if matched_by == "dynamic_all" and len(resolved["datasets"]) > 1:
+                # query 未命中任何数据集特征词且用户有多份数据：不猜，列候选追问
+                lines = [f"当前有 {len(resolved['datasets'])} 个数据集，请告诉我查询哪一个："]
+                for i, ds in enumerate(resolved["datasets"], 1):
+                    label = ds.get("display_name") or ds.get("name", "")
+                    desc = ds.get("description") or ""
+                    lines.append(f"{i}. {label}" + (f"（{desc}）" if desc else ""))
+                lines.append("（例如：查『山东』那份）")
+                return "\n".join(lines)
+            # 命中（dynamic_keyword_match / 单数据集 dynamic_all）：scoped schema
+            primary_table = resolved.get("name", "")
+            csv_path = resolved.get("csv_path", "")
+            if csv_path and os.path.exists(csv_path):
+                # 与 planner._resolve_context 同姿势：确保该 user 实例加载目标 CSV
+                from database.duckdb_manager import init_duckdb
+                init_duckdb(csv_path=csv_path, user_id=uid)
+
+        sql_result = sql.run({"task": query, "user_id": uid,
+                              "primary_table": primary_table})
         if sql_result.get("error"):
             return f"数据查询失败: {sql_result['error']}"
 
@@ -344,3 +377,66 @@ def document_report(file_path: str, question: str = "") -> str:
         return result["markdown"]
     except Exception as e:
         return f"报告生成失败：{e}"
+
+
+# ── 工具档位目录（单一真相源，ADR-0004）───────────────────────
+# min_intent：工具的固有最小可见档；单调阶梯 chat < query < analysis。
+# 可见规则：rank(min_intent) <= rank(intent) 即可见；analysis 档 = 全集 =
+# ToolNode 绑定集。新增工具 = 定义 + 下方目录表一行；档位改动只在此表。
+# 引用工具对象而非名字字符串，杜绝拼错名导致的静默缺失。
+# （@tool 对象为 pydantic StructuredTool，实测不可挂自定义属性且不可哈希，
+#   故目录用「对象-档位」顺序列表而非 dict/对象属性。）
+from agent.tools.intent_router import Intent  # noqa: E402 就近 import，避免顶部拉长
+
+_INTENT_RANK: dict = {
+    Intent.CHAT: 0,
+    Intent.QUERY: 1,
+    Intent.ANALYSIS: 2,
+}
+
+# 顺序 = 工具对外呈现/绑定顺序；analysis 档按此顺序返回全集。
+_TOOL_MIN_INTENT: list = [
+    (rag_sumarize, Intent.CHAT),
+    (get_current_month, Intent.CHAT),
+    (fill_report_context_for_report, Intent.CHAT),
+    (quick_data_insight, Intent.QUERY),
+    (get_data_overview, Intent.QUERY),
+    (get_chart_insights, Intent.QUERY),
+    (get_customer_overview_tool, Intent.QUERY),
+    (get_customer_stats_tool, Intent.QUERY),
+    (list_user_files, Intent.QUERY),
+    (document_report, Intent.QUERY),
+    (run_full_analysis, Intent.ANALYSIS),
+    (get_external_data, Intent.ANALYSIS),
+]
+
+# ── 工具模式副作用（稀疏表：只含有副作用声明的工具）────────
+# mode_effect：调用该工具后要置位的 runtime.context 键名（ADR-0004 扩展，
+# 替代 middleware 按工具名魔法串特判）。effect 即 context 键，通用应用：
+# 调 fill_report_context_for_report -> context["report"]=True -> 报告 prompt。
+REPORT_MODE = "report"
+
+# effect 的声明与 min_intent 同目录段，靠工具对象对齐，无字符串拼错面。
+_TOOL_MODE_EFFECT: list = [
+    (fill_report_context_for_report, REPORT_MODE),
+]
+
+
+def mode_effect_for(tool_name: str):
+    """按工具名返回其声明的模式副作用（无则 None）。middleware 依此通用置位。"""
+    for t, effect in _TOOL_MODE_EFFECT:
+        if t.name == tool_name:
+            return effect
+    return None
+
+
+def for_intent(intent: Intent) -> list:
+    """返回该意图档位下模型可见的工具列表（单调阶梯推导）。
+
+    analysis 档 = 全集（rank(min_intent) <= rank(analysis) 恒成立），
+    即 react_agent 绑定的 ToolNode 工具集；chat 档只含会话/知识问答工具。
+    返回顺序 = 目录表声明顺序；工具按名字调用，顺序对模型无影响。
+    """
+    rank = _INTENT_RANK[intent]
+    return [t for t, min_intent in _TOOL_MIN_INTENT
+            if _INTENT_RANK[min_intent] <= rank]
