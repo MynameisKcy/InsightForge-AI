@@ -94,5 +94,98 @@ class DefaultHookTests(unittest.TestCase):
                                         tool_name="run_full_analysis", args={}))
 
 
+class ToolInvokeMiddlewareTests(unittest.TestCase):
+    """tool.invoke 拦截点端到端：monitor_tool 接线（默认恒放行；注册规则即拦截）。"""
+
+    def setUp(self):
+        clear_hooks(None)
+        self.addCleanup(lambda: clear_hooks(None))
+
+    @staticmethod
+    def _req():
+        from langchain.tools.tool_node import ToolCallRequest
+        return ToolCallRequest(
+            tool_call={"name": "run_full_analysis", "args": {"query": "x"},
+                       "id": "call_1"},
+            tool=None, state=None, runtime=None)
+
+    @staticmethod
+    def _patch_decision():
+        from unittest.mock import patch
+        return patch("agent.tools.middleware._log_tool_decision")
+
+    def test_blocking_hook_returns_permission_tool_message(self):
+        from langchain_core.messages import ToolMessage
+
+        from agent.tools.middleware import monitor_tool
+
+        register_hook(POINT_TOOL_INVOKE, lambda **kw: "工具被策略拒绝")
+        with self._patch_decision():
+            result = monitor_tool.wrap_tool_call(
+                self._req(),
+                lambda r: ToolMessage(content="should not run", name="x",
+                                      tool_call_id="call_1"))
+        self.assertIsInstance(result, ToolMessage)
+        self.assertIn("权限拦截", result.content)
+        self.assertIn("拒绝", result.content)
+
+    def test_default_passes_through_to_handler(self):
+        from langchain_core.messages import ToolMessage
+
+        from agent.tools.middleware import monitor_tool
+
+        called = []
+
+        def handler(req):
+            called.append(req)
+            return ToolMessage(content="ok", name="run_full_analysis",
+                               tool_call_id="call_1")
+
+        with self._patch_decision():
+            result = monitor_tool.wrap_tool_call(self._req(), handler)
+        self.assertEqual(result.content, "ok")
+        self.assertEqual(len(called), 1)   # 默认 hook 恒放行，handler 正常执行
+
+    # ── 模式副作用（ADR-0004 扩展：目录表 mode_effect 替代名字魔法串）──
+
+    def _req_with_runtime(self, tool_name: str, context: dict):
+        """带 runtime.context 的请求：effect 置位需要 context dict。"""
+        from types import SimpleNamespace
+
+        from langchain.tools.tool_node import ToolCallRequest
+        return ToolCallRequest(
+            tool_call={"name": tool_name, "args": {}, "id": "call_1"},
+            tool=None, state=None,
+            runtime=SimpleNamespace(context=context))
+
+    def test_mode_effect_sets_report_flag(self):
+        """fill_report_context_for_report 命中目录表 effect -> context['report']=True。"""
+        from langchain_core.messages import ToolMessage
+
+        from agent.tools.middleware import monitor_tool
+
+        context = {}
+        req = self._req_with_runtime("fill_report_context_for_report", context)
+        with self._patch_decision():
+            monitor_tool.wrap_tool_call(
+                req, lambda r: ToolMessage(content="ok", name="x",
+                                           tool_call_id="call_1"))
+        self.assertTrue(context.get("report"))
+
+    def test_non_effect_tool_leaves_context_untouched(self):
+        """普通工具无 mode_effect -> context 不被污染。"""
+        from langchain_core.messages import ToolMessage
+
+        from agent.tools.middleware import monitor_tool
+
+        context = {"existing": 1}
+        req = self._req_with_runtime("run_full_analysis", context)
+        with self._patch_decision():
+            monitor_tool.wrap_tool_call(
+                req, lambda r: ToolMessage(content="ok", name="x",
+                                           tool_call_id="call_1"))
+        self.assertEqual(context, {"existing": 1})
+
+
 if __name__ == "__main__":
     unittest.main()
