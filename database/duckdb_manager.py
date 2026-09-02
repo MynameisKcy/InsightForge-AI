@@ -15,12 +15,13 @@ import pandas as pd
 from database.customer_profiles import persist_customer_profiles
 from database.external_sources import register_external_databases as _register_external
 from database.safety import (
-    assert_read_only,
+    SecurityError,
     safe_ident,
     validate_csv_path,
     validate_table_name,
 )
 from utils.logger_handler import logger
+from utils.permission_hooks import POINT_CSV_LOAD, POINT_SQL_EXECUTE, trigger_hooks
 
 # 不可见/干扰字符：零宽、BOM、软连字符、大部分控制字符（保留制表/换行待折叠）
 _INVISIBLE_RE = re.compile(r"[​-‏‪-‮⁠﻿]")
@@ -121,7 +122,10 @@ class DuckDBManager:
         qname = safe_ident(self.table_name)
         try:
             validate_table_name(self.table_name)
-            validate_csv_path(csv_path)
+            # 集中式权限 hook（#4）：委托 validate_csv_path，行为恒等
+            reason = trigger_hooks(POINT_CSV_LOAD, path=csv_path)
+            if reason:
+                raise SecurityError(reason)
             self.conn.execute(
                 f"CREATE TABLE {qname} AS SELECT * FROM read_csv_auto('{csv_path}')"
             )
@@ -154,7 +158,11 @@ class DuckDBManager:
         执行期带超时 watchdog（Timer + conn.interrupt），超时抛 TimeoutError。
         管理通道（_load_csv/reload_csv）直接调 self.conn.execute，不经此校验。
         """
-        assert_read_only(sql)
+        # 集中式权限 hook（#4）：委托 assert_read_only（sqlglot AST 只读白名单，
+        # 函数本体保留供测试/直接使用），行为恒等
+        reason = trigger_hooks(POINT_SQL_EXECUTE, sql=sql, user_id=self.user_id)
+        if reason:
+            raise SecurityError(reason)
         logger.debug(f"Executing SQL: {sql[:200]}...")
         if self._query_timeout and self._query_timeout > 0:
             # DuckDB 无 SQL 级查询超时设置；Timer 线程超时 interrupt 执行中的
