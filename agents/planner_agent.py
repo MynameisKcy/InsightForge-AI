@@ -883,6 +883,11 @@ class PlannerAgent(BaseAgent):
         # 不能用 "error" not in result（恒为 False，导致 dataframe_json 永不赋值）。
         if not result.get("error"):
             pctx.dataframe_json = result.get("dataframe_json", "[]")
+        else:
+            # 失败必须如实标记（此前不追加 errors → success 恒 True，工具路径
+            # 与任务终态全被误导为成功）。报告仍照常生成（ReportAgent 渲染
+            # 本阶段不可用），但顶层 success=False、任务终态 failed。
+            pctx.errors.append(f"SQL 查询失败: {result.get('error')}")
 
     def _run_trend(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:
         """执行趋势分析。"""
@@ -996,6 +1001,11 @@ class PlannerAgent(BaseAgent):
             for a in agent_names:
                 r = self._capture_stage_result(pctx, a)
                 if r is not None:
+                    # sql_query 条目的 dataframe_json 与 rec.dataframe_json 双份
+                    # 大字段冗余：剥离，resume 时由快照字段单独回灌（见 resume）。
+                    if a == "sql_query":
+                        r = dict(r)
+                        r.pop("dataframe_json", None)
                     results[a] = r
             update_progress(user_id, task_id,
                             completed_steps=sorted(pctx.completed_steps),

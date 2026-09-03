@@ -85,6 +85,25 @@ class PlannerRunPersistenceTests(unittest.TestCase):
         # sql 步结果快照进 stage_results 且 dataframe_json 已存
         self.assertIn("sql_query", rec.stage_results)
         self.assertEqual(rec.dataframe_json, "[{}]")
+        # ⑤ 去冗余：stage_results 的 sql_query 条目不重复存 dataframe_json 大字段
+        self.assertNotIn("dataframe_json", rec.stage_results["sql_query"])
+
+    def test_sql_failure_marks_failed_but_report_generated(self):
+        """SQL agent 返回错误（非异常）：success=False + 任务 failed，
+        但报告仍生成（ReportAgent 渲染本阶段不可用），工具路径可继续回报告。"""
+        class _BadSQL:
+            def run(self, input_data):
+                return {"error": "SQL 语法错误: near DROP", "dataframe_json": None}
+
+        self.planner.sql_agent = _BadSQL()
+        result = self.planner.run({"query": "分析趋势", "user_id": "u1"})
+        self.assertFalse(result["success"])
+        self.assertTrue(any("SQL 查询失败" in e for e in result["errors"]))
+        # 报告照常产出（report 步骤不受 errors 影响，依赖只看 completed_steps）
+        self.assertTrue(result.get("report"))  # fake report_agent 返回了 report_result
+        # 任务终态如实标记 failed
+        rec = get_task("u1", result["task_id"])
+        self.assertEqual(rec.status, "failed")
 
     def test_run_task_best_effort_does_not_break_pipeline(self):
         # 存储层故障（非法 owner）时流水线照常返回结果
