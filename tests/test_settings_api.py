@@ -88,3 +88,46 @@ def test_save_enable_thinking_normalized(tmp_path):
     assert r.status_code == 200
     r = client.get("/api/settings", headers=headers)
     assert r.json()["settings"]["llm_enable_thinking"] is False
+
+
+def test_settings_save_hot_reloads_chat_model(tmp_path, monkeypatch):
+    """热重载回归（存量 bug：保存设置后对话仍用旧模型，重启才生效）。
+
+    真实走 POST /api/settings（reload_model_config + _invalidate_user_agents），
+    桩掉 create_agent 捕获每次构建 ReactAgent 时拿到的模型实例：
+    保存新模型后重建的 agent 必须拿到【不同的实例】且解析到新模型名。
+    """
+    from api import deps
+    from model.factory import get_chat_model_name
+
+    _fresh_settings(tmp_path)
+    user_id, headers = _make_authed_user("hot")
+    client = TestClient(srv.app)
+
+    captured = []
+
+    class _StubAgent:
+        def stream(self, *a, **k):
+            yield {}
+
+    def fake_create_agent(model, **kw):
+        captured.append(model)
+        return _StubAgent()
+
+    monkeypatch.setattr("agent.react_agent.create_agent", fake_create_agent)
+
+    # 首次配置 model-A 并构建 agent
+    r = client.post("/api/settings", json={"llm_model_name": "model-A"}, headers=headers)
+    assert r.status_code == 200
+    a1 = deps._get_react_agent(user_id)
+    m1 = captured[-1]
+
+    # 改配置为 model-B 再保存 → 热重载链全真
+    r = client.post("/api/settings", json={"llm_model_name": "model-B"}, headers=headers)
+    assert r.status_code == 200
+
+    a2 = deps._get_react_agent(user_id)   # 旧实例应已被丢弃，此处重建
+    m2 = captured[-1]
+    assert a2 is not a1, "ReactAgent 实例未被丢弃重建——_invalidate_user_agents 未生效"
+    assert m2 is not m1, "重建 agent 拿到了同一个模型实例——模型缓存未失效（热重载 bug 回归）"
+    assert get_chat_model_name(user_id) == "model-B"
