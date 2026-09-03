@@ -90,6 +90,23 @@ def _resolve_base_url(override: dict | None = None) -> str:
     return os.environ.get("LLM_BASE_URL", "")
 
 
+def _resolve_enable_thinking(override: dict | None = None) -> bool:
+    """思考模式开关，默认关闭。优先级：用户配置 > .env ENABLE_THINKING > YAML。
+
+    qwen3 系混合推理模型在 DashScope 兼容端点默认开思考：意图分类这类机械
+    小任务实测被推理 token 拖到 2.5~7s（答案仅 4 token、思考 400~1000+，
+    2026-09-03 差分实验实测，关思考后 0.43s）。故平台默认关，需要的用户在
+    设置页 / .env 显式打开。override 值为 None（用户未设置）时回落下层配置。
+    """
+    override = override or {}
+    raw = override.get("llm_enable_thinking")
+    if raw is None:
+        raw = os.environ.get("ENABLE_THINKING", rag_conf.get("enable_thinking", False))
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in ("true", "1", "yes", "on")
+
+
 # 模型调用兜底超时(秒)：防 LLM 请求无限挂起。
 # 背景：live 观测到工具内模型调用无超时，请求挂死后 SSE producer 永久阻塞
 # （2026-09-03，3 个 quick 并行后 7min+ 无日志、前端超时）。取值需大于当前
@@ -109,13 +126,17 @@ def _build_chat_model(user_id: str | None = None):
     api_key = _resolve_api_key(override)
     if base_url:
         from langchain_openai import ChatOpenAI
+        # enable_thinking 随请求体下发（DashScope 兼容端点参数）：默认关闭，
+        # 见 _resolve_enable_thinking。第三方网关不识别该参数时一般会忽略。
         return ChatOpenAI(model=model_name, api_key=api_key or None,
                           base_url=base_url, streaming=True,
-                          request_timeout=LLM_REQUEST_TIMEOUT_S)
+                          request_timeout=LLM_REQUEST_TIMEOUT_S,
+                          extra_body={"enable_thinking": _resolve_enable_thinking(override)})
     # 未设 base_url -> ChatTongyi（DashScope）：传入用户 key，空则回退到 DASHSCOPE_API_KEY 环境变量
     # 显式 streaming=True 与 ChatOpenAI 路径(104 行)对齐;阶段 1.1 改造。
     # ChatTongyi 无 request_timeout 字段（langchain_community 1.3.x），
     # 超时兜底依赖底层 dashscope SDK 默认行为；live 走 OpenAI 兼容端点即 ChatOpenAI 路径。
+    # 思考模式旋钮仅 ChatOpenAI 路径支持（extra_body）；ChatTongyi 分支暂不传。
     if api_key:
         return ChatTongyi(model=model_name, dashscope_api_key=api_key, streaming=True)
     return ChatTongyi(model=model_name, streaming=True)
