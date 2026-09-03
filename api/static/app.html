@@ -173,6 +173,10 @@
             <input type="text" id="setChatModel" placeholder="qwen-max">
           </div>
           <div class="set-field">
+            <label>思考模式（先推理再回答，更慢；默认关闭，对强制推理模型无效）</label>
+            <input type="checkbox" id="setEnableThinking">
+          </div>
+          <div class="set-field">
             <label>请求地址 base_url（留空=默认千问官方；填则接入 OpenAI 兼容端点，不限千问）</label>
             <input type="text" id="setBaseUrl" placeholder="留空使用千问官方">
           </div>
@@ -266,7 +270,7 @@
 <script src="/static/js/icons.js?v=20260723"></script>
 <script src="/static/js/auth.js?v=20260723"></script>
 <script src="/static/js/stream_dedup.js?v=20260903"></script>
-<script src="/static/js/app.js?v=20260903a"></script>
+<script src="/static/js/app.js?v=20260903d"></script>
 <script src="/static/js/tasks.js?v=20260902a"></script>
 <div class="toast-container" id="toastContainer"></div>
 <div class="modal-overlay" id="modalOverlay">

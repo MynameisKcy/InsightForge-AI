@@ -1199,6 +1199,7 @@ function resolveModal(result) {
 
 // ── 账号设置（需求①） ──
 var _setKeyEditing = false;
+var _setThinkingInitial = false;   // 思考开关初始值：未改动则保存时不上传，保留 env/已存值
 async function loadSettingsStatus() {
   // 登录后查是否已配置；未配置则弹提示横幅 + 侧边栏红点
   try {
@@ -1226,6 +1227,8 @@ async function loadSettings() {
     document.getElementById('setApiKey').value = s.llm_api_key || '';
     document.getElementById('setApiKey').type = 'password';
     document.getElementById('setChatModel').value = s.llm_model_name || '';
+    document.getElementById('setEnableThinking').checked = !!s.llm_enable_thinking;
+    _setThinkingInitial = !!s.llm_enable_thinking;   // null/undefined 视为关（未设置）
     document.getElementById('setBaseUrl').value = s.llm_base_url || '';
     document.getElementById('setEmbedModel').value = s.embedding_model_name || '';
     document.getElementById('setVdbHost').value = s.vector_db_host || '';
@@ -1270,6 +1273,9 @@ async function saveSettings() {
     vector_db_collection: document.getElementById('setVdbCollection').value,
     local_db_conn: document.getElementById('setLocalDb').value
   };
+  // 思考开关未改动则不上传：后端 COALESCE 保住已存值，不覆盖 .env/设置页默认
+  var thinkNow = document.getElementById('setEnableThinking').checked;
+  if (thinkNow !== _setThinkingInitial) payload.llm_enable_thinking = thinkNow;
   // 若未进入编辑模式且 key 含掩码标记，则不发送明文 key 字段（后端会保留旧值）
   try {
     var r = await Auth.authedFetch('/api/settings', {

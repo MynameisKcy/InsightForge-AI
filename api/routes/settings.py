@@ -5,7 +5,6 @@ from-import 固定绑定）：tests 以 importlib.reload + 重绑模块属性的
 动态属主查找与其对齐（见 test_settings_api._fresh_settings）。
 """
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
 
 import database.user_settings_db as usd
 from api import deps
@@ -43,9 +42,15 @@ async def save_settings(request: Request, user=Depends(require_auth)):
     except Exception:
         return error_response("请求体不是有效 JSON", 400)
     allowed = {"llm_api_key", "llm_model_name", "embedding_model_name", "llm_base_url",
+               "llm_enable_thinking",
                "vector_db_host", "vector_db_port", "vector_db_collection",
                "vector_db_tenant", "local_db_conn"}
     cleaned = {k: v for k, v in body.items() if k in allowed}
+    # 思考模式开关：宽松布尔归一为真布尔存储（前端可能回传字符串）
+    if "llm_enable_thinking" in cleaned:
+        v = cleaned["llm_enable_thinking"]
+        cleaned["llm_enable_thinking"] = v if isinstance(v, bool) else \
+            str(v).strip().lower() in ("true", "1", "yes", "on")
     # 前端回传掩码值（含 ****）：不覆盖已存明文 key
     if "****" in str(cleaned.get("llm_api_key", "")):
         cleaned.pop("llm_api_key", None)

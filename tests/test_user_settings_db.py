@@ -42,3 +42,17 @@ def test_storage_is_encrypted(tmp_path):
     row = conn.execute("SELECT llm_api_key_enc FROM user_settings WHERE user_id=?", ("u1",)).fetchone()
     conn.close()
     assert "sk-secretkey123456" not in row[0]
+
+
+def test_enable_thinking_roundtrip_and_preserve(tmp_path):
+    """思考开关：未设置 -> None（回落 env/YAML）；显式保存 -> bool；None 不清掉已存值。"""
+    db = _fresh_db(tmp_path)
+    db.upsert("u1", {"llm_model_name": "qwen-max"})
+    assert db.get("u1")["llm_enable_thinking"] is None          # 未设置回落默认层
+    db.upsert("u1", {"llm_model_name": "qwen-max", "llm_enable_thinking": True})
+    assert db.get("u1")["llm_enable_thinking"] is True
+    # 再存一次但不带该键（前端未改动不上传）：COALESCE 保住已存 true，不清回 None
+    db.upsert("u1", {"llm_model_name": "qwen2-max"})
+    got = db.get("u1")
+    assert got["llm_enable_thinking"] is True
+    assert got["llm_model_name"] == "qwen2-max"

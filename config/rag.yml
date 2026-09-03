@@ -2,6 +2,9 @@
 # 下面两行仅作为环境变量缺失时的 fallback，由 model/factory.py 读取。
 chat_model_name: qwen3-max
 embedding_model_name: text-embedding-v4
+# 思考模式（qwen3 系混合推理模型）默认关闭：开思考后小任务延迟显著增加。
+# 生效优先级：web 设置页 llm_enable_thinking > .env ENABLE_THINKING > 此处。
+enable_thinking: false
 
 # DashScope rerank 模型（复用 .env 的 DASHSCOPE_API_KEY）
 # 注意：gte-rerank 对部分 Key 返回 403 AccessDenied，gte-rerank-v2 普遍可用。
