@@ -21,7 +21,6 @@ ragas = pytest.importorskip("ragas", reason="未安装评估依赖：pip install
 
 from model.factory import get_chat_model, get_embed_model
 from rag.rag_service import format_context_block
-
 from tests.rag_eval.test_cases import TEST_CASES
 
 

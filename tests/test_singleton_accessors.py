@@ -29,6 +29,7 @@ def test_summarizer_constructor_runs_once_under_concurrency(monkeypatch):
     """
     import threading
     import time
+
     import rag.rag_service as rs
 
     created = []

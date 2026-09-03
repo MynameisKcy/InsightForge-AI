@@ -5,7 +5,6 @@ mark_success=False 自管状态分支，以及 NoOp 开关（无 OTLP endpoint �
 不触达全局 TracerProvider（OTel 全局 provider 进程内仅可设置一次）：测试用本地
 TracerProvider + InMemorySpanExporter，经 monkeypatch 替换模块级 _tracer。
 """
-import contextlib
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider

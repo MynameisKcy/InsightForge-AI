@@ -15,7 +15,6 @@ from rag.vector_store import VectorStoreService, get_default_vector_store
 from utils.config_handler import rag_conf
 from utils.logger_handler import logger
 from utils.prompt_loader import load_rag_prompts
-
 from utils.tracing import get_tracer, record_exception, traced
 
 

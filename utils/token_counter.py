@@ -14,8 +14,8 @@ set_metrics_publisher 注入发布器（progress_emitter.emitter_bridge("metrics
 import contextlib
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from utils.request_context import get_session_id
 
