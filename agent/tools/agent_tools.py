@@ -97,7 +97,7 @@ def invalidate_analyst(user_id: str | None = None) -> None:
         _analyst_cache.pop(user_id or "default", None)
 
 
-@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比→可视化图表→报告）。**仅用于生成完整分析报告/对比/趋势分析/出图/可视化**——单点数据查询请用 `quick_data_insight` 而非本工具。参数 query 为完整分析需求，如'生成3月销售分析报告'、'对比各区人口分布'、'画出趋势图'")
+@tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比→可视化图表→报告）。**仅用于生成完整分析报告/对比/趋势分析/出图/可视化**——单点数据查询请用 `quick_data_insight` 而非本工具。参数 query 为完整分析需求，如'生成3月销售分析报告'、'对比各区人口分布'、'画出趋势图'。**query 必须逐字转述用户需求，不要自行补充用户没要求的内容（如“可视化/图表”）——用户没提就不要写。**")
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
     from utils.request_context import get_session_id, get_user_id
