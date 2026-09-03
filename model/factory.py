@@ -90,6 +90,14 @@ def _resolve_base_url(override: dict | None = None) -> str:
     return os.environ.get("LLM_BASE_URL", "")
 
 
+# 模型调用兜底超时(秒)：防 LLM 请求无限挂起。
+# 背景：live 观测到工具内模型调用无超时，请求挂死后 SSE producer 永久阻塞
+# （2026-09-03，3 个 quick 并行后 7min+ 无日志、前端超时）。取值需大于当前
+# 最慢的正常调用——SQLAgent 生成 SQL 实测 ~105s，故取 180s 作兜底上限；
+# 正常请求不会触达，仅切断真正挂死的调用。
+LLM_REQUEST_TIMEOUT_S = 180
+
+
 def _build_chat_model(user_id: str | None = None):
     """根据是否配置 base_url 选择实现：
     - 设了 base_url → ChatOpenAI 接 OpenAI 兼容端点（不限千问，如第三方代理/自建网关）
@@ -102,9 +110,12 @@ def _build_chat_model(user_id: str | None = None):
     if base_url:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=model_name, api_key=api_key or None,
-                          base_url=base_url, streaming=True)
+                          base_url=base_url, streaming=True,
+                          request_timeout=LLM_REQUEST_TIMEOUT_S)
     # 未设 base_url -> ChatTongyi（DashScope）：传入用户 key，空则回退到 DASHSCOPE_API_KEY 环境变量
     # 显式 streaming=True 与 ChatOpenAI 路径(104 行)对齐;阶段 1.1 改造。
+    # ChatTongyi 无 request_timeout 字段（langchain_community 1.3.x），
+    # 超时兜底依赖底层 dashscope SDK 默认行为；live 走 OpenAI 兼容端点即 ChatOpenAI 路径。
     if api_key:
         return ChatTongyi(model=model_name, dashscope_api_key=api_key, streaming=True)
     return ChatTongyi(model=model_name, streaming=True)
