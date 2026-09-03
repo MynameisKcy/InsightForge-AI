@@ -17,14 +17,6 @@ import database.duckdb_manager as duck_mod
 from database.datasources_db import DatasourcesDB
 
 
-class _FakeCursor:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def fetchall(self):
-        return self._rows
-
-
 class _FakeDuckDB:
     """DuckDBManager 查询面桩：upload/schema/delete/reload 路由用到的方法。"""
 
@@ -49,13 +41,14 @@ class _FakeDuckDB:
     def load_excel_dataset(self, fpath, table):
         return dict(self.load_result)
 
-    def execute(self, sql):
+    def execute_fetchall(self, sql):
+        # 对齐真实施主：execute+fetchall 已在连接锁内原子化，桩直接返回行
         if self.describe_exc:
             raise self.describe_exc
         if sql.startswith("DESCRIBE"):
-            return _FakeCursor(self.cols)
+            return self.cols
         if sql.startswith("SUMMARIZE"):
-            return _FakeCursor(self.stats)
+            return self.stats
         raise AssertionError(f"unexpected sql: {sql}")
 
     def query_df(self, sql):

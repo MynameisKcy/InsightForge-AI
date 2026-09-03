@@ -16,14 +16,6 @@ from database.dataset_service import (
 )
 
 
-class _FakeCursor:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def fetchall(self):
-        return self._rows
-
-
 class _FakeDuckDB:
     def __init__(self, load_result=None, probe_exc=None):
         self.load_result = load_result or {"success": True, "row_count": 2}
@@ -39,13 +31,14 @@ class _FakeDuckDB:
     def load_excel_dataset(self, fpath, table):
         return dict(self.load_result)
 
-    def execute(self, sql):
+    def execute_fetchall(self, sql):
+        # 对齐真实施主：execute+fetchall 已在连接锁内原子化，桩直接返回行
         if self.probe_exc:
             raise self.probe_exc
         if sql.startswith("DESCRIBE"):
-            return _FakeCursor(self.cols)
+            return self.cols
         if sql.startswith("SUMMARIZE"):
-            return _FakeCursor([("city", "VARCHAR", "济南", "青岛", None, None, 2, 0)])
+            return [("city", "VARCHAR", "济南", "青岛", None, None, 2, 0)]
         raise AssertionError(f"unexpected sql: {sql}")
 
     def query_df(self, sql):
