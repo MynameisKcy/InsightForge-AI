@@ -355,7 +355,13 @@ async function sendMessage() {
 
   const assistantMsg = appendMessage('assistant', '');
   const bubble = assistantMsg.querySelector('.bubble');
-  bubble.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+  // 分区结构:step-progress / content / charts / export-bar 独立 div,互不销毁
+  // (commit 1 stage_timing 修复:原 L721 renderMarkdown 重写整 bubble 销毁 step 清单)
+  bubble.innerHTML =
+    '<div class="stream-step-progress"></div>' +
+    '<div class="stream-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div>' +
+    '<div class="stream-charts"></div>' +
+    '<div class="stream-export-bar"></div>';
   scrollToBottom();
 
   try {
@@ -538,8 +544,21 @@ async function streamChat(text, bubble) {
     } catch (e) { /* 渐进增强 */ }
   }
 
-  // ── 单行 SSE 事件处理（抽成闭包，供跨 chunk 缓冲复用）──
+  // ── 单行 SSE 事件处理（抽成闭包，供跨 chunk 行缓冲复用）──
   // 返回 true 表示遇到 [ERROR]，应终止整条流
+
+  // 流分区: bubble 内部 4 个独立 div，markdown 重写只影响 stream-content，
+  // 不销毁 step-progress / charts / export-bar（commit 1 修复）
+  function streamPart(name) {
+    var el = bubble.querySelector('.' + name);
+    if (!el) { el = document.createElement('div'); el.className = name; bubble.appendChild(el); }
+    return el;
+  }
+  function streamContent()       { return streamPart('stream-content'); }
+  function streamStepProgress()  { return streamPart('stream-step-progress'); }
+  function streamCharts()        { return streamPart('stream-charts'); }
+  function streamExportBar()     { return streamPart('stream-export-bar'); }
+
   function processLine(line) {
     if (!line.startsWith('data: ')) return false;
     const data = line.slice(6);
@@ -563,15 +582,17 @@ async function streamChat(text, bubble) {
 
     if (tok === 'STEP') {
       ensureStepTimer();   // 执行链路开始即起表（Issue ⑤）
-      // 分析步骤进度：在 bubble 内渲染/更新步骤清单，并同步状态行
+      // 分析步骤进度：在 stream-step-progress 容器内渲染/更新步骤清单，
+      // 并同步状态行(commit 1 修复:独立容器避免被 markdown 重写销毁)
       var stepData;
       try { stepData = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
       if (statusEl) statusEl.style.display = 'flex';
       var prog = bubble.querySelector('.step-progress');
       if (stepData.type === 'plan') {
-        bubble.innerHTML = '';   // 清除 typing dots，展示步骤清单
+        // 步骤清单落到专属容器(由 streamChat 初始化时已建空 div)
+        var sp = streamStepProgress();
         if (stepData.reasoning) {
-          renderDecisionCard(bubble, {source: 'planner', reasoning: stepData.reasoning});
+          renderDecisionCard(sp, {source: 'planner', reasoning: stepData.reasoning});
         }
         prog = document.createElement('div');
         prog.className = 'step-progress';
@@ -584,7 +605,7 @@ async function streamChat(text, bubble) {
                           escapeHtml(row.dataset.label) + '</span>';
           prog.appendChild(row);
         });
-        bubble.appendChild(prog);
+        sp.appendChild(prog);
         if (statusEl) statusEl.querySelector('.status-text').textContent =
           stepData.title || '正在执行分析流程...';
       } else if (prog) {
@@ -614,6 +635,7 @@ async function streamChat(text, bubble) {
     if (tok === 'STEP_TIMING') {
       // 单阶段耗时:在对应 step row 旁追加 "X秒",前端可见的 per-step timing
       // (阶段 1 优化 ROI 测量点 + 用户感知改进)
+      // 步骤清单在 stream-step-progress 容器内(commit 1 修复)
       var timingData;
       try { timingData = JSON.parse(frame.payload.trim()); } catch (e) { return false; }
       var step = timingData.step, ms = timingData.duration_ms;
@@ -693,33 +715,41 @@ async function streamChat(text, bubble) {
       const chartUrl = frame.payload.trim();
       // XSS 防护：图表 URL 必须是站内相对路径（以 / 开头），拒绝 javascript:/外部 http
       if (chartUrl && chartUrl.charAt(0) === '/' && !chartUrl.startsWith('//')) {
+        // 同一 chartUrl 已存在 → 跳过(commit 1 bug 修复:L703 if (!wrapper.dataset.created)
+        // 永远 true,改为 if (wrapper.dataset.created) 仍不对——应按 url 去重)
+        var chartsDiv = streamCharts();
+        var existing = chartsDiv.querySelector('iframe[data-chart-url="' + cssEscape(chartUrl) + '"]');
+        if (existing) return false;  // 已渲染过同一 url,跳过
         const iframe = document.createElement('iframe');
         iframe.src = chartUrl;
+        iframe.setAttribute('data-chart-url', chartUrl);
         // sandbox 收紧图表 HTML 权限：仅放行脚本（Plotly 渲染所需），不带 allow-same-origin，
         // 使图表运行于 null origin，无法读取父页面 cookie / localStorage。
         iframe.setAttribute('sandbox', 'allow-scripts allow-popups');
         iframe.style.cssText = 'width:100%;height:400px;border:none;border-radius:8px;margin:8px 0;';
         const wrapper = document.createElement('div');
-        if (!wrapper.dataset.created) {
-          wrapper.dataset.created = '1';
-          wrapper.appendChild(iframe);
-          bubble.appendChild(wrapper);
-        }
+        wrapper.appendChild(iframe);
+        chartsDiv.appendChild(wrapper);
       }
       return false;
     }
 
-    // 正常内容：流式追加
+    // 正常内容：流式追加 —— 只重写 stream-content,不动 step-progress / charts
+    // (commit 1 bug 修复:原 L743 bubble.innerHTML=... 销毁步骤清单 + 重复渲染的图表)
     if (thinking) {
       // 首次收到实际内容：关闭思考状态和转圈
       thinking = false;
       if (statusEl) statusEl.style.display = 'none';
-      bubble.innerHTML = ''; // 清除 typing indicator
     }
     if (fullText.length > 0) fullText += '\n';
     fullText += data;
-    bubble.innerHTML = renderMarkdown(fullText);
-    _syncRaw(bubble, fullText);
+    // Bug 2 修复:剥离 charts_dir PNG image 引用,避免 [CHART:url] iframe + <img> 双渲染
+    // LLM 报告 markdown 里常含 ![对比图](/reports/charts/xxx.png) 引用 PNG,
+    // 但 chat_stream.py:181 同时已发 [CHART:url] 帧——同一图渲染两次
+    var contentDiv = streamContent();
+    var rendered = _stripAlreadyRenderedCharts(renderMarkdown(fullText));
+    contentDiv.innerHTML = rendered;
+    _syncRaw(contentDiv, fullText);
     scrollToBottom();
     return false;
   }
@@ -1467,6 +1497,39 @@ function _renderChartIframes(bubble, chartUrls) {
     bubble.appendChild(iframe);
   });
 }
+
+// ── Bug 2 修复辅助:剥离已被 [CHART:url] 帧渲染过的 PNG image 引用 ──
+// LLM 报告 markdown 经常含 ![xxx](/reports/charts/xxx.png) 引用 PNG,
+// 但 chat_stream.py:181 同时已发 [CHART:url] 帧(stream 路径)→ 同图渲染两次。
+// 此函数:扫描 stream-charts div 已渲染 iframe 的 url,在 markdown HTML 中
+// 剥离对应 <img src=...> 元素(同源 .png/.html basename 共享)。
+function _stripAlreadyRenderedCharts(html) {
+  try {
+    var renderedUrls = {};
+    var iframes = document.querySelectorAll('.stream-charts iframe[data-chart-url]');
+    for (var i = 0; i < iframes.length; i++) {
+      renderedUrls[iframes[i].getAttribute('data-chart-url')] = 1;
+    }
+    if (Object.keys(renderedUrls).length === 0) return html;
+    var keys = Object.keys(renderedUrls);
+    for (var j = 0; j < keys.length; j++) {
+      var url = keys[j];
+      // url 形如 /reports/charts/bar_xxx.html;PNG 在同名 .png
+      var pngUrl = url.replace(/\.html?$/, '.png');
+      var escaped = pngUrl.replace(/[\/.]/g, '\$&');
+      var re = new RegExp('<img[^>]*src=["\']' + escaped + '["\'][^>]*>', 'g');
+      html = html.replace(re, '');
+    }
+    return html;
+  } catch (e) { return html; }
+}
+
+// CSS.escape polyfill(部分老浏览器没原生)
+function cssEscape(s) {
+  if (window.CSS && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, function(c) { return '\\' + c.charCodeAt(0).toString(16) + ' '; });
+}
+
 
 // ── 报告导出：在报告 bubble 末尾追加导出按钮栏 ──
 function appendExportBar(bubble, markdown) {
