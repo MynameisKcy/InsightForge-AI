@@ -30,3 +30,6 @@ jobs:
 
       - name: Pytest (offline, LLM 100% mocked)
         run: python -m pytest tests/ -q
+
+      - name: Frontend unit tests (node:test, P1-1)
+        run: node --test tests/js/stream_dedup.test.js

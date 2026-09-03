@@ -1498,37 +1498,8 @@ function _renderChartIframes(bubble, chartUrls) {
   });
 }
 
-// ── Bug 2 修复辅助:剥离已被 [CHART:url] 帧渲染过的 PNG image 引用 ──
-// LLM 报告 markdown 经常含 ![xxx](/reports/charts/xxx.png) 引用 PNG,
-// 但 chat_stream.py:181 同时已发 [CHART:url] 帧(stream 路径)→ 同图渲染两次。
-// 此函数:扫描 stream-charts div 已渲染 iframe 的 url,在 markdown HTML 中
-// 剥离对应 <img src=...> 元素(同源 .png/.html basename 共享)。
-function _stripAlreadyRenderedCharts(html) {
-  try {
-    var renderedUrls = {};
-    var iframes = document.querySelectorAll('.stream-charts iframe[data-chart-url]');
-    for (var i = 0; i < iframes.length; i++) {
-      renderedUrls[iframes[i].getAttribute('data-chart-url')] = 1;
-    }
-    if (Object.keys(renderedUrls).length === 0) return html;
-    var keys = Object.keys(renderedUrls);
-    for (var j = 0; j < keys.length; j++) {
-      var url = keys[j];
-      // url 形如 /reports/charts/bar_xxx.html;PNG 在同名 .png
-      var pngUrl = url.replace(/\.html?$/, '.png');
-      var escaped = pngUrl.replace(/[\/.]/g, '\$&');
-      var re = new RegExp('<img[^>]*src=["\']' + escaped + '["\'][^>]*>', 'g');
-      html = html.replace(re, '');
-    }
-    return html;
-  } catch (e) { return html; }
-}
-
-// CSS.escape polyfill(部分老浏览器没原生)
-function cssEscape(s) {
-  if (window.CSS && CSS.escape) return CSS.escape(s);
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, function(c) { return '\\' + c.charCodeAt(0).toString(16) + ' '; });
-}
+// _stripAlreadyRenderedCharts / cssEscape 已抽至 stream_dedup.js（P1-1，node 可单测），
+// 由 app.html 在本文件之前引入；浏览器全局函数签名与调用点保持不变。
 
 
 // ── 报告导出：在报告 bubble 末尾追加导出按钮栏 ──
