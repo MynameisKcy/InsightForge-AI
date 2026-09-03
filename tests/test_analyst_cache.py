@@ -144,5 +144,64 @@ class RunFullAnalysisUserIsolationTests(unittest.TestCase):
         self.assertIn("report for u_42", out)
 
 
+class RunFullAnalysisFailureDedupeTests(unittest.TestCase):
+    """P2-1 失败去重：同会话同 query 失败后二次调用短路，不再空耗执行。
+
+    8-28 报告 §6.2 现象：run_full_analysis 失败后 ReactAgent 反复重试，
+    单次 ~80s 拉长整个流程。硬护栏在工具层：同 (user, session, query)
+    已失败则直接返回提示，不重复执行。
+    """
+
+    user_id, session_id = "u_dedupe", "s_dedupe"
+    query = "分析销售额趋势"
+
+    def tearDown(self):
+        agent_tools.clear_analysis_failures()
+
+    def _fail_result(self):
+        return _StubAnalyst({"success": False,
+                             "errors": ["SQL 查询失败: near DROP"], "report": {}})
+
+    def test_second_same_query_short_circuits(self):
+        calls = []
+
+        def factory(uid):
+            calls.append(uid)
+            return self._fail_result()
+
+        with patch.object(agent_tools, "_get_or_create_analyst", side_effect=factory):
+            token = set_request_context(user_id=self.user_id, session_id=self.session_id)
+            try:
+                first = agent_tools.run_full_analysis.invoke({"query": self.query})
+                second = agent_tools.run_full_analysis.invoke({"query": self.query})
+            finally:
+                reset_request_context(token)
+        self.assertIn("分析过程出现错误", first)
+        self.assertIn("不再重复执行", second)
+        self.assertEqual(len(calls), 1, "第二次同 query 应短路，不再触发 analyst 执行")
+
+    def test_session_clear_allows_retry(self):
+        """会话结束清理(react_agent finally)后，同 query 可正常重新分析。"""
+        results = iter([
+            {"success": False, "errors": ["SQL 查询失败"], "report": {}},
+            {"success": True, "report": {"markdown": "# 报告 OK"}},
+        ])
+
+        def factory(uid):
+            return _StubAnalyst(next(results))
+
+        token = set_request_context(user_id=self.user_id, session_id=self.session_id)
+        try:
+            with patch.object(agent_tools, "_get_or_create_analyst", side_effect=factory):
+                first = agent_tools.run_full_analysis.invoke({"query": self.query})
+            self.assertIn("分析过程出现错误", first)
+            agent_tools.clear_analysis_failures(self.session_id)  # 等价 react_agent 会话结束
+            with patch.object(agent_tools, "_get_or_create_analyst", side_effect=factory):
+                second = agent_tools.run_full_analysis.invoke({"query": self.query})
+        finally:
+            reset_request_context(token)
+        self.assertIn("# 报告 OK", second)
+
+
 if __name__ == "__main__":
     unittest.main()

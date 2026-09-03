@@ -55,6 +55,13 @@ class ReactAgent:
             yield from self._execute_stream_inner(query, history, user_id, session_id,
                                                   cancel_token=cancel_token)
         finally:
+            # P2-1：会话结束清空失败去重表（agent_tools._analysis_failures），
+            # 避免跨会话误伤——同一 query 下个会话应可正常重新分析。
+            try:
+                from agent.tools.agent_tools import clear_analysis_failures
+                clear_analysis_failures(session_id)
+            except Exception:
+                pass
             reset_cancel_token(ct_token)
             reset_progress_emitter(pe_token)
             reset_request_context(ctx_token)

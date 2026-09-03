@@ -49,6 +49,29 @@ def fill_report_context_for_report():
 _analyst_cache = {}  # user_id -> PlannerAgent
 
 
+# P2-1 失败去重：同一请求会话内 run_full_analysis 失败后，LLM 若以相同 query
+# 反复重调（8-28 报告 §6.2 现象：失败后 ReactAgent 反复跑，单次 ~80s），
+# 直接短路返回，避免空耗配额与时间。key=(user_id, session_id, query)。
+# 会话结束由 react_agent.execute_stream finally 调 clear_analysis_failures 清理。
+_analysis_failures: dict[tuple[str, str, str], str] = {}
+
+
+def clear_analysis_failures(session_id: str | None = None) -> None:
+    """清空失败去重表；传 session_id 只清该会话（react_agent 会话结束时调用）。"""
+    global _analysis_failures
+    if session_id is None:
+        _analysis_failures = {}
+        return
+    _analysis_failures = {k: v for k, v in _analysis_failures.items() if k[1] != session_id}
+
+
+def _remember_analysis_failure(user_id: str, session_id: str, query: str, summary: str) -> None:
+    # 防表无限增长：超过上限整体重置（正常会被会话结束清理，此为兜底）
+    if len(_analysis_failures) > 512:
+        _analysis_failures.clear()
+    _analysis_failures[(user_id, session_id, query)] = summary[:200]
+
+
 def _get_or_create_analyst(user_id: str | None = None):
     """按 user_id 缓存 PlannerAgent 实例（首次取用时构建）。
 
@@ -77,28 +100,40 @@ def invalidate_analyst(user_id: str | None = None) -> None:
 @tool(description="运行完整的数据分析流程（SQL查询→趋势分析→分组对比→可视化图表→报告）。**仅用于生成完整分析报告/对比/趋势分析/出图/可视化**——单点数据查询请用 `quick_data_insight` 而非本工具。参数 query 为完整分析需求，如'生成3月销售分析报告'、'对比各区人口分布'、'画出趋势图'")
 def run_full_analysis(query: str) -> str:
     """运行完整的数据分析流程并返回文本结论。"""
+    from utils.request_context import get_session_id, get_user_id
+    uid, sid = get_user_id(), get_session_id()
+    dedupe_key = (uid, sid, query.strip())
+    prev = _analysis_failures.get(dedupe_key)
+    if prev:
+        # P2-1 硬护栏：同会话同 query 已失败过，不再执行，秒回短路（防 LLM 反复空耗）
+        return (f"完整分析此前已失败并停止，不再重复执行同一分析（避免空耗）。"
+                f"原因：{prev}。建议：换一种问法，或检查数据后重新发起分析。")
     try:
-        from utils.request_context import get_session_id, get_user_id
-        analyst = _get_or_create_analyst(get_user_id())
+        analyst = _get_or_create_analyst(uid)
         result = analyst.run({
             "query": query,
-            "user_id": get_user_id(),
-            "session_id": get_session_id(),
+            "user_id": uid,
+            "session_id": sid,
         })
         report = result.get("report", {})
         markdown = report.get("markdown", "")
         if markdown:
             # 失败也优先回报告（报告如实渲染"本阶段不可用"），不吞已产出内容
+            _analysis_failures.pop(dedupe_key, None)
             return markdown[:3000] + ("..." if len(markdown) > 3000 else "")
         if not result.get("success", False):
             errors = result.get("errors", [])
-            return f"分析过程出现错误: {'; '.join(errors)}"
+            summary = "; ".join(errors) or "未知错误"
+            _remember_analysis_failure(uid, sid, query.strip(), summary)
+            return f"分析过程出现错误: {summary}。该分析已失败，请勿重复调用完整分析，可换种问法或先检查数据。"
+        _analysis_failures.pop(dedupe_key, None)
         return "分析已完成，但未生成报告内容。"
     except PipelineCancelledError:
         # 客户端断连取消不吞：向上传播结束生产者线程，避免 Agent 循环重试
         raise
     except Exception as e:
-        return f"数据分析调用失败: {str(e)}"
+        _remember_analysis_failure(uid, sid, query.strip(), str(e))
+        return f"数据分析调用失败: {str(e)}。该分析已失败，请勿重复调用完整分析，可换种问法或先检查数据。"
 
 
 @tool(description="快速查询数据集概况，返回所有已加载数据集的表结构、行数、关键统计信息，无需参数")
