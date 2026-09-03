@@ -245,6 +245,35 @@ class TestLlmClassifier:
         assert "3月销售多少？" in body              # query 样本
         assert "意图：" in body and "分析销售" in body  # 当前 query 拼接
 
+    def test_binds_thinking_off_regardless_of_global(self, monkeypatch):
+        """意图分类无条件 bind 关思考：全局开关即使为 true 也不影响此热路径调用。
+
+        差分实测（2026-09-03）：分类被思考 token 拖到 2.5~7s，关后 0.43s。
+        """
+        from agent.tools.intent_router import classify_intent_llm
+        from agents.base import BaseAgent
+
+        captured = {}
+
+        class _FakeModel:
+            def bind(self, **kwargs):
+                captured["bind_kwargs"] = kwargs
+                return self
+
+        fake = _FakeModel()
+        monkeypatch.setattr("model.factory.get_chat_model", lambda uid=None: fake)
+
+        def fake_call(self, messages, schema, retries=1):
+            captured["agent_model"] = self.model
+            return {"intent": "chat"}
+
+        monkeypatch.setattr(BaseAgent, "_call_llm_with_schema", fake_call)
+        r = classify_intent_llm("你好")
+        assert r.intent == Intent.CHAT
+        assert captured["bind_kwargs"] == {"extra_body": {"enable_thinking": False}}
+        # 传给 BaseAgent 的就是 bind 后的模型实例
+        assert captured["agent_model"] is fake
+
 
 # ── 归一化（剥离会话引导词）────────────────
 class TestNormalization:
