@@ -39,7 +39,6 @@ from langchain_core.documents import Document
 
 from rag.rag_service import RagSummarizerService
 from rag.vector_store import VectorStoreService
-
 from tests.rag_eval.test_cases import TEST_CASES
 
 EVAL_USER = "u_rag_eval"

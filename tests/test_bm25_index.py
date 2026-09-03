@@ -8,7 +8,6 @@ from langchain_core.documents import Document
 
 from rag.bm25 import BM25Index, tokenize
 
-
 # ── 分词探针 ──
 
 @pytest.mark.parametrize("text,token", [

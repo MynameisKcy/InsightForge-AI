@@ -13,8 +13,6 @@
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from agents.pipeline_context import PipelineContext
 
 

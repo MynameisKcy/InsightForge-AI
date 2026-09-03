@@ -17,10 +17,10 @@ import json
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from utils.path_tool import get_abs_path
 from utils.request_context import get_session_id, get_user_id

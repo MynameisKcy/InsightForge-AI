@@ -70,7 +70,6 @@ async def list_all_files(request: Request, user=Depends(require_auth)):
     # ── 文本类（PDF/Word/TXT/MD，进 Chroma）──
     data_dir = _kb_data_dir(user_id)
     allowed = _kb_allowed_types()
-    from utils.file_handler import get_file_md5_hex
     try:
         vs = deps._get_vector_store()
         vs._load_md5_store()
