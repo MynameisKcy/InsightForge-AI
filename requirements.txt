@@ -56,3 +56,6 @@ cryptography
 
 # RAG hybrid 检索：BM25 词法通道（方案一）
 rank-bm25==0.2.2
+
+# ── 测试（CI 也用这份清单安装；此前遗漏导致 GHA 无 pytest 可跑）──
+pytest==9.1.1
