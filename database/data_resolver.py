@@ -81,6 +81,7 @@ class DataResolver:
             "desc_file": str,
             "table_names": list[str],
             "datasets": list[dict],
+            "primary_table": str,  # 主数据集真实 DuckDB 表名（与 name/display 分离）
         }
         """
         query_lower = query.lower()
@@ -141,6 +142,9 @@ class DataResolver:
                 "desc_file": "",
                 "table_names": table_names,
                 "datasets": matched,
+                # 真实 DuckDB 表名：datasources_db 注册时 name=table_name（安全 ASCII，
+                # 见 dataset_service.upload）；name 字段恒与 table_name 同值，or 仅防御。
+                "primary_table": primary.get("table_name") or primary["name"],
             }
 
         # --- 2. Fallback: 旧 DATASET_MAP 关键词打分 ---
@@ -190,6 +194,9 @@ class DataResolver:
             "desc_file": best,
             "table_names": ["transactions"],
             "datasets": [],
+            # 静态内置数据集：name 是 display name（可含空格，如 "Superstore Sales
+            # Dataset"），真实 DuckDB 表名恒为 transactions（与 table_names 同源）。
+            "primary_table": "transactions",
         }
 
     @staticmethod

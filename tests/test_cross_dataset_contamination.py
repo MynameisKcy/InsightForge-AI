@@ -311,6 +311,41 @@ class TestCrossDatasetContamination(unittest.TestCase):
         # The scoped directive should NOT be present (primary_table was empty).
         self.assertNotIn("目标数据集已限定为", system_prompt)
 
+    # --- P0-A regression: static fallback must not feed display name as table ----
+
+    def test_planner_static_fallback_scoped_table_is_transactions(self):
+        """静态内置数据集（DATASET_MAP fallback）下 planner 下传的 primary_table
+        必须是真实 DuckDB 表名 transactions，而不是带空格的 display name
+        'Superstore Sales Dataset' —— 后者撞 validate_table_name SecurityError，
+        全分析 SQL 阶段 100% 失败（2026-08-28 报告 §2 P0-A；此前仅动态路径
+        有测试，静态 fallback 是零覆盖盲区）。"""
+        from agents.planner_agent import PlannerAgent
+        from database.data_resolver import DataResolver
+
+        # 不 add 任何动态数据集 → resolver 走 DATASET_MAP 静态 fallback
+        resolved = DataResolver.resolve(
+            "分析 Superstore 超市销售额趋势", user_id=self.user_id)
+        self.assertEqual(resolved["name"], "Superstore Sales Dataset")
+        self.assertEqual(resolved["primary_table"], "transactions")
+
+        # planner 装配层（__new__ 规避重 __init__ 建 7 个子 agent + LLM）
+        planner = PlannerAgent.__new__(PlannerAgent)
+        ctx = planner._resolve_context({
+            "user_id": self.user_id,
+            "session_id": "s1",
+            "query": "分析 Superstore 超市销售额趋势",
+        })
+        self.assertEqual(ctx.primary_table, "transactions")
+        self.assertNotIn(" ", ctx.primary_table)
+
+        # 装配链终点：scoped schema 用该表名不再抛 SecurityError（8-28 崩溃点）
+        from database.duckdb_manager import init_duckdb
+
+        db = init_duckdb(csv_path=resolved["csv_path"], user_id=self.user_id)
+        text = db.get_enhanced_schema_text(
+            tables=[ctx.primary_table], compact=True)
+        self.assertIn("transactions", text)
+
 
 class TestQuickDataInsightDisambiguation(unittest.TestCase):
     """quick_data_insight 数据集消歧（C3）：命中传 scoped primary_table；
