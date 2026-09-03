@@ -85,6 +85,21 @@ class VisualizationAgent(BaseAgent):
                 logger.warning(f"LLM chart decision failed, using auto-detection: {e}")
                 chart_specs = self._auto_charts(df, task)
 
+        # ── 孤儿图表治理：本阶段超时后 planner 已放弃本线程（pctx 打了弃用标记），
+        # 但被弃线程的 LLM 决策仍可能稍后返回并跑完生成。落库前实时自查，命中即
+        # 止损——用户已收到该阶段报错，图表不应迟到出现在知识库/结果里。
+        pctx = input_data.get("pipeline_context")
+
+        def _abandoned() -> bool:
+            try:
+                return "visualization" in (pctx.abandoned_agents or set())
+            except Exception:
+                return False
+
+        if _abandoned():
+            logger.warning("Visualization stage was abandoned (stage timeout); skip chart generation & persistence")
+            return {"charts": [], "error": None}
+
         # 生成图表
         # 启动单一 kaleido sync server 渲染本批所有 PNG（复用 chromium scope，
         # 避免 fig.write_image 逐次新建 scope 在第 2 次挂起）。server 进程内常驻，
@@ -93,6 +108,9 @@ class VisualizationAgent(BaseAgent):
         from visualization.charts import start_png_batch
         start_png_batch()
         for spec in chart_specs:
+            if _abandoned():
+                logger.warning("Visualization abandoned mid-batch; stop generating/persisting remaining charts")
+                break
             try:
                 chart_path = self._generate_chart(df, spec, extra_data)
                 chart_entry = {

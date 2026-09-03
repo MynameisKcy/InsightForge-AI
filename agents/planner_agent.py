@@ -682,6 +682,8 @@ class PlannerAgent(BaseAgent):
                 except _FuturesTimeout:
                     ex.shutdown(wait=False)
                     logger.warning(f"Step {step_num} ({agent_name}) timed out after {timeout}s")
+                    # 弃用标记：被放弃线程仍会跑完，落库方据此跳过持久化（孤儿图表治理）
+                    pctx.abandoned_agents.add(agent_name)
                     pctx.errors.append(f"Step {step_num} ({agent_name}) timeout after {timeout}s")
                     self._write_degradation(pctx, agent_name, f"超时（{timeout}s）")
                     stage_status = "failed"
@@ -745,6 +747,8 @@ class PlannerAgent(BaseAgent):
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Step {step_num} ({agent_name}) timed out after {timeout}s")
+                    # 弃用标记：被放弃线程仍会跑完，落库方据此跳过持久化（孤儿图表治理）
+                    pctx.abandoned_agents.add(agent_name)
                     pctx.errors.append(f"Step {step_num} ({agent_name}) timeout after {timeout}s")
                     self._write_degradation(pctx, agent_name, f"超时（{timeout}s）")
                     stage_status = "failed"
@@ -934,6 +938,8 @@ class PlannerAgent(BaseAgent):
             "extra_data": extra,
             # 图表知识库 owner 隔离：图表生成时记录归属用户
             "user_id": ctx.user_id,
+            # 弃用标记实时读取：本阶段超时被放弃后，遗弃线程落库前自查止损
+            "pipeline_context": pctx,
         })
 
     def _run_report(self, task: str, pctx: PipelineContext, ctx: "RequestContext") -> None:

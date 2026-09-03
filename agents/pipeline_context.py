@@ -40,6 +40,12 @@ class PipelineContext:
     journal: list[dict] = field(default_factory=list)
     stage_cache: dict = field(default_factory=dict)
 
+    # ── 阶段超时弃用标记（孤儿图表治理） ──
+    # 超时语义是"放弃线程"：被弃线程仍在跑，其 LLM 稍后返回会继续生成图表。
+    # 落库方（visualization）据此实时跳过持久化，避免用户已收到报错、图表
+    # 却迟到出现在知识库/结果里。只增不减，set.add 线程安全（GIL）。
+    abandoned_agents: set[str] = field(default_factory=set)
+
     # ── 共享方法 ──
 
     @property
