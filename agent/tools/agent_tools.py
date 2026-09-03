@@ -155,7 +155,7 @@ def get_data_overview() -> str:
             try:
                 qname = safe_ident(table_name)
                 row_count = db.query_df(f"SELECT COUNT(*) AS cnt FROM {qname}").iloc[0, 0]
-                cols_info = db.execute(f"DESCRIBE {qname}").fetchall()
+                cols_info = db.execute_fetchall(f"DESCRIBE {qname}")
                 orig_cols = [c[0] for c in cols_info]
 
                 parts = [
