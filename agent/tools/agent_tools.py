@@ -179,7 +179,9 @@ def quick_data_insight(query: str) -> str:
                 lines.append("（例如：查『山东』那份）")
                 return "\n".join(lines)
             # 命中（dynamic_keyword_match / 单数据集 dynamic_all）：scoped schema
-            primary_table = resolved.get("name", "")
+            # 取 DataResolver 返回的真实表名 primary_table（动态数据 name=table_name，
+            # or 分支仅防御历史返回结构）
+            primary_table = resolved.get("primary_table") or resolved.get("name", "")
             csv_path = resolved.get("csv_path", "")
             if csv_path and os.path.exists(csv_path):
                 # 与 planner._resolve_context 同姿势：确保该 user 实例加载目标 CSV
