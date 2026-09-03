@@ -252,11 +252,12 @@ class PlannerAgent(BaseAgent):
             csv_path = resolved.get("csv_path", "")
             dataset_name = resolved.get("name", "Unknown Dataset")
             dataset_desc = resolved.get("description", "")
-            # DataResolver 选出的主数据集表名（dataset_name 同源：datasources_db
-            # 注册时的 name 字段；DataResolver 内部直接把该字段映射为 DuckDB
-            # 表名，见 database/data_resolver.py:131）。下传给 SQLAgent 用于
-            # scoped schema，避免同 user 其它数据集被意外注入 LLM prompt。
-            primary_table = dataset_name
+            # 主数据集真实 DuckDB 表名由 DataResolver 单独返回（primary_table），与
+            # 可读名 name/display_name 分离：静态内置数据集 name 是 display 名（如
+            # "Superstore Sales Dataset"），真实表名恒为 transactions，拿 name 当表名
+            # 下传会撞 validate_table_name SecurityError（8-28 报告 §2 P0-A）。下传给
+            # SQLAgent 用于 scoped schema，避免同 user 其它数据集被意外注入 LLM prompt。
+            primary_table = resolved.get("primary_table", "")
         except Exception as e:
             logger.warning(f"DataResolver failed: {e}, using default dataset")
             csv_path = ""
