@@ -121,7 +121,7 @@ class PlannerResumeTests(unittest.TestCase):
         _fake_agents(self.planner, self.recorder)
 
     def _saved(self, *, completed=None, status="running", primary_table="DS",
-               plan=None, dataframe_json="[{\"a\":1}]"):
+               plan=None, dataframe_json="[{\"a\":1}]", session_id=""):
         rec = TaskRecord(
             id=new_task_id(), owner="u1", query="分析趋势", title="报告",
             plan=plan or _PLAN,
@@ -129,7 +129,7 @@ class PlannerResumeTests(unittest.TestCase):
             stage_results={"sql_query": {"error": None, "name": "sql_query"}},
             dataframe_json=dataframe_json,
             dataset_name="DS", primary_table=primary_table,
-            status=status,
+            status=status, session_id=session_id,
         )
         return save_task(rec)
 
@@ -182,6 +182,23 @@ class PlannerResumeTests(unittest.TestCase):
             result = self.planner.resume(rec.id, "u1", "s1")
         self.assertFalse(result["success"])
         self.assertIn("已取消", result["error"])
+
+    def test_resume_session_id_falls_back_to_task_record(self):
+        # 前端不带 session_id（body={}）时回退任务记录原会话
+        rec = self._saved(completed=[1], session_id="sess_orig")
+        with patch("database.data_resolver.DataResolver.resolve",
+                   return_value={"name": "DS", "csv_path": "", "description": ""}):
+            result = self.planner.resume(rec.id, "u1", "")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["session_id"], "sess_orig")
+
+    def test_resume_session_id_explicit_overrides(self):
+        rec = self._saved(completed=[1], session_id="sess_orig")
+        with patch("database.data_resolver.DataResolver.resolve",
+                   return_value={"name": "DS", "csv_path": "", "description": ""}):
+            result = self.planner.resume(rec.id, "u1", "sess_new")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["session_id"], "sess_new")
 
 
 if __name__ == "__main__":

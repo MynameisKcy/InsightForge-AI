@@ -1019,11 +1019,14 @@ class PlannerAgent(BaseAgent):
 
         与 run() 同一执行循环语义（_execute_step 阶段级容错/超时/降级全复用；
         并发组优化不启用——resume 走串行，正确性优先）。返回结构与 run() 一致。
+        session_id 缺省回退任务记录的原会话（TaskRecord.session_id）——续跑
+        产出要挂回发起分析的会话，前端据此跳转。
         """
         rec = get_task(user_id, task_id)
         if rec is None:
             # 不存在或越权统一按「无权访问」处理，不泄露存在性
             return {"error": f"任务不存在或无权访问: {task_id}", "success": False}
+        session_id = session_id or rec.session_id
         if rec.status == "cancelled":
             return {"error": "任务已取消，请重新发起分析", "success": False}
         if not rec.plan:
@@ -1117,6 +1120,7 @@ class PlannerAgent(BaseAgent):
             },
             "success": pctx.success,
             "task_id": task_id,
+            "session_id": session_id,
             "resumed": True,
         }
 
