@@ -36,6 +36,9 @@ data/train.csv
 # 用户上传的知识库文件（运行时上传到 data/，不入版本库）
 data/*.pdf
 data/*.docx
+# 运行时用户数据：任务记录与按用户隔离的知识库目录（覆盖不到顶层的 *.pdf 规则）
+data/tasks/
+data/u_*/
 
 # 本地辅助脚本与实验性文档（不纳入版本库）
 docs/superpowers/
