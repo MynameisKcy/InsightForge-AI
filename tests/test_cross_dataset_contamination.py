@@ -338,10 +338,18 @@ class TestCrossDatasetContamination(unittest.TestCase):
         self.assertEqual(ctx.primary_table, "transactions")
         self.assertNotIn(" ", ctx.primary_table)
 
-        # 装配链终点：scoped schema 用该表名不再抛 SecurityError（8-28 崩溃点）
+        # 装配链终点：scoped schema 用该表名不再抛 SecurityError（8-28 崩溃点）。
+        # 不用 resolved["csv_path"]（data/train.csv 被 gitignore，CI 干净检出无此文件，
+        # 2026-09-03 远端红）——此处验证的是「表名 transactions 过 validate_table_name
+        # 且进 schema 文本」，与 CSV 内容无关，迷你临时 CSV 即可等价走完装配链。
         from database.duckdb_manager import init_duckdb
 
-        db = init_duckdb(csv_path=resolved["csv_path"], user_id=self.user_id)
+        mini_csv = _create_csv(
+            os.path.join(self.tmp_dir, "test_static_fallback_mini.csv"),
+            [{"category": "A", "sales": 1}, {"category": "B", "sales": 2}],
+        )
+        self._created_files.append(mini_csv)
+        db = init_duckdb(csv_path=mini_csv, user_id=self.user_id)
         text = db.get_enhanced_schema_text(
             tables=[ctx.primary_table], compact=True)
         self.assertIn("transactions", text)
