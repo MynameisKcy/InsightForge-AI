@@ -29,7 +29,14 @@ jobs:
         run: ruff check .
 
       - name: Pytest (offline, LLM 100% mocked)
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --tb=short --junitxml=pytest-result.xml
+
+      - name: Upload pytest results (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: pytest-result.xml
 
       - name: Frontend unit tests (node:test, P1-1)
         run: node --test tests/js/stream_dedup.test.js
