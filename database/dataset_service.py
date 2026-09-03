@@ -202,7 +202,7 @@ class DatasetService:
             db = self._duck(user_id)
             qname = safe_ident(ds["table_name"])
             columns, sample = self._probe(db, ds["table_name"])
-            stats = db.execute(f"SUMMARIZE {qname}").fetchall()
+            stats = db.execute_fetchall(f"SUMMARIZE {qname}")
             return {
                 "name": name,
                 "table_name": ds["table_name"],
@@ -253,7 +253,7 @@ class DatasetService:
         样本探测失败容错为 []（DESCRIBE 失败仍上抛：upload 报 500、schema 回退缓存）。
         """
         qname = safe_ident(table_name)
-        cols = db.execute(f"DESCRIBE {qname}").fetchall()
+        cols = db.execute_fetchall(f"DESCRIBE {qname}")
         try:
             sample_df = db.query_df(f"SELECT * FROM {qname} LIMIT 5")
             # to_json(date_format="iso")：日期列 → ISO 字符串、NaN → null。

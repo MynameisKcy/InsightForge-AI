@@ -8,6 +8,7 @@ import re
 import threading
 import unicodedata
 from collections import OrderedDict
+from functools import wraps
 
 import duckdb
 import pandas as pd
@@ -82,6 +83,23 @@ def _duckdb_limits() -> dict:
     }
 
 
+def _serialized(fn):
+    """连接操作串行化装饰器：整个方法（含结果物化）持连接锁执行。
+
+    背景（issue #9，2026-09-03 live 死锁）：duckdb Python 连接不支持多线程
+    并发调用，而 LangGraph 工具节点会并行执行同轮多个工具——reload 的
+    unregister 与并行 COUNT 在 duckdb 原生锁上互锁，查询超时 watchdog 的
+    interrupt 对"未开始执行"的锁等待无效，SSE 永久挂起。
+    用 RLock：管理通道合法嵌套（reload_csv→_load_csv→_load_csv_via_pandas）。
+    代价是同用户查询失去并行度——并行本就不被连接支持，正确性优先。
+    """
+    @wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._conn_lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class DuckDBManager:
     """Manages a DuckDB in-memory database, loads CSV data, and executes queries.
 
@@ -91,6 +109,8 @@ class DuckDBManager:
 
     def __init__(self, csv_path: str | None = None, table_name: str = "transactions", user_id: str = "default"):
         validate_table_name(table_name)
+        # 连接锁必须先于任何 conn 触点创建（__init__ 末尾的 _load_csv 会抢锁）
+        self._conn_lock = threading.RLock()
         self.user_id = user_id
         self.table_name = table_name
         self.last_loaded_csv: str | None = None  # 本实例上次加载的 CSV，用于判断是否需要 reload（按 user 隔离，无跨用户竞态）
@@ -117,6 +137,7 @@ class DuckDBManager:
         """表结构变更后清除该表的语义画像缓存，避免 get_enhanced_schema_text 命中 stale profile。"""
         self._profile_cache.pop(table_name, None)
 
+    @_serialized
     def _load_csv(self, csv_path: str):
         """Load CSV file into DuckDB as a table.（管理通道，不经查询白名单）"""
         qname = safe_ident(self.table_name)
@@ -151,6 +172,7 @@ class DuckDBManager:
             self.last_loaded_csv = csv_path
             persist_customer_profiles(self.conn, self.table_name, self.user_id)
 
+    @_serialized
     def execute(self, sql: str) -> duckdb.DuckDBPyRelation:
         """Execute a SQL query and return the DuckDB relation.
 
@@ -181,6 +203,15 @@ class DuckDBManager:
                 timer.cancel()
         return self.conn.execute(sql)
 
+    def execute_fetchall(self, sql: str) -> list:
+        """查询通道：execute + fetchall 原子化。
+
+        外部直调 execute() 后链式 .fetchall() 的结果物化发生在锁外，存在被
+        并行工具线程交叉执行的窗口（issue #9 同源）；走本方法则物化在锁内。
+        """
+        with self._conn_lock:
+            return self.execute(sql).fetchall()
+
     def _interrupt_conn(self) -> None:
         """watchdog 回调：中断当前连接上执行中的查询（连接空闲时为无害 no-op）。"""
         try:
@@ -188,6 +219,7 @@ class DuckDBManager:
         except Exception:
             pass
 
+    @_serialized
     def query_df(self, sql: str) -> pd.DataFrame:
         """Execute SQL and return results as a pandas DataFrame.
 
@@ -202,16 +234,19 @@ class DuckDBManager:
             )
         return df
 
+    @_serialized
     def get_schema_text(self) -> str:
         """Return a human-readable schema description."""
         from database.schema import get_schema_text as _schema_text
 
         return _schema_text(self.conn)
 
+    @_serialized
     def get_table_names(self) -> list[str]:
         """Return list of table names in the database."""
         return [row[0] for row in self.execute("SHOW TABLES").fetchall()]
 
+    @_serialized
     def reload_csv(self, csv_path: str, table_name: str = "transactions"):
         """重新加载不同的 CSV 数据集到数据库（先删除旧表再创建新表）。（管理通道）
 
@@ -268,6 +303,7 @@ class DuckDBManager:
         s = _WS_RE.sub(" ", s).strip()
         return s
 
+    @_serialized
     def _normalize_table_columns(self, table_name: str) -> None:
         """建表后将列名归一化：若任一列名经清洗后变化，则用别名重建表。
 
@@ -291,6 +327,7 @@ class DuckDBManager:
         self._invalidate_profile(table_name)
         logger.info(f"_normalize_table_columns: cleaned {sum(a != b for a, b in zip(cols, new_cols))} column(s) in '{table_name}'")
 
+    @_serialized
     def load_csv_dataset(self, csv_path: str, table_name: str) -> dict:
         """加载 CSV 文件到指定表（管理通道，不经只读校验）。
 
@@ -331,6 +368,7 @@ class DuckDBManager:
             logger.error(f"load_csv_dataset failed for '{table_name}': {fallback_err}")
             return {"success": False, "row_count": 0, "error": fallback_err}
 
+    @_serialized
     def _load_csv_via_pandas(self, csv_path: str, table_name: str) -> str | None:
         """用 pandas 按 GBK/GB18030/UTF-8-SIG 解码 CSV 再建表。
 
@@ -367,6 +405,7 @@ class DuckDBManager:
         except Exception as pe:
             return f"pandas 回退失败: {pe}"
 
+    @_serialized
     def load_excel_dataset(self, excel_path: str, table_name: str, sheet: str | None = None) -> dict:
         """加载 Excel 文件到指定表（管理通道，不经只读校验）。
 
@@ -417,6 +456,7 @@ class DuckDBManager:
             logger.error(f"load_excel_dataset failed for '{table_name}': {e}")
             return {"success": False, "row_count": 0, "error": str(e)}
 
+    @_serialized
     def drop_table(self, table_name: str) -> bool:
         """删除指定表（管理通道，不经只读校验）。返回是否成功。"""
         try:
@@ -430,6 +470,7 @@ class DuckDBManager:
             logger.error(f"drop_table failed for '{table_name}': {e}")
             return False
 
+    @_serialized
     def get_enhanced_schema_text(self, tables: list[str] | None = None,
                                   compact: bool = False,
                                   compact_sample_rows: int = 5) -> str:
@@ -544,10 +585,12 @@ class DuckDBManager:
                     parts.append(f"  - {col_name} ({col_type})")
         return "\n".join(parts)
 
+    @_serialized
     def register_external_databases(self) -> dict:
         """注册外部数据库（实现属主 database/external_sources.py，见 R1 候选1 拆分）。"""
         return _register_external(self.conn)
 
+    @_serialized
     def close(self):
         """Close the DuckDB connection."""
         self.conn.close()
