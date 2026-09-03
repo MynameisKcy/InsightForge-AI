@@ -30,6 +30,7 @@ def _summary(rec) -> dict:
         "query": rec.query,
         "completed": len(rec.completed_steps or []),
         "total": total,
+        "session_id": rec.session_id,
         "created_at": rec.created_at,
         "updated_at": rec.updated_at,
     }
@@ -59,7 +60,11 @@ async def get_task(task_id: str, user=Depends(require_auth)):
 
 @router.post("/api/tasks/{task_id}/resume")
 async def resume_task(request: Request, task_id: str, user=Depends(require_auth)):
-    """续跑任务：回灌已完成步骤，只执行剩余步骤（同步返回完整分析结果）。"""
+    """续跑任务：回灌已完成步骤，只执行剩余步骤（同步返回完整分析结果）。
+
+    成功后将报告写回任务原会话（session_id 回退链：请求体 > TaskRecord），
+    前端凭响应里的 session_id 跳回该会话即可看到续跑产出。
+    """
     body = await request.json()
     session_id = (body.get("session_id") or "").strip()
     try:
@@ -68,9 +73,26 @@ async def resume_task(request: Request, task_id: str, user=Depends(require_auth)
         if not result.get("success", False):
             # 业务级失败（任务不存在/数据集漂移/执行降级）带 error 文案返回
             return JSONResponse(content=_sanitize_result(result))
+        _save_resume_to_session(user["user_id"], result)
         result = _sanitize_result(result)
         result = _normalize_paths(result)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error(f"Task resume error: {traceback.format_exc()}")
         return error_response(str(e), 500)
+
+
+def _save_resume_to_session(user_id: str, result: dict) -> None:
+    """续跑产出挂回原会话：报告 markdown 作为助手消息入会话历史。
+
+    写回失败只降级（打日志），不阻断续跑响应——会话不可用时前端仍可就地渲染。
+    """
+    session_id = result.get("session_id") or ""
+    markdown = (result.get("report") or {}).get("markdown") or ""
+    if not session_id or not markdown.strip():
+        return
+    try:
+        deps._get_memory_service(user_id).end_turn(
+            user_id, session_id, result.get("query", ""), markdown)
+    except Exception as e:
+        logger.warning(f"Resume report write-back to session failed: {e}")

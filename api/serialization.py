@@ -1,5 +1,7 @@
 """分析结果的 JSON 序列化清洗与路径→Web URL 转换。"""
 
+from dataclasses import asdict, is_dataclass
+
 from utils.report_paths import fs_to_web_url
 
 
@@ -26,6 +28,7 @@ def _json_safe(obj):
     "Out of range float values are not JSON compliant"。此处统一清洗。
     日期列的 pd.Timestamp 同样无法被 JSONResponse 序列化（上传含日期列
     数据集报 500 的根因），一并转 ISO 字符串。
+    set 无法 JSON 序列化（PipelineContext.completed_steps），转排序 list。
     """
     import math
     if isinstance(obj, float):
@@ -34,6 +37,13 @@ def _json_safe(obj):
         return obj
     if type(obj).__name__ == "Timestamp":  # duck-typing，避免为单个类型引入 pandas
         return obj.isoformat()
+    if isinstance(obj, (set, frozenset)):
+        return sorted(obj)
+    if is_dataclass(obj) and not isinstance(obj, type):
+        # PipelineContext 等 dataclass 原样传入会在 JSONResponse 处炸
+        # "Object of type PipelineContext is not JSON serializable"
+        # （2026-09-03 任务续跑 500 的根因），统一 asdict 后递归清洗。
+        return _json_safe(asdict(obj))
     if isinstance(obj, dict):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -43,6 +53,7 @@ def _json_safe(obj):
 
 def _sanitize_dict(d: dict) -> dict:
     """递归清理字典中的非 JSON 类型。"""
+    d = _json_safe(d)
     if not isinstance(d, dict):
         return d
     clean = {}

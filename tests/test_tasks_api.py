@@ -83,6 +83,52 @@ def test_resume_success(client, auth_headers, auth, swap_srv_seam):
     assert fake.calls == [(rec.id, fake.calls[0][1], "")]
 
 
+def test_resume_serializes_pipeline_context_and_writes_back(client, auth_headers, auth,
+                                                            swap_srv_seam):
+    """回归：resume 返回的 results 是 PipelineContext（dataclass）时不再 500，
+    且报告按 session_id 写回原会话（2026-09-03 续跑 500 根因）。"""
+    from agents.pipeline_context import PipelineContext
+
+    pctx = PipelineContext(title="山东人口")
+    pctx.completed_steps = {2, 1}
+    fake = _FakeResumer(result={
+        "success": True, "results": pctx, "query": "分析人口",
+        "report": {"markdown": "# 续跑报告"},
+        "session_id": "sess_orig", "task_id": "t1", "resumed": True,
+    })
+    writes = []
+
+    class _MemStub:
+        def end_turn(self, user_id, session_id, query, assistant_response, **kw):
+            writes.append((user_id, session_id, query, assistant_response))
+
+    swap_srv_seam("_get_planner_agent", lambda uid: fake)
+    swap_srv_seam("_get_memory_service", lambda uid: _MemStub())
+    rec = _seed_task(owner=auth["user_id"])
+    r = client.post(f"/api/tasks/{rec.id}/resume", json={}, headers=auth_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == "sess_orig"
+    assert body["results"]["completed_steps"] == [1, 2]  # set → 排序 list
+    assert writes == [(auth["user_id"], "sess_orig", "分析人口", "# 续跑报告")]
+
+
+def test_resume_without_session_id_skips_write_back(client, auth_headers, auth,
+                                                    swap_srv_seam):
+    called = []
+
+    class _MemStub:
+        def end_turn(self, *a, **kw):
+            called.append(a)
+
+    swap_srv_seam("_get_planner_agent", lambda uid: _FakeResumer())
+    swap_srv_seam("_get_memory_service", lambda uid: _MemStub())
+    rec = _seed_task(owner=auth["user_id"])
+    r = client.post(f"/api/tasks/{rec.id}/resume", json={}, headers=auth_headers)
+    assert r.status_code == 200
+    assert called == []  # 无 session_id 不写回
+
+
 def test_resume_business_error_returns_body(client, auth_headers, auth, swap_srv_seam):
     fake = _FakeResumer(result={"success": False, "error": "数据集已变化，请重新发起分析"})
     swap_srv_seam("_get_planner_agent", lambda uid: fake)
