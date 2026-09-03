@@ -37,6 +37,44 @@ class _FakePlannerAgent:
         }
 
 
+class _StubAnalyst:
+    """固定返回 run() 结果的最小桩（绕开 _get_or_create_analyst 缓存）。"""
+
+    def __init__(self, result):
+        self.result = result
+
+    def run(self, input_data):
+        return self.result
+
+
+class RunFullAnalysisFailureTests(unittest.TestCase):
+    """run_full_analysis 对「失败但报告已生成」的处理：优先回报告，不吞产出。"""
+
+    def _invoke(self, result):
+        from agent.tools import agent_tools
+        with patch.object(agent_tools, "_get_or_create_analyst",
+                          return_value=_StubAnalyst(result)):
+            return agent_tools.run_full_analysis.invoke({"query": "分析"})
+
+    def test_failure_with_report_returns_markdown(self):
+        out = self._invoke({
+            "success": False,
+            "errors": ["SQL 查询失败: near DROP"],
+            "report": {"markdown": "# 报告（SQL 阶段不可用）"},
+        })
+        self.assertIn("# 报告", out)
+        self.assertNotIn("分析过程出现错误", out)
+
+    def test_failure_without_report_returns_error_text(self):
+        out = self._invoke({
+            "success": False,
+            "errors": ["SQL 查询失败: near DROP"],
+            "report": {},
+        })
+        self.assertIn("分析过程出现错误", out)
+        self.assertIn("SQL 查询失败", out)
+
+
 class AnalystCacheTests(unittest.TestCase):
     def setUp(self):
         agent_tools.invalidate_analyst()  # clear any cached instances
