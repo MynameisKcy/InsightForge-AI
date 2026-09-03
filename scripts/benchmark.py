@@ -22,6 +22,9 @@ from pathlib import Path
 
 import requests
 
+# 任意 cwd 直接运行均可用：把 repo 根挂进 sys.path（本脚本位于 scripts/ 下）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from utils.sse_protocol import DONE, ERROR, METRICS, parse_frame
 
 QUERIES = [
@@ -124,10 +127,14 @@ def main():
     parser = argparse.ArgumentParser(description="InsightForge AI 性能基准")
     parser.add_argument("--base-url", default="http://localhost:8502")
     parser.add_argument("--iterations", type=int, default=5, help="每类查询的重复次数")
+    parser.add_argument("--max-queries", type=int, default=len(QUERIES),
+                        help="只跑前 N 类查询（默认全跑；CI 冒烟用 1 省配额）")
     parser.add_argument("--password", default=f"bench_{uuid.uuid4().hex[:12]}")
     args = parser.parse_args()
 
-    print(f"🚀 性能基准 (base_url={args.base_url}, iterations={args.iterations})")
+    queries = QUERIES[: max(1, min(args.max_queries, len(QUERIES)))]
+    print(f"🚀 性能基准 (base_url={args.base_url}, iterations={args.iterations}, "
+          f"queries={len(queries)})")
     token = ensure_auth(args.base_url, args.password)
     print("  bench 用户就绪")
     ensure_dataset(args.base_url, token)
@@ -137,7 +144,7 @@ def main():
     total_in = total_out = 0
     cost = 0.0
     seq = 0
-    for query in QUERIES:
+    for query in queries:
         for _ in range(args.iterations):
             seq += 1
             latency, metrics, error = run_one(args.base_url, token, query)
@@ -157,7 +164,7 @@ def main():
     result = {
         "base_url": args.base_url,
         "iterations": args.iterations,
-        "queries": len(QUERIES),
+        "queries": len(queries),
         "samples": len(latencies),
         "failures": len(failures),
         "p50_s": round(percentile(ok_latencies, 0.50), 2),
