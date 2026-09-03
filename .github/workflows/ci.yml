@@ -28,7 +28,12 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
+      # model/factory.py 模块级单例（chat_model/embed_model）在导入期构造 ChatTongyi/
+      # DashScopeEmbeddings，pydantic 校验要求 DASHSCOPE_API_KEY 存在，干净环境无 .env
+      # 会在收集期炸掉全量测试（2026-09-03 远端红）；测试 LLM 全 mock，占位值即可。
       - name: Pytest (offline, LLM 100% mocked)
+        env:
+          DASHSCOPE_API_KEY: ci-offline-dummy
         run: python -m pytest tests/ -q --tb=short --junitxml=pytest-result.xml
 
       - name: Upload pytest results (diagnostics)
