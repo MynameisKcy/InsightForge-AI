@@ -305,9 +305,14 @@ def classify_intent_llm(query: str, user_id: str | None = None) -> IntentResult:
     每次调用 1 次模型往返；middleware 层按 runtime.context 缓存同轮结果。
     """
     from agents.base import BaseAgent
+    from model.factory import get_chat_model
 
     body = _normalize_query(query)
-    agent = BaseAgent(user_id=user_id)
+    # 思考模式无条件关闭（即使用户在设置页/.env 全局开启）：分类是输出 4 token 的
+    # 机械任务，思考纯属浪费——差分实测 2.5~7s -> 0.43s（2026-09-03）。此调用在
+    # 每条消息首字前的热路径上，是首字延迟的下限保证。
+    model = get_chat_model(user_id).bind(extra_body={"enable_thinking": False})
+    agent = BaseAgent(user_id=user_id, model=model)
     out = agent._call_llm_with_schema(_build_classify_messages(body), INTENT_SCHEMA, retries=0)
     if out is None:
         raise ValueError("intent classification failed schema validation")
