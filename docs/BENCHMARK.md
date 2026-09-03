@@ -23,6 +23,21 @@ python scripts/benchmark.py --iterations 3 --base-url http://localhost:8502
 脚本自动完成：注册临时 bench 用户 → 检查数据集（无则生成 200 行样例销售 CSV 并上传）→
 5 类查询（计数/趋势/对比/异常/总结）× N 轮 → 统计输出并落盘 `logs/benchmark_results.json`。
 
+```bash
+python scripts/benchmark.py --max-queries 1 --iterations 1   # 冒烟：只跑 1 问省配额
+```
+
+#### GitHub Actions 自动化（8-28 报告 §8 P1-2）
+
+`.github/workflows/benchmark.yml`（手动触发，不随 push 自动跑）在 Ubuntu 上
+启动服务 → 跑 `scripts/benchmark.py` → 上传 `benchmark_results.json` artifact：
+
+1. 在 repo **Settings → Secrets and variables → Actions** 配 `DASHSCOPE_API_KEY`（需有配额）；
+2. Actions 页 → **Benchmark (manual)** → Run workflow（默认 `max_queries=1` 冒烟 1 问）。
+
+服务端模型名走 `config/agent.yml` 默认；如需换模型，在 workflow 运行时给 `.env`
+追加 `CHAT_MODEL_NAME` 或在 workflow inputs 中扩展（当前未开放）。
+
 ### 1.3 结果解读
 
 ```text

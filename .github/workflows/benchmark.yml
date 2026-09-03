@@ -1,0 +1,70 @@
+# InsightForge AI 性能基准(手动触发):启动服务 → 真实 HTTP+SSE 跑 1 问 → 产出 P50 基线。
+# 8-28 报告 §8 P1-2 / 优化候选矩阵 7.2。需要 DashScope 配额:在
+# repo Settings → Secrets and variables → Actions 配 DASHSCOPE_API_KEY。
+# 触发方式:Actions 页手动 Run workflow(workflow_dispatch),不会随 push 自动跑。
+name: Benchmark (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_queries:
+        description: '只跑前 N 类查询(1 = 冒烟验证省配额)'
+        required: false
+        default: '1'
+      iterations:
+        description: '每类查询重复次数'
+        required: false
+        default: '1'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    env:
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 启动服务并跑 benchmark
+        run: |
+          set -e
+          if [ -z "$DASHSCOPE_API_KEY" ]; then
+            echo "::error::DASHSCOPE_API_KEY secret 未配置：请先在 repo Settings→Secrets→Actions 配置后再手动触发。"
+            exit 1
+          fi
+          printf 'DASHSCOPE_API_KEY=%s\n' "$DASHSCOPE_API_KEY" > .env
+          python -m api.fastapi_server > server.log 2>&1 &
+          SERVER_PID=$!
+          READY=0
+          for i in $(seq 1 90); do
+            if (echo > /dev/tcp/127.0.0.1/8502) >/dev/null 2>&1; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" != "1" ]; then
+            echo "::error::服务 90s 内未就绪"
+            tail -50 server.log || true
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+          python scripts/benchmark.py --base-url http://127.0.0.1:8502 \
+            --max-queries "${{ github.event.inputs.max_queries }}" \
+            --iterations "${{ github.event.inputs.iterations }}"
+          RC=$?
+          echo "===== benchmark_results.json ====="
+          cat agent/logs/benchmark_results.json 2>/dev/null || true
+          kill $SERVER_PID 2>/dev/null || true
+          exit $RC
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: agent/logs/benchmark_results.json
