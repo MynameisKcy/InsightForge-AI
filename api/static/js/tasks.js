@@ -58,8 +58,15 @@
         body: JSON.stringify({}),
       }).then(function (r) { return r.json(); }).then(function (data) {
         if (data && data.error && !data.report) { throw new Error(data.error); }
-        renderReportResult(data);
         bar.style.display = 'none';
+        // 续跑报告已由后端写回原会话：优先跳回该会话（服务端渲染完整历史），
+        // 无会话信息或已在该会话内时退回就地渲染。
+        var inSession = (typeof currentSessionId !== 'undefined') && currentSessionId === (data && data.session_id);
+        if (data && data.session_id && typeof switchSession === 'function' && !inSession) {
+          switchSession(data.session_id);
+        } else {
+          renderReportResult(data);
+        }
       }).catch(function (e) {
         btn.disabled = false; btn.textContent = '继续分析';
         showToast(e.message || '续跑失败，请重试', 'error', 3000);

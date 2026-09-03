@@ -516,30 +516,20 @@ async function streamChat(text, bubble) {
   }
 
   // ── 决策卡片（SSE [DECISION] 事件驱动；LLM 输出一律 escapeHtml 防 XSS）──
+  // 工具调用卡片（d.tool 存在）不再前端展示：执行中动作已由 [STEP] 步骤清单
+  // 呈现"正在做什么"。后端事件与 JSONL 决策日志保留，仅前端不渲染。
   function renderDecisionCard(bubble, d) {
     try {
-      var body = '';
-      if (d.reasoning) body += '<div class="decision-reasoning">' + escapeHtml(d.reasoning) + '</div>';
-      if (d.tool) body += '<div class="decision-tool">调用工具 <code>' + escapeHtml(String(d.tool)) + '</code></div>';
-      if (d.args && Object.keys(d.args).length) {
-        // 内部参数默认收起（Issue ②）：原始字段不再平铺在对话页，点开才可见
-        body += '<details class="decision-details"><summary>参数</summary>' +
-                '<div class="decision-args"><code>' +
-                escapeHtml(JSON.stringify(d.args)) + '</code></div></details>';
-      }
-      if (d.result_summary) body += '<div class="decision-result">' + escapeHtml(d.result_summary) + '</div>';
-      if (!body) return;   // 空决策不渲染
-
+      if (d.tool) return;
+      if (!d.reasoning) return;   // 空决策不渲染
       var head = '<div class="decision-header"><span class="decision-icon">' +
-                 (d.source === 'planner' ? '🧭' : (d.tool ? '🛠' : '💭')) + '</span>' +
+                 (d.source === 'planner' ? '🧭' : '💭') + '</span>' +
                  '<span class="decision-label">' +
-                 (d.source === 'planner' ? '规划理由' : (d.tool ? '工具调用' : 'LLM 思考')) + '</span>';
-      if (d.timing_ms != null) head += '<span class="decision-timing">' + d.timing_ms + ' ms</span>';
-      head += '</div>';
-
+                 (d.source === 'planner' ? '规划理由' : 'LLM 思考') + '</span></div>';
       var card = document.createElement('div');
-      card.className = 'decision-card' + (d.error ? ' decision-card--error' : '');
-      card.innerHTML = head + body;
+      card.className = 'decision-card';
+      card.innerHTML = head +
+        '<div class="decision-reasoning">' + escapeHtml(d.reasoning) + '</div>';
       bubble.appendChild(card);
     } catch (e) { /* 渐进增强 */ }
   }
