@@ -73,3 +73,18 @@ def test_masked_key_not_overwritten(tmp_path):
     data = usd_mod.user_settings_db.get(user_id)
     assert data["llm_api_key"] == "sk-secretkey123456"
     assert data["llm_model_name"] == "qwen-plus"
+
+
+def test_save_enable_thinking_normalized(tmp_path):
+    """思考开关路由层宽松布尔归一：字符串 "true"/"1" -> True，"0" -> False。"""
+    _fresh_settings(tmp_path)
+    _user_id, headers = _make_authed_user("think")
+    client = TestClient(srv.app)
+    r = client.post("/api/settings", json={"llm_enable_thinking": "true"}, headers=headers)
+    assert r.status_code == 200
+    r = client.get("/api/settings", headers=headers)
+    assert r.json()["settings"]["llm_enable_thinking"] is True
+    r = client.post("/api/settings", json={"llm_enable_thinking": "0"}, headers=headers)
+    assert r.status_code == 200
+    r = client.get("/api/settings", headers=headers)
+    assert r.json()["settings"]["llm_enable_thinking"] is False

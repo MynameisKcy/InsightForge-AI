@@ -62,6 +62,11 @@ def _init_db():
         conn.execute("ALTER TABLE user_settings ADD COLUMN llm_base_url TEXT")
     except sqlite3.OperationalError:
         pass
+    # 幂等迁移：补齐 llm_enable_thinking 列（思考模式开关；NULL=未设置，回落 env/YAML 默认关）
+    try:
+        conn.execute("ALTER TABLE user_settings ADD COLUMN llm_enable_thinking INTEGER")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -108,6 +113,7 @@ class UserSettingsDB:
             "llm_model_name": row["llm_model_name"],
             "embedding_model_name": row["embedding_model_name"],
             "llm_base_url": row["llm_base_url"],
+            "llm_enable_thinking": None if row["llm_enable_thinking"] is None else bool(row["llm_enable_thinking"]),
             "vector_db_host": row["vector_db_host"],
             "vector_db_port": row["vector_db_port"],
             "vector_db_collection": row["vector_db_collection"],
@@ -132,14 +138,15 @@ class UserSettingsDB:
         conn = self._connect()
         conn.execute("""INSERT INTO user_settings
             (user_id, llm_api_key_enc, llm_model_name, embedding_model_name,
-             llm_base_url, vector_db_host, vector_db_port, vector_db_collection,
-             vector_db_tenant, local_db_conn, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+             llm_base_url, llm_enable_thinking, vector_db_host, vector_db_port,
+             vector_db_collection, vector_db_tenant, local_db_conn, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(user_id) DO UPDATE SET
               llm_api_key_enc=excluded.llm_api_key_enc,
               llm_model_name=excluded.llm_model_name,
               embedding_model_name=excluded.embedding_model_name,
               llm_base_url=excluded.llm_base_url,
+              llm_enable_thinking=COALESCE(excluded.llm_enable_thinking, user_settings.llm_enable_thinking),
               vector_db_host=excluded.vector_db_host,
               vector_db_port=excluded.vector_db_port,
               vector_db_collection=excluded.vector_db_collection,
@@ -148,6 +155,7 @@ class UserSettingsDB:
               updated_at=excluded.updated_at""",
             (user_id, enc, settings.get("llm_model_name"),
              settings.get("embedding_model_name"), settings.get("llm_base_url"),
+             settings.get("llm_enable_thinking"),
              settings.get("vector_db_host"),
              settings.get("vector_db_port"), settings.get("vector_db_collection"),
              settings.get("vector_db_tenant"), settings.get("local_db_conn"), now))
