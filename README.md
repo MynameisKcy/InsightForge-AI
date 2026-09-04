@@ -2,7 +2,7 @@
   <img src="./assets/readme/hero.svg" width="100%" alt="InsightForge AI — 多智能体协作数据分析平台：用自然语言提问，自动编排分析全链路">
 </p>
 
-> **面向数据分析师提效与业务人员自助取数。** 上传数据，用自然语言提问，AI 智能体自动完成 SQL 查询、多维分析、交互式图表与多格式报告导出——无需手写一行代码。
+> **面向数据分析师提效与业务人员自助取数。** 上传数据，用自然语言提问，AI 智能体自动完成 SQL 查询、多维分析、交互式图表与多格式报告导出��[...]
 
 ---
 
@@ -32,9 +32,9 @@
 
 ## 这是什么
 
-**InsightForge AI** 是一个基于 LangChain + LangGraph 的多智能体协作数据分析平台。它以一个智能客服 Agent 为单一入口，由 LLM 根据 15 个工具描述**自主决策**：直接作答、RAG 知识库问答，还是触发完整分析流水线。
+**InsightForge AI** 是一个基于 LangChain + LangGraph 的多智能体协作数据分析平台。它以一个智能客服 Agent 为单一入口，由 LLM 根据 15 个工具描述**自主决策[...]
 
-分析流水线一旦触发，PlannerAgent 生成执行计划，依次调度 SQLAgent（自动生成并执行查询）→ AnalysisAgent（趋势/分组/异常检测）→ VisualizationAgent（交互式图表）→ ReportAgent（文本分析报告）→ ExportAgent（多格式导出），全链路自动完成。
+分析流水线一旦触发，PlannerAgent 生成执行计划，依次调度 SQLAgent（自动生成并执行查询）→ AnalysisAgent（趋势/分组/异常检测）→ VisualizationAgent（交�[...]
 
 ---
 
@@ -64,7 +64,7 @@
 ## 如何工作
 
 <p align="center">
-  <img src="./assets/readme/workflow.svg" width="100%" alt="InsightForge AI 分析流水线：用户提问 → PlannerAgent → SQLAgent/AnalysisAgent/VisualizationAgent → ReportAgent → ExportAgent">
+  <img src="./assets/readme/workflow.svg" width="100%" alt="InsightForge AI 分析流水线：用户提问 → PlannerAgent → SQLAgent/AnalysisAgent/VisualizationAgent → ReportAgent → Export[...]">
 </p>
 
 <p align="center">
@@ -125,7 +125,7 @@ docker-compose up -d   # 或 ./scripts/deploy.sh（含预检+探活重试）
 
 链路示例：`http.request → agent.reason → tool.run_full_analysis → planner.plan → planner.step → sql.execute`，异常 Span 红色高亮并带堆栈。
 
-前端同步可视化：对话流中的**决策卡片**（💭 LLM 思考 / 🛠 工具调用 / 🧭 规划理由+耗时）与侧边栏 **Token/成本看板**。决策明细落盘 `logs/decisions/日期_用户.jsonl`。详见 [可观测性指南](docs/OBSERVABILITY.md)。
+前端同步可视化：对话流中的**决策卡片**（💭 LLM 思考 / 🛠 工具调用 / 🧭 规划理由+耗时）与侧边栏 **Token/成本看板**。决策明细落盘 `logs/decisions[...]
 
 ---
 
@@ -184,6 +184,14 @@ python scripts/benchmark.py --base-url http://localhost:8502 --iterations 5
 | [版本更新记录](docs/CHANGELOG.md) | v0.1 ~ v0.5 + 未发布 |
 
 架构决策记录见 [docs/adr/](docs/adr/)。
+
+---
+
+## 许可证
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+本项目采用 MIT 许可证，详情见仓库根目录的 LICENSE 文件。版权所有 © 2026 MynameisKcy。
 
 ---
 
