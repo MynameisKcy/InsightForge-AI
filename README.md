@@ -9,24 +9,10 @@
 ## 界面预览
 
 <p align="center">
-  <img src="./docs/imgs/api1.png" width="100%" alt="InsightForge 工作台对话界面">
+  <img src="./docs/imgs/index1.png" width="100%" alt="InsightForge 落地页 - 暗夜主题">
 </p>
 
-<p align="center">
-  <img src="./docs/imgs/api2.png" width="100%" alt="InsightForge 分析结果与图表">
-</p>
-
-<p align="center">
-  <img src="./docs/imgs/api3.png" width="100%" alt="InsightForge 报告导出">
-</p>
-
-<details>
-<summary><b>查看落地页</b></summary>
-<p align="center">
-  <img src="./docs/imgs/index1.png" width="49%" alt="InsightForge 落地页 - 暗夜主题">
-  <img src="./docs/imgs/index2.png" width="49%" alt="InsightForge 落地页 - 暖阳主题">
-</p>
-</details>
+更多界面截图（落地页双主题、工作台对话 / 图表 / 报告导出）见 [界面展示](docs/INTERFACE_SHOWCASE.md)。
 
 ---
 
@@ -173,6 +159,7 @@ python scripts/benchmark.py --base-url http://localhost:8502 --iterations 5
 | :--- | :--- |
 | [架构总览](docs/ARCHITECTURE.md) | 系统架构图与分析流水线数据流 |
 | [核心设计深度剖析](docs/DESIGN_DETAILS.md) | 子代理编排、SQL 沙箱、多用户隔离、RAG、SSE 等 |
+| [界面展示](docs/INTERFACE_SHOWCASE.md) | 落地页（双主题）/ 工作台 / 报告导出截图汇总 |
 | [项目结构](docs/PROJECT_STRUCTURE.md) | 完整目录树与文件说明 |
 | [配置说明](docs/CONFIGURATION.md) | .env 与各 YAML 字段详解 |
 | [HTTP API 参考](docs/API_REFERENCE.md) | 全部接口与鉴权说明 |
